@@ -1,0 +1,248 @@
+# =========================
+# 交通事故分析系统服务器部署配置
+# 说明：
+# 1. 该配置面向 Debian 12 + Docker 部署。
+# 2. 后端容器挂载知识库到 /opt/ts-analysis/kbase。
+# 3. 专家小模型改为 OpenAI 兼容协议，便于接入远端 LM Studio。
+# 4. 本文件不保存真实密钥；`api_key_env` 与端点 `connection.key` 都应填写环境变量名。
+# =========================
+
+app:
+  env: "prod"
+  timezone: "Asia/Shanghai"
+  log_level: "INFO"
+  output_dir: "backend/data/output"
+  chat_sessions_dir: "backend/data/chat_sessions"
+  report_model_selection_state_file: "backend/data/runtime/report_model_selection.json"
+  lmstudio_host_allowlist: []
+  lmstudio_resident_limit: 2
+
+input:
+  adapter: "file"
+  file_path: "backend/data/input_accident.json"
+
+models:
+  expert_local:
+    # 默认走服务器宿主机上的 OpenAI 兼容接口，方便直接复用本机 LM Studio / 本地模型服务。
+    provider: "lmstudio"
+    # 默认模型仓库：
+    # https://huggingface.co/suyuan37/SafetyRAISE-TS-Qwen3
+    # 必须填写推理服务实际暴露的模型名。
+    model: "${EXPERT_LOCAL_MODEL:-suyuan37/SafetyRAISE-TS-Qwen3}"
+    # 支持填写根地址、/v1 或完整 /chat/completions 地址。
+    # 默认使用容器内可访问的宿主机别名 host.docker.internal。
+    base_url: "${EXPERT_LOCAL_BASE_URL:-http://host.docker.internal:1234/v1}"
+    # 本地 LM Studio 若不需要鉴权，可保持为空字符串。
+    api_key_env: "${EXPERT_LOCAL_API_KEY_ENV:-}"
+    timeout_seconds: 1800
+    # 当前建议与 embedding 一起常驻；前提是工作站 LM Studio 已关闭“仅保留最后一个即时加载模型”。
+    lmstudio_ttl_seconds: 1800
+    prewarm_enabled: false
+
+  report_external:
+    provider: "raise"
+    endpoints:
+      - name: "openrouter_kimi"
+        selector_label: "pro"
+        priority: 10
+        api_key_env: "OPENROUTER_API_KEY"
+        connection:
+          _type: "openrouter_channel_conn"
+          url: "https://openrouter.ai"
+        url: "https://openrouter.ai/api/v1/chat/completions"
+        model: "moonshotai/kimi-k2.5"
+        verbosity: "high"
+        timeout_seconds: 1800
+        reasoning:
+          enabled: true
+          max_tokens: 32768
+
+      - name: "lite_compatible"
+        selector_label: "lite"
+        priority: 20
+        api_key_env: "${LITE_MODEL_API_KEY_ENV:-LITE_MODEL_API_KEY}"
+        connection:
+          _type: "lmstudio_channel_conn"
+          url: "${LITE_MODEL_ROOT_URL:-http://host.docker.internal:1234}"
+        url: "${LITE_MODEL_CHAT_URL:-http://host.docker.internal:1234/v1/chat/completions}"
+        model: "${LITE_MODEL_NAME:-qwen2.5-7b-instruct}"
+        timeout_seconds: 1800
+        lmstudio_ttl_seconds: 1800
+
+      - name: "duckcoding_gemini31"
+        selector_label: "max"
+        priority: 30
+        api_key_env: "DUCKCODING_API_KEY"
+        connection:
+          _type: "newapi_channel_conn"
+          url: "https://www.duckcoding.ai"
+        url: "https://www.duckcoding.ai/v1/chat/completions"
+        model: "gemini-3.1-pro-preview"
+        timeout_seconds: 1800
+        reasoning_effort: "high"
+        extra_body:
+          extra_body:
+            google:
+              thinking_config:
+                thinking_level: "high"
+                include_thoughts: true
+
+    retry:
+      max_attempts_per_endpoint: 2
+      backoff_seconds: 2
+
+  accident_vision:
+    provider: "raise"
+    temperature: 1.0
+    max_tokens: 128000
+    endpoints:
+      - name: "openrouter_qwen_vision"
+        priority: 10
+        url: "https://openrouter.ai/api/v1/chat/completions"
+        model: "qwen/qwen3.6-plus"
+        verbosity: "high"
+        timeout_seconds: 1800
+        reasoning:
+          enabled: true
+          max_tokens: 32768
+        api_key_env: "OPENROUTER_API_KEY"
+
+    retry:
+      max_attempts_per_endpoint: 2
+      backoff_seconds: 2
+
+  retrieval_embedding:
+    provider: "openai_compatible"
+    model: "${RETRIEVAL_EMBEDDING_MODEL:-text-embedding-qwen3-embedding-0.6b}"
+    base_url: "${RETRIEVAL_EMBEDDING_BASE_URL:-http://host.docker.internal:1234/v1}"
+    api_key_env: "${RETRIEVAL_EMBEDDING_API_KEY_ENV:-}"
+    timeout_seconds: 120
+    lmstudio_ttl_seconds: 1800
+    dimensions: 1024
+    query_instruction: "Given a Chinese traffic accident analysis query, retrieve statutory rules, liability rules, traffic-control passages, and scenario guidance that support factual analysis and responsibility determination."
+    query_max_length: 512
+    document_max_length: 2048
+    cache_size: 512
+    cache_ttl_seconds: 21600
+
+  retrieval_reranker:
+    provider: "tei"
+    model: "${RETRIEVAL_RERANKER_MODEL:-Alibaba-NLP/gte-multilingual-reranker-base}"
+    base_url: "${RETRIEVAL_RERANKER_BASE_URL:-http://retrieval-reranker:80}"
+    api_key_env: "${RETRIEVAL_RERANKER_API_KEY_ENV:-}"
+    timeout_seconds: 180
+
+prompts:
+  guidance_prompt_path: "backend/config/指导意见生成提示词.md"
+  report_prompt_template: "backend/config/分析报告生成提示词.md"
+
+input_generation:
+  generated_input_path: "backend/data/input_accident.json"
+  backup_dir: "backend/data/backup"
+  workspace_dir: "backend/data/input_generation"
+  prompt_path: "backend/config/事故信息生成提示词.md"
+  template_path: "backend/config/input_accident_template.json"
+  retain_debug_artifacts: false
+  retain_workspace_count: 6
+
+  yolo:
+    # 若启用视频链路，容器内默认使用系统 python 运行 YOLO 脚本。
+    python_executable: "python"
+    runner_script: "backend/app/tools/extract_video_features.py"
+    # 如需视频能力，请把权重上传到服务器宿主机目录
+    # ${MODELS_HOST_PATH}/yolo11n.pt，
+    # Compose 会挂载到容器内的 /opt/ts-analysis/models/yolo11n.pt。
+    model_path: "/opt/ts-analysis/models/yolo11n.pt"
+    tracker: "bytetrack.yaml"
+    confidence: 0.3
+    device:
+    relevant_classes:
+      - "person"
+      - "bicycle"
+      - "car"
+      - "motorcycle"
+      - "bus"
+      - "truck"
+    max_track_summaries: 12
+
+  upload:
+    max_files: 140
+    max_total_bytes: 1073741824
+    max_image_bytes: 10485760
+    max_video_bytes: 104857600
+    max_model_images: 48
+    max_images_per_group: 20
+    max_videos_per_group: 5
+    max_total_images: 120
+    max_total_videos: 20
+
+  frames:
+    ffmpeg_path: "ffmpeg"
+    ffprobe_path: "ffprobe"
+    max_video_seconds: 20
+    min_frames: 8
+    base_frames: 6
+    frames_per_second: 0.75
+    max_frames: 18
+    anchor_frames: 5
+    uniform_frames: 12
+    event_frames: 4
+    min_frame_gap: 3
+    active_window_padding_seconds: 1.2
+    event_window_before_seconds: 0.6
+    event_window_after_seconds: 0.8
+    max_side: 960
+    jpeg_quality: 3
+
+retrieval:
+  provider: "hybrid_local"
+  top_k: 6
+  min_score: 0.2
+
+  local_jsonl:
+    manifest_path: "/opt/ts-analysis/kbase/data/manifest.json"
+    chunks_path: "/opt/ts-analysis/kbase/data/kbase_chunks.jsonl"
+    rules_path: "/opt/ts-analysis/kbase/data/liability_rules.jsonl"
+    search_index_path: "/opt/ts-analysis/kbase/data/search_index.json"
+    top_k_chunks: 8
+    top_k_rules: 12
+    max_context_chars: 5200
+    prefer_enhanced_rules: true
+    enable_search_index: true
+    watch_manifest_changes: false
+    # 服务器部署时不建议静默降级为 MockRetriever，避免“知识库没挂上但接口仍成功”。
+    fallback_mock_on_error: false
+
+  hybrid:
+    dense_manifest_path: "/opt/ts-analysis/kbase/data/dense_manifest.json"
+    dense_records_path: "/opt/ts-analysis/kbase/data/dense_records.jsonl"
+    dense_vectors_path: "/opt/ts-analysis/kbase/data/dense_vectors.f16.npy"
+    sparse_top_k_chunks: 8
+    sparse_top_k_rules: 12
+    dense_top_k_chunks: 8
+    dense_top_k_rules: 12
+    rrf_merge_top_k: 24
+    rerank_top_k: 6
+    final_context_top_k: 6
+    max_context_chars: 5200
+    agentic_sparse_top_k_chunks: 4
+    agentic_sparse_top_k_rules: 6
+    agentic_dense_top_k_chunks: 4
+    agentic_dense_top_k_rules: 6
+    agentic_rrf_merge_top_k: 12
+    agentic_rerank_top_k: 3
+
+  agentic:
+    enabled: true
+    max_rounds: 2
+    top_k_per_round: 3
+    max_total_snippets: 9
+    max_query_chars: 120
+
+workflow:
+  enable_review_node: false
+  save_intermediate: true
+
+  retry:
+    max_attempts: 2
+    backoff_seconds: 2

@@ -1,0 +1,384 @@
+# =========================
+# 交通事故分析系统主配置
+# 说明：
+# 1. 本文件由后端启动、测试、前端联调共同使用。
+# 2. 相对路径均以项目根目录为基准解析。
+# 3. 大部分参数改完后需要重启后端才能生效。
+# 4. 模型密钥当前既支持 `api_key_env`，也支持端点 `connection.key`；两者都兼容环境变量名或字面量密钥，但开源版默认只保留环境变量名。
+# =========================
+
+# 远端模型密钥集中定义
+# 说明：
+# 1. 这里使用 YAML 锚点，便于在多个端点之间复用同一个值。
+# 2. 开源版默认只填写环境变量名，不保存真实密钥。
+# 3. 若你的服务端无需鉴权，可将对应字段保留为空字符串。
+secrets:
+  openrouter_api_key: &openrouter_api_key "OPENROUTER_API_KEY"
+  lite_api_key: &lite_api_key "LITE_MODEL_API_KEY"
+  duckcoding_api_key: &duckcoding_api_key "DUCKCODING_API_KEY"
+
+# 应用级运行参数
+app:
+  # 当前运行环境标识，仅用于区分 dev / test / prod 等场景。
+  env: "dev"
+  # 应用内部默认时区，影响日志、时间展示和部分运行时处理。
+  timezone: "Asia/Shanghai"
+  # 后端日志级别，常用值：DEBUG / INFO / WARNING / ERROR。
+  log_level: "INFO"
+  # 报告产物输出目录，最终会生成 report.md / report.json / guidance.json / run_log.json。
+  output_dir: "backend/data/output"
+  # 聊天会话持久化目录，每个会话一个子目录，里面保存 session.json。
+  chat_sessions_dir: "backend/data/chat_sessions"
+  # 报告模型档位的全局持久化状态文件。前端切换 max / pro / lite 时只会改这个文件。
+  report_model_selection_state_file: "backend/data/runtime/report_model_selection.json"
+  # 哪些 host 需要按 LM Studio JIT 兼容模式处理。
+  # 命中后不会主动调用 /api/v1/models/load，而是直接走 chat/completions。
+  # 如无此类端点，可保持空数组。
+  lmstudio_host_allowlist: []
+  lmstudio_resident_limit: 2
+
+# 输入适配器配置
+input:
+  # 输入适配器类型。
+  # 当前项目主要支持：
+  # - "file"：从本地 JSON 文件读取事故信息
+  # 前端上传图片/视频时不会走这里，而是走 input_generation 链路。
+  adapter: "file"
+  # 当 adapter=file 时读取的事故信息文件路径。
+  file_path: "backend/data/input_accident.json"
+
+# 模型配置
+models:
+  # 本地专家小模型，用于先生成“指导意见 JSON”。
+  expert_local:
+    # 默认走 OpenAI 兼容服务，便于直接加载 Hugging Face 上的专家模型。
+    provider: "lmstudio"
+    # 默认专家模型仓库：
+    # https://huggingface.co/suyuan37/SafetyRAISE-TS-Qwen3
+    # 运行时需要由 LM Studio、vLLM、Ollama 兼容层或其他 OpenAI 兼容服务加载该模型。
+    model: "${EXPERT_LOCAL_MODEL:-suyuan37/SafetyRAISE-TS-Qwen3}"
+    base_url: "${EXPERT_LOCAL_BASE_URL:-http://127.0.0.1:1234/v1}"
+    api_key_env: "${EXPERT_LOCAL_API_KEY_ENV:-}"
+    # 单次请求超时时间，单位秒。
+    timeout_seconds: 1800
+    # 模型保活时间，减少多次调用时重复冷启动。
+    keep_alive: "30m"
+    # 仅当端点命中 LM Studio 兼容模式时生效；留空表示不传 ttl，完全沿用服务端默认 Idle TTL。
+    lmstudio_ttl_seconds: 1800
+    # 启动后是否执行一次预热请求。
+    prewarm_enabled: true
+    # 预热时发送给模型的提示词，建议尽量短。
+    warmup_prompt: "请只回复 OK"
+
+  # 远端报告模型，用于生成最终分析报告正文。
+  report_external:
+    # 提供器标识。
+    # 当前后端实际按 OpenAI Compatible 接口调用，这个字段主要用于配置语义，不建议随意改动。
+    provider: "raise"
+    # 报告模型端点列表。
+    # 三个端点都按完整独立配置维护，切换只影响报告生成链路。
+    endpoints:
+      # pro 档，默认选中。
+      - name: "openrouter_kimi"
+        selector_label: "pro"
+        priority: 10
+        connection:
+          _type: "openrouter_channel_conn"
+          key: *openrouter_api_key
+          url: "https://openrouter.ai"
+        url: "https://openrouter.ai/api/v1/chat/completions"
+        model: "moonshotai/kimi-k2.5"
+        verbosity: "high"
+        timeout_seconds: 1800
+        reasoning:
+          enabled: true
+          max_tokens: 32768
+
+      # lite 档，偏兼容兜底。
+      - name: "lite_compatible"
+        selector_label: "lite"
+        priority: 20
+        connection:
+          _type: "lmstudio_channel_conn"
+          key: *lite_api_key
+          url: "${LITE_MODEL_ROOT_URL:-http://127.0.0.1:1234}"
+        url: "${LITE_MODEL_CHAT_URL:-http://127.0.0.1:1234/v1/chat/completions}"
+        model: "${LITE_MODEL_NAME:-qwen2.5-7b-instruct}"
+        lmstudio_ttl_seconds: 1800
+        timeout_seconds: 1800
+
+      # max 档，DuckCoding 上的 Gemini 3.1 Pro Preview，初始优先级最低。
+      - name: "duckcoding_gemini31"
+        selector_label: "max"
+        priority: 30
+        connection:
+          _type: "newapi_channel_conn"
+          key: *duckcoding_api_key
+          url: "https://www.duckcoding.ai"
+        url: "https://www.duckcoding.ai/v1/chat/completions"
+        model: "gemini-3.1-pro-preview"
+        timeout_seconds: 1800
+        reasoning_effort: "high"
+        extra_body:
+          extra_body:
+            google:
+              thinking_config:
+                thinking_level: "high"
+                include_thoughts: true
+
+    # 报告端点重试策略。
+    retry:
+      # 每个端点内部最多重试次数。
+      max_attempts_per_endpoint: 2
+      # 重试退避秒数，实际会按 attempt 倍数递增。
+      backoff_seconds: 2
+
+  # 视觉大模型，用于根据图片/关键帧生成事故信息草稿。
+  accident_vision:
+    # 提供器标识，当前同样按 OpenAI Compatible 视觉接口调用。
+    provider: "raise"
+    # 视觉识别温度，建议保持较低以稳定结构化输出。
+    temperature: 1.0
+    # 最大输出 token 数，图片较多、字段较多时需要较大上限。
+    max_tokens: 128000
+    # 视觉端点列表，当前通常配置一个即可。
+    endpoints:
+      - name: "openrouter_qwen_vision"
+        priority: 10
+        # 视觉模型接口地址，必须兼容 OpenAI Chat Completions 且支持图像输入。
+        url: "https://openrouter.ai/api/v1/chat/completions"
+        # 视觉模型名称。
+        model: "qwen/qwen3.6-plus"
+        verbosity: "high"
+        # 单次调用超时时间，单位秒。
+        timeout_seconds: 1800
+        # 强制启用推理模式，并将思维链预算收敛到中高档位。
+        reasoning:
+          enabled: true
+          max_tokens: 32768
+        # 这里通过顶部锚点复用同一份 key。
+        api_key_env: *openrouter_api_key
+
+    # 视觉端点重试策略。
+    retry:
+      # 每个端点内部最多重试次数。
+      max_attempts_per_endpoint: 2
+      # 重试退避秒数，实际会按 attempt 倍数递增。
+      backoff_seconds: 2
+
+  # 查询向量 embedding 服务。
+  # 注意：这里要求的是 OpenAI 兼容 embeddings 接口，程序会请求 /v1/embeddings。
+  # 默认推荐模型来源可参考 Hugging Face 上的 Qwen/Qwen3-Embedding-0.6B。
+  retrieval_embedding:
+    provider: "openai_compatible"
+    model: "${RETRIEVAL_EMBEDDING_MODEL:-text-embedding-qwen3-embedding-0.6b}"
+    base_url: "${RETRIEVAL_EMBEDDING_BASE_URL:-http://127.0.0.1:1234/v1}"
+    api_key_env: "${RETRIEVAL_EMBEDDING_API_KEY_ENV:-}"
+    timeout_seconds: 120
+    lmstudio_ttl_seconds: 1800
+    dimensions: 1024
+    query_instruction: "Given a Chinese traffic accident analysis query, retrieve statutory rules, liability rules, traffic-control passages, and scenario guidance that support factual analysis and responsibility determination."
+    query_max_length: 512
+    document_max_length: 2048
+    cache_size: 512
+    cache_ttl_seconds: 21600
+
+  # 服务器本地 reranker 服务。
+  # 注意：这里要求的是 /rerank 接口，仓库内置的 retrieval-reranker sidecar 就是为它准备的。
+  retrieval_reranker:
+    provider: "tei"
+    model: "Alibaba-NLP/gte-multilingual-reranker-base"
+    base_url: "http://127.0.0.1:8081"
+    timeout_seconds: 180
+
+# 提示词模板路径
+prompts:
+  # 指导意见提示词文件路径。
+  guidance_prompt_path: "backend/config/指导意见生成提示词.md"
+  # 报告生成提示词模板路径。
+  report_prompt_template: "backend/config/分析报告生成提示词.md"
+
+# 事故信息草稿生成配置
+input_generation:
+  # 当需要把最终确认或生成后的事故信息落盘时，写入的目标 JSON 路径。
+  generated_input_path: "backend/data/input_accident.json"
+  # 覆盖旧事故信息前的备份目录。
+  backup_dir: "backend/data/backup"
+  # 每轮输入生成的工作区目录，里面会保存关键帧、YOLO 摘要、草稿等中间产物。
+  workspace_dir: "backend/data/input_generation"
+  # 事故信息生成提示词路径。
+  prompt_path: "backend/config/事故信息生成提示词.md"
+  # 事故信息模板路径，模型输出最终会投影到这个模板结构上。
+  template_path: "backend/config/input_accident_template.json"
+  # 是否保留调试产物，例如视觉原始响应、YOLO stdout/stderr 等。
+  retain_debug_artifacts: false
+  # 保留最近多少个输入工作区，超出的旧工作区会被清理。
+  retain_workspace_count: 2
+
+  # 视频特征提取（YOLO + ByteTrack）配置
+  yolo:
+    # 运行 YOLO 脚本的 Python 解释器。
+    python_executable: ".venv/Scripts/python.exe"
+    # YOLO 特征提取脚本路径。
+    runner_script: "backend/app/tools/extract_video_features.py"
+    # YOLO 权重文件路径。
+    # 默认示例使用 Ultralytics 的 yolo11n.pt；也可以替换成你自己的检测权重。
+    model_path: "${YOLO_MODEL_PATH:-models/yolo11n.pt}"
+    # 跟踪器配置文件名，当前使用 ByteTrack。
+    tracker: "bytetrack.yaml"
+    # YOLO 检测置信度阈值。
+    confidence: 0.3
+    # 推理设备。
+    # 留空表示自动选择；可填 "cpu"、"0"、"cuda:0" 等。
+    device:
+    # 只关注哪些目标类别，用来压缩轨迹摘要和事件候选。
+    relevant_classes:
+      - "person"
+      - "bicycle"
+      - "car"
+      - "motorcycle"
+      - "bus"
+      - "truck"
+    # 最多保留多少条轨迹摘要给后续流程使用。
+    max_track_summaries: 12
+
+  # 上传约束配置
+  upload:
+    # 单次请求最多允许上传的文件数。
+    max_files: 140
+    # 单次请求允许的总字节数上限，这里约等于 1GB。
+    max_total_bytes: 1073741824
+    # 单张图片允许的体积上限，这里约等于 10MB。
+    max_image_bytes: 10485760
+    # 单个视频允许的体积上限，这里约等于 100MB。
+    max_video_bytes: 104857600
+    # 送给视觉模型的图片总数上限。
+    # 这里会同时约束“上传图片数 + 视频抽帧数”。
+    max_model_images: 48
+    # 每个材料分组最多允许上传的图片数。
+    max_images_per_group: 20
+    # 每个材料分组最多允许上传的视频数。
+    max_videos_per_group: 5
+    # 单次全部分组最多允许上传的图片总数。
+    max_total_images: 120
+    # 单次全部分组最多允许上传的视频总数。
+    max_total_videos: 20
+
+  # 抽帧策略配置
+  frames:
+    # ffmpeg 可执行文件名或路径。
+    ffmpeg_path: "ffmpeg.exe"
+    # ffprobe 可执行文件名或路径，用于读取视频时长。
+    ffprobe_path: "ffprobe.exe"
+    # 单次上传允许处理的视频总时长上限，单位秒。
+    max_video_seconds: 20
+    # 抽帧保底数量，避免视频过短时给模型的图太少。
+    min_frames: 8
+    # 动态帧预算基数，会与时长、fps 权重共同决定目标抽帧数。
+    base_frames: 6
+    # 每秒额外增加多少张帧，值越大，视频越长时抽帧越多。
+    frames_per_second: 0.75
+    # 单个视频最多抽多少张帧。
+    max_frames: 18
+    # 事故前后上下文锚点帧数量。
+    anchor_frames: 5
+    # 在事故活跃窗口中均匀补帧的目标数量。
+    uniform_frames: 12
+    # 基于事件候选额外补帧的数量。
+    event_frames: 4
+    # 两张已选帧之间的最小帧间隔，避免抽到过多近邻重复画面。
+    min_frame_gap: 3
+    # 事故活跃窗口前后额外扩展的秒数。
+    active_window_padding_seconds: 1.2
+    # 事件候选点前方保留多少秒画面。
+    event_window_before_seconds: 0.6
+    # 事件候选点后方保留多少秒画面。
+    event_window_after_seconds: 0.8
+    # 输出图片最长边上限，过大只会增加视觉模型成本。
+    max_side: 960
+    # JPEG 质量参数，数值越小图越清晰、体积越大。
+    jpeg_quality: 3
+
+# 知识检索配置
+retrieval:
+  # 检索器类型。
+  # 当前支持：
+  # - "hybrid_local"：稀疏召回 + 向量召回 + reranker 重排
+  # - "local_jsonl"：本地知识库检索
+  # - "mock"：降级或测试用
+  provider: "hybrid_local"
+  # 首轮检索返回总条数上限。
+  top_k: 6
+  # 最低相似度阈值，低于该值的片段会被过滤。
+  min_score: 0.2
+
+  # 本地 JSONL 知识库检索器配置
+  local_jsonl:
+    # 知识库 manifest 文件路径。
+    manifest_path: "${KBASE_MANIFEST_PATH:-kbase/data/manifest.json}"
+    # 通用知识片段 JSONL 路径。
+    chunks_path: "${KBASE_CHUNKS_PATH:-kbase/data/kbase_chunks.jsonl}"
+    # 责任划分规则 JSONL 路径。
+    rules_path: "${KBASE_RULES_PATH:-kbase/data/liability_rules.jsonl}"
+    search_index_path: "${KBASE_SEARCH_INDEX_PATH:-kbase/data/search_index.json}"
+    # 首轮片段检索时最多取多少条通用知识块。
+    top_k_chunks: 8
+    # 首轮片段检索时最多取多少条规则类知识块。
+    top_k_rules: 12
+    # 拼接给模型的知识库文本最大字符数。
+    max_context_chars: 5200
+    prefer_enhanced_rules: true
+    enable_search_index: true
+    watch_manifest_changes: true
+    # 检索器初始化失败时，是否自动降级到 MockRetriever。
+    fallback_mock_on_error: true
+
+  # Hybrid RAG 配置
+  hybrid:
+    dense_manifest_path: "${KBASE_DENSE_MANIFEST_PATH:-kbase/data/dense_manifest.json}"
+    dense_records_path: "${KBASE_DENSE_RECORDS_PATH:-kbase/data/dense_records.jsonl}"
+    dense_vectors_path: "${KBASE_DENSE_VECTORS_PATH:-kbase/data/dense_vectors.f16.npy}"
+    sparse_top_k_chunks: 8
+    sparse_top_k_rules: 12
+    dense_top_k_chunks: 8
+    dense_top_k_rules: 12
+    rrf_merge_top_k: 24
+    rerank_top_k: 6
+    final_context_top_k: 6
+    max_context_chars: 5200
+    agentic_sparse_top_k_chunks: 4
+    agentic_sparse_top_k_rules: 6
+    agentic_dense_top_k_chunks: 4
+    agentic_dense_top_k_rules: 6
+    agentic_rrf_merge_top_k: 12
+    agentic_rerank_top_k: 3
+
+  # Agentic RAG 多轮补充检索配置
+  agentic:
+    # 是否开启 agentic RAG。
+    # 开启后，报告模型可以在觉得材料不足时主动发起最多 N 轮补充检索。
+    enabled: true
+    # 最多允许追加几轮补充检索。
+    max_rounds: 2
+    # 每轮补充检索最多取多少条新片段。
+    top_k_per_round: 3
+    # 首轮 + 多轮补充后，最终喂给报告模型的总片段上限。
+    max_total_snippets: 9
+    # 模型发起补充检索时，检索查询的最大字符数。
+    max_query_chars: 120
+
+# 工作流控制配置
+workflow:
+  # 是否启用额外的 review 节点。
+  # 当前代码中保留了开关，但默认不启用。
+  enable_review_node: false
+  # 是否保存中间结果。
+  # 当前主流程会保留运行产物，这里建议保持 true。
+  save_intermediate: true
+
+  # 通用节点级重试策略，主要用于指导意见和报告生成阶段。
+  retry:
+    # 单个节点失败后的最大重试次数。
+    max_attempts: 2
+    # 重试退避秒数，实际会按 attempt 倍数递增。
+    backoff_seconds: 2

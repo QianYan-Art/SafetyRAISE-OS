@@ -1,0 +1,20 @@
+{
+  "generated_at": "2026-05-21T00:00:00+08:00",
+  "catalog_meta": {
+    "catalog_version": "demo-minimal-v1"
+  },
+  "sources": [
+    {
+      "source_id": "demo_case_001",
+      "title": "示例事故案例 001"
+    },
+    {
+      "source_id": "law_demo_001",
+      "title": "示例法条摘要 001"
+    },
+    {
+      "source_id": "rule_demo_001",
+      "title": "示例责任规则 001"
+    }
+  ]
+}

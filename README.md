@@ -1,0 +1,132 @@
+# SafetyRAISE
+
+![SafetyRAISE Banner](docs/assets/safetyraise-banner.svg)
+
+道路交通事故分析报告生成系统。
+
+SafetyRAISE 面向道路交通事故分析场景，提供从事故图片、视频材料到结构化事故信息、专家指导意见、检索增强报告和文书导出的完整处理链路。仓库适合需要本地联调、私有部署或二次开发该流程的工程团队。
+
+文档索引：
+
+1. 本地启动： [快速开始](docs/quickstart.md)
+2. 配置模型、知识库与上传限制： [配置说明](docs/configuration.md)
+3. 运行时资产说明： [运行资产准备](docs/prepare-runtime-assets.md)
+4. 服务器部署： [部署说明](docs/deployment.md)
+
+## 核心能力
+
+1. 固定八个分组的资料编排台，用于统一整理事故材料并生成事故草稿。
+2. 上传限制如下：
+   - 每组最多 `20` 张图片、`5` 个视频
+   - 单张图片最多 `10MB`
+   - 单个视频最多 `100MB`
+   - 全部分组最多 `120` 张图片、`20` 个视频
+   - 总上传大小最多 `1GB`
+3. 视频处理链路完整接入 `YOLO + ByteTrack + 自适应抽帧 + 视觉模型`。
+4. 报告链路固定为 `generate_guidance -> retrieve_knowledge(hybrid_local) -> generate_report(agentic RAG) -> postprocess`。
+5. 中间产物支持预览，包含：
+   - 知识片段
+   - 模型自主搜索关键词
+   - YOLO 完整输出
+   - 结构化事故信息
+   - 图片与关键帧
+6. 报告生成模型提供 `max / pro / lite` 三档抽象，由后端映射到具体模型端点。
+7. 后端支持 `report.md / report.docx / report.pdf` 导出。
+
+## 处理链路
+
+```text
+事故图片/视频材料
+    -> 事故信息草稿
+    -> 专家指导意见
+    -> 检索增强分析报告
+    -> 导出文书
+```
+
+## 技术栈
+
+1. 前端：React + TypeScript + Vite
+2. 后端：FastAPI
+3. 视频链路：YOLO、ByteTrack、ffmpeg
+4. 检索链路：本地知识库文件、embedding、reranker sidecar
+5. 部署目录：`deployment/docker`
+
+## 仓库结构
+
+```text
+TS_analysis_report/
+├─ frontend/
+├─ backend/
+├─ deployment/
+│  └─ docker/
+├─ docs/
+└─ .env.example
+```
+
+## 运行前准备
+
+使用前需自行准备以下依赖：
+
+1. 模型服务
+   - 专家模型
+   - 视觉模型
+   - 报告模型
+   - embedding 模型
+2. 知识库文件
+   - `manifest.json`
+   - `kbase_chunks.jsonl`
+   - `liability_rules.jsonl`
+   - dense 检索相关文件
+3. 视频依赖
+   - `ffmpeg / ffprobe`
+   - YOLO 权重
+4. 若使用远端模型服务，对应的 API Key
+
+## 本地开发
+
+依赖安装：
+
+```powershell
+uv venv .venv
+uv pip install --python .venv/Scripts/python.exe -r backend/requirements.txt
+cd frontend
+npm install
+```
+
+完整步骤见 [快速开始](docs/quickstart.md)。
+
+## 文档入口
+
+1. [配置说明](docs/configuration.md)
+   - `workflow.yaml` / `workflow.server.yaml`
+   - 模型档位、检索配置、上传限制
+2. [运行资产准备](docs/prepare-runtime-assets.md)
+   - 默认模型与端点
+   - 配置入口
+   - 知识库文件格式
+   - `local_jsonl` 与 `hybrid_local`
+   - 首次联调顺序
+3. [部署说明](docs/deployment.md)
+   - Docker Compose 部署方式
+   - `.env.example -> .env.server`
+   - Nginx / HTTPS / reranker sidecar
+
+## 当前限制
+
+1. 默认检索实现依赖本地知识库文件，不自带远程数据库后端。
+2. 视频链路可在 CPU 上运行，但速度慢很多，更适合有 GPU 的环境。
+3. `lite` 档位只是前端抽象名，不绑定固定供应商，需要自行准备兼容端点。
+4. 当前仓库保留产品主链路，不包含开发期间的内部运维文档和内部测试集。
+5. 如果切换 embedding 模型，需要同步重建 dense 索引文件，否则检索结果会失真。
+
+## 扩展方向
+
+1. 接入新的模型端点或替换现有供应商。
+2. 用 Elasticsearch、Milvus 或 pgvector 替换当前本地 hybrid 检索。
+3. 扩展事故信息模板与提示词，使其适配更多事故类型。
+4. 扩展更多文书导出模板。
+5. 为移动端或小程序接入更轻量的上传和审阅界面。
+
+## 许可
+
+本项目采用 [Apache License 2.0](LICENSE)。

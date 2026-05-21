@@ -1,0 +1,2 @@
+{"rule_id":"rule_demo_001","source_id":"rule_demo_001","title":"左转未让直行的责任认定","rule_type":"liability_rule","scenarios":["交叉路口","左转","直行"],"liability_subjects":["机动车驾驶人"],"authority":"示例规则集","content":"在未设置特殊优先通行规则的交叉路口，左转车辆未让直行车辆先行并引发碰撞的，通常认定左转一方承担主要责任或全部责任。"}
+{"rule_id":"rule_demo_002","source_id":"rule_demo_002","title":"直行一方存在违规行为时的责任修正","rule_type":"liability_rule","scenarios":["电动自行车","突然变道","观察不足"],"liability_subjects":["电动自行车驾驶人"],"authority":"示例规则集","content":"如果直行一方同时存在明显违规穿行、闯禁行或者观察义务缺失，应结合因果关系对责任比例进行修正。"}

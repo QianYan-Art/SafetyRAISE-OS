@@ -1,0 +1,71 @@
+<svg width="1600" height="720" viewBox="0 0 1600 720" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="180" y1="80" x2="1420" y2="640" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0F172A"/>
+      <stop offset="0.5" stop-color="#132B66"/>
+      <stop offset="1" stop-color="#0A7B83"/>
+    </linearGradient>
+    <linearGradient id="line" x1="320" y1="170" x2="1290" y2="170" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#93C5FD"/>
+      <stop offset="1" stop-color="#5EEAD4"/>
+    </linearGradient>
+    <linearGradient id="chip" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#1E3A8A"/>
+      <stop offset="1" stop-color="#115E59"/>
+    </linearGradient>
+    <filter id="shadow" x="0" y="0" width="1600" height="720" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="24" stdDeviation="32" flood-color="#020617" flood-opacity="0.28"/>
+    </filter>
+  </defs>
+
+  <rect width="1600" height="720" rx="36" fill="url(#bg)"/>
+  <g opacity="0.18">
+    <circle cx="1288" cy="132" r="202" stroke="#93C5FD" stroke-width="2"/>
+    <circle cx="1328" cy="188" r="158" stroke="#5EEAD4" stroke-width="2"/>
+    <circle cx="312" cy="582" r="228" stroke="#67E8F9" stroke-width="2"/>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="88" y="96" width="1424" height="528" rx="28" fill="white" fill-opacity="0.05" stroke="white" stroke-opacity="0.12"/>
+  </g>
+
+  <g>
+    <text x="146" y="188" fill="#E2E8F0" font-size="22" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif" letter-spacing="4">ROAD ACCIDENT ANALYSIS REPORT SYSTEM</text>
+    <text x="146" y="286" fill="white" font-size="72" font-weight="700" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif">SafetyRAISE</text>
+    <text x="146" y="350" fill="#CBD5E1" font-size="28" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif">道路交通事故分析报告生成系统</text>
+    <text x="146" y="414" fill="#B6C2D9" font-size="24" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif">事故图片与视频材料 → 结构化事故信息 → 专家指导意见 → 检索增强报告 → 文书导出</text>
+  </g>
+
+  <g transform="translate(146 488)">
+    <rect width="208" height="56" rx="18" fill="url(#chip)" stroke="rgba(255,255,255,0.16)"/>
+    <text x="104" y="36" text-anchor="middle" fill="#E0F2FE" font-size="22" font-weight="600" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif">FastAPI + React</text>
+  </g>
+  <g transform="translate(378 488)">
+    <rect width="198" height="56" rx="18" fill="url(#chip)" stroke="rgba(255,255,255,0.16)"/>
+    <text x="99" y="36" text-anchor="middle" fill="#E0F2FE" font-size="22" font-weight="600" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif">Hybrid RAG</text>
+  </g>
+  <g transform="translate(598 488)">
+    <rect width="232" height="56" rx="18" fill="url(#chip)" stroke="rgba(255,255,255,0.16)"/>
+    <text x="116" y="36" text-anchor="middle" fill="#E0F2FE" font-size="22" font-weight="600" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif">YOLO + ByteTrack</text>
+  </g>
+  <g transform="translate(856 488)">
+    <rect width="210" height="56" rx="18" fill="url(#chip)" stroke="rgba(255,255,255,0.16)"/>
+    <text x="105" y="36" text-anchor="middle" fill="#E0F2FE" font-size="22" font-weight="600" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif">Report Export</text>
+  </g>
+
+  <g transform="translate(1086 136)">
+    <rect x="0" y="0" width="318" height="336" rx="26" fill="#0F172A" fill-opacity="0.52" stroke="#93C5FD" stroke-opacity="0.28"/>
+    <text x="34" y="62" fill="#E2E8F0" font-size="24" font-weight="600" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif">Pipeline</text>
+
+    <line x1="64" y1="102" x2="64" y2="262" stroke="url(#line)" stroke-width="4" stroke-linecap="round"/>
+    <circle cx="64" cy="114" r="16" fill="#0EA5E9"/>
+    <circle cx="64" cy="166" r="16" fill="#14B8A6"/>
+    <circle cx="64" cy="218" r="16" fill="#38BDF8"/>
+    <circle cx="64" cy="270" r="16" fill="#22C55E"/>
+
+    <text x="100" y="121" fill="#F8FAFC" font-size="20" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif">Upload &amp; Grouping</text>
+    <text x="100" y="173" fill="#F8FAFC" font-size="20" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif">Structured Draft</text>
+    <text x="100" y="225" fill="#F8FAFC" font-size="20" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif">Knowledge Retrieval</text>
+    <text x="100" y="277" fill="#F8FAFC" font-size="20" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif">Report Export</text>
+  </g>
+</svg>
