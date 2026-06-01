@@ -107,3 +107,19 @@ class RequestCancelledError(WorkflowError):
     default_code = "REQUEST_CANCELLED"
     default_status_code = 409
     default_retryable = True
+
+
+class AuthenticationError(WorkflowError):
+    """认证失败。"""
+
+    default_code = "AUTHENTICATION_FAILED"
+    default_status_code = 401
+    default_retryable = False
+
+
+class PermissionDeniedError(WorkflowError):
+    """无权限。"""
+
+    default_code = "PERMISSION_DENIED"
+    default_status_code = 403
+    default_retryable = False

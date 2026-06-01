@@ -10,8 +10,8 @@ from uuid import uuid4
 from app.adapters.input.base import BaseInputAdapter
 from app.adapters.input.dict_input_adapter import DictInputAdapter
 from app.adapters.input.file_input_adapter import FileInputAdapter
-from app.core.exceptions import InputValidationError, RequestCancelledError
-from app.core.settings import Settings, get_api_key
+from app.core.exceptions import ConfigurationError, InputValidationError, RequestCancelledError
+from app.core.settings import ReportEndpointConnectionSettings, ReportEndpointSettings, Settings, get_api_key
 from app.providers.llm.base import BaseLLMProvider
 from app.providers.llm.openai_compatible_expert import OpenAICompatibleExpertProvider
 from app.providers.llm.ollama_expert import OllamaExpertProvider
@@ -22,7 +22,6 @@ from app.providers.retrieval.base import BaseRetriever
 from app.providers.retrieval.factory import build_retriever
 from app.schemas.report import ReportArtifact, ReportResult
 from app.services.input_generation_service import InputGenerationService
-from app.services.report_model_selection_service import ReportModelSelectionService
 from app.workflow.graph import build_graph
 from app.workflow.nodes import WorkflowNodes
 
@@ -43,9 +42,14 @@ class ReportService:
         video_path: Optional[str] = None,
         persist_generated_input: bool = True,
         persist_accident_data: bool = False,
+        capability_overrides: Optional[dict[str, Any]] = None,
         progress_callback: Optional[Callable[[dict[str, Any]], None]] = None,
         cancel_event: Event | None = None,
     ) -> ReportArtifact:
+        capability_overrides = capability_overrides or {}
+        vision_override = capability_overrides.get("vision")
+        embedding_override = capability_overrides.get("embedding")
+        report_override = capability_overrides.get("report")
         input_generation_service: InputGenerationService | None = None
         expert_provider: BaseLLMProvider | None = None
         report_provider: BaseLLMProvider | None = None
@@ -59,7 +63,7 @@ class ReportService:
             )
             self._raise_if_cancelled(cancel_event)
             if video_path:
-                input_generation_service = self._build_input_generation_service()
+                input_generation_service = self._build_input_generation_service(vision_override=vision_override)
                 self._register_active_resource(input_generation_service)
                 input_generation_artifact = input_generation_service.generate(
                     video_path=video_path,
@@ -71,8 +75,9 @@ class ReportService:
 
             self._raise_if_cancelled(cancel_event)
             input_adapter = self._build_input_adapter(input_path=input_path, accident_data=accident_data)
-            selection_service = ReportModelSelectionService(self.settings)
-            selected_endpoint, _ = selection_service.get_selected_endpoint()
+            selected_endpoint, switchable_labels = self._resolve_selected_report_endpoint(
+                report_override=report_override,
+            )
             lmstudio_residency_manager = self._build_lmstudio_residency_manager()
             expert_provider = self._call_builder(
                 self._build_expert_provider,
@@ -81,8 +86,8 @@ class ReportService:
             )
             report_provider = self._call_builder(
                 self._build_report_provider,
-                selection_service=selection_service,
                 selected_endpoint=selected_endpoint,
+                switchable_labels=switchable_labels,
                 lmstudio_residency_manager=lmstudio_residency_manager,
                 lmstudio_residency_companions=self._build_report_residency_companions(selected_endpoint=selected_endpoint),
             )
@@ -97,6 +102,7 @@ class ReportService:
                 retriever=self._call_builder(
                     self._build_retriever,
                     selected_endpoint=selected_endpoint,
+                    embedding_override=embedding_override,
                     lmstudio_residency_manager=lmstudio_residency_manager,
                 ),
                 progress_callback=progress_callback,
@@ -183,18 +189,23 @@ class ReportService:
 
         raise ConfigurationError(f"不支持的专家模型提供器: {self.settings.models.expert_local.provider}")
 
+    def _default_report_endpoint(self) -> ReportEndpointSettings:
+        """报告端点 3→1：始终解析为唯一的默认报告端点（按优先级取第一个）。"""
+        endpoints = self.settings.models.report_external.iter_endpoints_by_priority()
+        if not endpoints:
+            raise ConfigurationError("report_external.endpoints 至少需要配置一个端点。")
+        return endpoints[0]
+
     def _build_report_provider(
         self,
         *,
-        selection_service: ReportModelSelectionService | None = None,
-        selected_endpoint=None,
+        selected_endpoint: ReportEndpointSettings,
+        switchable_labels: list[str] | None = None,
         lmstudio_residency_manager: LMStudioResidencyManager | None = None,
         lmstudio_residency_companions: list[LMStudioResidencySpec] | None = None,
     ) -> BaseLLMProvider:
         model_cfg = self.settings.models.report_external
-        selection_service = selection_service or ReportModelSelectionService(self.settings)
-        if selected_endpoint is None:
-            selected_endpoint, _ = selection_service.get_selected_endpoint()
+        switchable_labels = switchable_labels or []
         credential = (
             selected_endpoint.connection.key
             if selected_endpoint.connection and selected_endpoint.connection.key
@@ -208,44 +219,101 @@ class ReportService:
             config=provider_config,
             endpoint_api_keys=endpoint_api_keys,
             lmstudio_host_allowlist=self.settings.app.lmstudio_host_allowlist,
-            selected_endpoint_label=selected_endpoint.selector_label,
-            switchable_labels=selection_service.get_switchable_labels(selected_endpoint.name),
+            selected_endpoint_label=None,
+            switchable_labels=switchable_labels,
             lmstudio_residency_manager=lmstudio_residency_manager,
             lmstudio_residency_companions=lmstudio_residency_companions,
         )
 
-    def _build_vision_provider(self) -> OpenAIVisionProvider:
+    def _resolve_selected_report_endpoint(
+        self,
+        *,
+        report_override: Optional[dict[str, Any]],
+    ):
+        """报告端点 3→1：用户配置了报告能力 → 用其单端点 override；否则用系统默认端点。"""
+        selected_endpoint = self._default_report_endpoint()
+        if not report_override or not (
+            report_override.get("base_url") or report_override.get("model_name")
+        ):
+            return selected_endpoint, []
+
+        override_endpoint = selected_endpoint.model_copy(
+            update={
+                "name": "user_report",
+                "url": report_override.get("base_url") or selected_endpoint.url,
+                "model": report_override.get("model_name") or selected_endpoint.model,
+                "api_key_env": None,
+                "connection": ReportEndpointConnectionSettings(
+                    connection_type="inline",
+                    key=report_override.get("api_key") or "",
+                    url=report_override.get("base_url") or selected_endpoint.url,
+                ),
+            }
+        )
+        # 单端点模式：无可切换档位
+        return override_endpoint, []
+
+    def _build_vision_provider(self, *, vision_override: Optional[dict[str, Any]] = None) -> OpenAIVisionProvider:
         model_cfg = self.settings.models.accident_vision
-        endpoint_api_keys = {}
-        for endpoint in model_cfg.endpoints:
-            env_name = endpoint.api_key_env or model_cfg.api_key_env
-            endpoint_api_keys[endpoint.name] = get_api_key(env_name)
+        if vision_override and (vision_override.get("base_url") or vision_override.get("model_name")):
+            model_cfg, endpoint_api_keys = self._synthesize_override_endpoint(
+                model_cfg, vision_override, name="user_vision"
+            )
+        else:
+            endpoint_api_keys = {}
+            for endpoint in model_cfg.endpoints:
+                env_name = endpoint.api_key_env or model_cfg.api_key_env
+                endpoint_api_keys[endpoint.name] = get_api_key(env_name)
         return OpenAIVisionProvider(
             config=model_cfg,
             endpoint_api_keys=endpoint_api_keys,
             lmstudio_host_allowlist=self.settings.app.lmstudio_host_allowlist,
         )
 
-    def _build_input_generation_service(self) -> InputGenerationService:
+    @staticmethod
+    def _synthesize_override_endpoint(model_cfg, override: dict[str, Any], *, name: str):
+        """把用户 override(base_url/api_key/model)收敛为单端点配置 + 内联 key。仅 OpenAI 兼容格式。"""
+        base = model_cfg.endpoints[0] if model_cfg.endpoints else ReportEndpointSettings(name=name, url="")
+        new_url = override.get("base_url") or base.url
+        new_model = override.get("model_name") or base.model or model_cfg.model
+        inline_key = override.get("api_key") or ""
+        endpoint = base.model_copy(
+            update={
+                "name": name,
+                "url": new_url,
+                "model": new_model,
+                "api_key_env": None,
+                "connection": ReportEndpointConnectionSettings(
+                    connection_type="inline", key=inline_key, url=new_url
+                ),
+            }
+        )
+        config = model_cfg.model_copy(update={"endpoints": [endpoint], "model": new_model})
+        return config, {name: inline_key}
+
+    def _build_input_generation_service(
+        self, *, vision_override: Optional[dict[str, Any]] = None
+    ) -> InputGenerationService:
         return InputGenerationService(
             settings=self.settings,
-            vision_provider=self._build_vision_provider(),
+            vision_provider=self._build_vision_provider(vision_override=vision_override),
         )
 
     def _build_retriever(
         self,
         *,
         selected_endpoint=None,
+        embedding_override: Optional[dict[str, Any]] = None,
         lmstudio_residency_manager: LMStudioResidencyManager | None = None,
     ) -> BaseRetriever:
         if selected_endpoint is None:
             try:
-                selection_service = ReportModelSelectionService(self.settings)
-                selected_endpoint, _ = selection_service.get_selected_endpoint()
+                selected_endpoint = self._default_report_endpoint()
             except Exception:  # noqa: BLE001
                 selected_endpoint = None
+        effective_settings = self._apply_embedding_override(self.settings, embedding_override)
         return build_retriever(
-            self.settings,
+            effective_settings,
             lmstudio_residency_manager=lmstudio_residency_manager,
             embedding_residency_companions=(
                 self._build_embedding_residency_companions(selected_endpoint=selected_endpoint)
@@ -253,6 +321,47 @@ class ReportService:
                 else None
             ),
         )
+
+    @staticmethod
+    def _apply_embedding_override(settings: Settings, embedding_override: Optional[dict[str, Any]]) -> Settings:
+        """把嵌入 override（端点 + top_k/dense 调参）应用到一份 per-request settings 副本。
+
+        留空回退系统默认。注：用户若改 embedding 模型与 dense 索引模型不一致时，
+        既有 build_retriever 会捕获并降级到 sparse，系统不崩。
+        """
+        if not embedding_override:
+            return settings
+        emb_update: dict[str, Any] = {}
+        if embedding_override.get("base_url"):
+            emb_update["base_url"] = embedding_override["base_url"]
+        if embedding_override.get("model_name"):
+            emb_update["model"] = embedding_override["model_name"]
+        if embedding_override.get("api_key"):
+            emb_update["api_key"] = embedding_override["api_key"]
+
+        params = embedding_override.get("params") or {}
+        hybrid_update: dict[str, Any] = {}
+        if params.get("top_k") is not None:
+            hybrid_update["final_context_top_k"] = max(1, min(20, int(params["top_k"])))
+        if params.get("dense_top_k_chunks") is not None:
+            hybrid_update["dense_top_k_chunks"] = max(1, min(50, int(params["dense_top_k_chunks"])))
+        if params.get("dense_top_k_rules") is not None:
+            hybrid_update["dense_top_k_rules"] = max(1, min(50, int(params["dense_top_k_rules"])))
+
+        if not emb_update and not hybrid_update:
+            return settings
+
+        models = settings.models
+        retrieval = settings.retrieval
+        if emb_update:
+            models = models.model_copy(
+                update={"retrieval_embedding": models.retrieval_embedding.model_copy(update=emb_update)}
+            )
+        if hybrid_update:
+            retrieval = retrieval.model_copy(
+                update={"hybrid": retrieval.hybrid.model_copy(update=hybrid_update)}
+            )
+        return settings.model_copy(update={"models": models, "retrieval": retrieval})
 
     def _build_lmstudio_residency_manager(self) -> LMStudioResidencyManager:
         return LMStudioResidencyManager(
@@ -265,15 +374,10 @@ class ReportService:
         return [embedding_spec] if embedding_spec is not None else []
 
     def _build_report_residency_companions(self, *, selected_endpoint) -> list[LMStudioResidencySpec]:
-        if str(selected_endpoint.selector_label or "").strip().lower() != "lite":
-            return []
-        embedding_spec = self._build_embedding_residency_spec()
-        return [embedding_spec] if embedding_spec is not None else []
+        # 单一远端报告端点，无需常驻伴随模型。
+        return []
 
     def _build_embedding_residency_companions(self, *, selected_endpoint) -> list[LMStudioResidencySpec]:
-        if str(selected_endpoint.selector_label or "").strip().lower() == "lite":
-            report_spec = self._build_report_endpoint_residency_spec(selected_endpoint=selected_endpoint)
-            return [report_spec] if report_spec is not None else []
         expert_spec = self._build_expert_residency_spec()
         return [expert_spec] if expert_spec is not None else []
 

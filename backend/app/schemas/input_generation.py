@@ -22,6 +22,7 @@ class InputGenerationArtifact(BaseModel):
     workspace_dir: str
     yolo_summary_path: Optional[str] = None
     yolo_summary_preview: Optional[dict[str, Any]] = None
+    yolo_asset_manifest: list[dict[str, Any]] = Field(default_factory=list)
     frames_dir: Optional[str] = None
     frame_manifest: list[dict[str, Any]] = Field(default_factory=list)
     upload_groups: list[UploadGroupSummary] = Field(default_factory=list)

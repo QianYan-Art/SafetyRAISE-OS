@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+import shutil
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,6 +15,7 @@ from app.core.model_output import sanitize_markdown_output, split_markdown_secti
 from app.core.settings import Settings
 from app.providers.llm.base import BaseLLMProvider, LLMGenerateResult, LLMToolCall
 from app.providers.retrieval.base import BaseRetriever
+from app.services.database_service import DatabaseService
 from app.workflow.state import WorkflowState
 
 logger = logging.getLogger(__name__)
@@ -50,6 +52,7 @@ class WorkflowNodes:
         self.retriever = retriever
         self.progress_callback = progress_callback
         self.cancel_event = cancel_event
+        self.database_service = DatabaseService(settings)
 
     def load_input_node(self, state: WorkflowState) -> WorkflowState:
         self._raise_if_cancelled()
@@ -293,6 +296,7 @@ class WorkflowNodes:
             },
         )
         (run_dir / "report.md").write_text(report_raw, encoding="utf-8")
+        self._prune_old_output_dirs(current_run_dir=run_dir)
 
         self._emit_stage(
             "postprocess",
@@ -301,6 +305,54 @@ class WorkflowNodes:
             output_dir=str(run_dir.resolve()),
         )
         return {"trace_id": trace_id, "output_dir": str(run_dir.resolve())}
+
+    def _prune_old_output_dirs(self, current_run_dir: Path) -> None:
+        retain_count = self.settings.app.output_retain_count
+        if retain_count <= 0 or not self.settings.output_dir_path.exists():
+            return
+
+        protected_paths = {current_run_dir.resolve()}
+        try:
+            with self.database_service.connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        select report_result->>'output_dir' as output_dir
+                        from chat_sessions
+                        where report_result is not null
+                        """
+                    )
+                    rows = list(cur.fetchall())
+        except Exception as exc:
+            logger.warning("查询活跃报告输出目录失败，跳过旧输出清理：%s", exc)
+            return
+
+        for row in rows:
+            raw_path = str((row or {}).get("output_dir") or "").strip()
+            if not raw_path:
+                continue
+            try:
+                resolved = Path(raw_path).resolve()
+            except OSError:
+                continue
+            if resolved.exists():
+                protected_paths.add(resolved)
+
+        candidates = sorted(
+            (item for item in self.settings.output_dir_path.iterdir() if item.is_dir()),
+            key=lambda item: item.stat().st_mtime,
+            reverse=True,
+        )
+
+        retained_unprotected = 0
+        for output_dir in candidates:
+            resolved = output_dir.resolve()
+            if resolved in protected_paths:
+                continue
+            retained_unprotected += 1
+            if retained_unprotected <= retain_count:
+                continue
+            shutil.rmtree(output_dir, ignore_errors=True)
 
     def _generate_report_with_agentic_rag(
         self,

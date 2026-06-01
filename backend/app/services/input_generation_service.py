@@ -236,6 +236,10 @@ class InputGenerationService:
             combined_yolo_sources=combined_yolo_sources,
             has_images=bool(image_entries),
         )
+        yolo_asset_manifest = self._build_yolo_asset_manifest(
+            yolo_root_dir=yolo_root_dir,
+            upload_groups=upload_group_summaries,
+        )
         artifact_frames_dir = (
             workspace_dir
             if image_entries and video_contexts
@@ -255,6 +259,7 @@ class InputGenerationService:
             frames_dir=artifact_frames_dir,
             yolo_summary_path=yolo_summary_path,
             yolo_summary_preview=yolo_summary_preview,
+            yolo_asset_manifest=yolo_asset_manifest,
             upload_groups=upload_group_summaries,
             system_prompt=system_prompt,
             raw_response=raw_response,
@@ -1381,6 +1386,42 @@ class InputGenerationService:
             ),
         }
 
+    def _build_yolo_asset_manifest(
+        self,
+        yolo_root_dir: Path,
+        upload_groups: list[UploadGroupSummary],
+    ) -> list[dict[str, Any]]:
+        if not yolo_root_dir.exists():
+            return []
+
+        group_meta = {
+            item.category_id: {
+                "category_label": item.category_label,
+                "category_subtitle": item.category_subtitle or "",
+                "category_sequence": int(item.sequence),
+            }
+            for item in upload_groups
+        }
+        assets: list[dict[str, Any]] = []
+        for path in sorted(yolo_root_dir.rglob("*")):
+            if not path.is_file() or path.suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp"}:
+                continue
+            relative_parts = path.relative_to(yolo_root_dir).parts
+            category_id = relative_parts[0] if len(relative_parts) > 1 else ""
+            meta = group_meta.get(category_id, {})
+            assets.append(
+                {
+                    "path": str(path.resolve()),
+                    "file_name": path.name,
+                    "category_id": category_id,
+                    "category_label": str(meta.get("category_label") or ""),
+                    "category_subtitle": str(meta.get("category_subtitle") or ""),
+                    "category_sequence": int(meta.get("category_sequence", 999) or 999),
+                    "source_name": path.parent.name,
+                }
+            )
+        return assets
+
     @staticmethod
     def _resolve_media_type(has_images: bool, has_videos: bool) -> str:
         if has_images and has_videos:
@@ -1639,6 +1680,7 @@ class InputGenerationService:
         frames_dir: Path | None,
         yolo_summary_path: Path | None,
         yolo_summary_preview: dict[str, Any] | None,
+        yolo_asset_manifest: list[dict[str, Any]],
         upload_groups: list[Any],
         system_prompt: str,
         raw_response: str,
@@ -1674,6 +1716,7 @@ class InputGenerationService:
             workspace_dir=str(workspace_dir.resolve()),
             yolo_summary_path=str(yolo_summary_path.resolve()) if yolo_summary_path else None,
             yolo_summary_preview=yolo_summary_preview,
+            yolo_asset_manifest=list(yolo_asset_manifest),
             frames_dir=str(frames_dir.resolve()) if frames_dir else None,
             frame_manifest=frame_manifest,
             upload_groups=list(upload_groups),

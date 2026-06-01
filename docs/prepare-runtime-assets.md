@@ -142,28 +142,19 @@ POST /rerank
 
 默认形态：远端 OpenAI 兼容 API。
 
-默认存在三个可切换端点：
+报告端点已收敛为**单一端点**（档位机制下线）：
 
-| 前端档位 | 默认端点名 | 默认模型 | 主要配置位置 |
-| --- | --- | --- | --- |
-| `pro` | `openrouter_kimi` | `moonshotai/kimi-k2.5` | `models.report_external.endpoints[openrouter_kimi]` |
-| `lite` | `lite_compatible` | `qwen2.5-7b-instruct` | `models.report_external.endpoints[lite_compatible]` + `LITE_MODEL_*` |
-| `max` | `duckcoding_gemini31` | `gemini-3.1-pro-preview` | `models.report_external.endpoints[duckcoding_gemini31]` |
+| 默认端点名 | 默认模型 | 主要配置位置 |
+| --- | --- | --- |
+| `openrouter_deepseek_v4_pro` | `deepseek/deepseek-v4-pro` | `models.report_external.endpoints[openrouter_deepseek_v4_pro]` |
 
 程序约束：
 
-1. 前端只显示 `max / pro / lite`
-2. 后端要求每个端点都带唯一的 `selector_label`
-3. `selector_label` 只能是 `max`、`pro`、`lite`
-4. 同一时间只会选中其中一个端点生成报告
+1. `report_external.endpoints` 至少保留一个端点，系统取 `priority` 最高者为系统默认报告端点
+2. 不再有 `selector_label` 与 `max/pro/lite` 档位
+3. 视觉 / 嵌入 / 报告模型按「每用户能力配置」解析（前端「模型接入设置」填 `url + key + model`）
 
-如果要替换报告模型，直接改对应端点即可：
-
-1. 改 `pro`：修改 `openrouter_kimi`
-2. 改 `lite`：修改 `lite_compatible` 和 `LITE_MODEL_*`
-3. 改 `max`：修改 `duckcoding_gemini31`
-
-如果只是替换供应商，不想改前端文案，不要改 `selector_label`，只改 `name`、`url`、`model`、`api_key_env` 或 `connection`。
+替换报告供应商：直接改该端点的 `name`、`url`、`model`、`api_key_env` 或 `connection` 即可。
 
 ## 需要准备的文件和服务
 
@@ -259,6 +250,30 @@ kbase/data/dense_vectors.f16.npy
 
 1. `dense_records.jsonl` 的记录顺序必须和 `dense_vectors.f16.npy` 的向量行顺序一致
 2. 更换 embedding 模型后必须重建这三份文件
+3. 当前仓库已提供构建脚本：
+
+```text
+backend/app/tools/build_dense_index.py
+```
+
+最小用法示例：
+
+```bash
+python backend/app/tools/build_dense_index.py \
+  --manifest examples/kbase/minimal/manifest.json \
+  --chunks examples/kbase/minimal/kbase_chunks.jsonl \
+  --rules examples/kbase/minimal/liability_rules.jsonl \
+  --output-dir C:\tmp\dense_build \
+  --embedding-base-url https://<MODEL_API_HOST>/v1 \
+  --embedding-model text-embedding-qwen3-embedding-0.6b \
+  --api-key-env QIANYAN_API_KEY
+```
+
+说明：
+
+1. 脚本会输出 `dense_manifest.json`、`dense_records.jsonl`、`dense_vectors.f16.npy`
+2. 记录会自动附带 `record_type` 和稳定 `id`
+3. 向量会在写盘前做单位归一化，和当前 `DenseIndexStore` 的余弦检索实现保持一致
 
 ## 知识库内容格式
 

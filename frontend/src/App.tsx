@@ -5,15 +5,23 @@ import remarkGfm from "remark-gfm";
 import {
   ApiError,
   buildChatSessionLinkedArtifactAssetUrl,
+  clearAuthToken,
+  hasAuthToken,
+  fetchCurrentUser,
   fetchChatSessionLinkedArtifactDetail,
   downloadReportExport,
   fetchPublicAppConfig,
+  fetchUserModelConfigs,
   formatApiErrorMessage,
   generateInputFromUploads,
   generateReportFromConfirmedInputStream,
+  login,
   listChatSessionLinkedArtifacts,
-  updateReportModelSelection,
+  register,
+  updateUserModelConfigs,
 } from "./api";
+import { AdminConsole } from "./AdminConsole";
+import { AuthScreen } from "./AuthScreen";
 import type {
   ChatMessage,
   ChatMessageMeta,
@@ -26,6 +34,9 @@ import type {
   PublicReportModelOption,
   ReportModelLabel,
   ReportExportFormat,
+  CapabilityConfigState,
+  UpdateCapabilityConfigsPayload,
+  UserSummary,
 } from "./types";
 import { useChatHistory, ChatSession } from "./useChatHistory";
 import { JsonTableEditor } from "./JsonTableEditor";
@@ -47,6 +58,7 @@ import {
   type PendingUploadGroupState,
   validatePendingUploadSelection,
 } from "./uploadGroups";
+import { UserModelConfigDrawer } from "./UserModelConfigDrawer";
 
 const SidebarIcon = ({ isOpen }: { isOpen?: boolean }) => (
   <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -79,6 +91,20 @@ const SearchIcon = () => (
   <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
     <circle cx="11" cy="11" r="8" />
     <line x1="21" y1="21" x2="16.65" y2="16.65" />
+  </svg>
+);
+
+const ShieldIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 3l7 3v5c0 4.8-2.9 8.9-7 10-4.1-1.1-7-5.2-7-10V6l7-3z" />
+    <path d="m9.5 12 1.7 1.7 3.8-4.2" />
+  </svg>
+);
+
+const ArrowLeftIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M19 12H5" />
+    <path d="m12 19-7-7 7-7" />
   </svg>
 );
 
@@ -138,33 +164,6 @@ const ExportRibbonIcon = () => (
   </svg>
 );
 
-const ReportModelGlyph = ({ label }: { label: ReportModelLabel }) => {
-  if (label === "max") {
-    return (
-      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <ellipse cx="12" cy="12" rx="9" ry="4.5" stroke="currentColor" strokeWidth="1.7" transform="rotate(-18 12 12)" />
-        <path d="M12 5.1l1.38 2.92 3.22.37-2.35 2.24.61 3.19L12 12.25 9.14 13.8l.61-3.16L7.4 8.39l3.22-.37L12 5.1Z" fill="currentColor" />
-      </svg>
-    );
-  }
-
-  if (label === "lite") {
-    return (
-      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <path d="M13.4 2.8 6.9 12h4.15l-1.2 9.2 7.25-10.32h-4.04l.34-8.08Z" fill="currentColor" />
-      </svg>
-    );
-  }
-
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <rect x="4" y="5" width="16" height="4.2" rx="2.1" fill="currentColor" opacity="0.96" />
-      <rect x="6" y="10.6" width="12" height="3.4" rx="1.7" fill="currentColor" opacity="0.72" />
-      <rect x="8" y="15.2" width="8" height="3" rx="1.5" fill="currentColor" opacity="0.48" />
-    </svg>
-  );
-};
-
 function prettyJson(payload: unknown): string {
   return JSON.stringify(payload, null, 2);
 }
@@ -179,20 +178,6 @@ const MOBILE_SESSION_RENAME_PRESS_MS = 520;
 const MOBILE_SESSION_RENAME_MOVE_TOLERANCE = 10;
 const THEME_STORAGE_KEY = "traffic-accident-theme-mode";
 const REPORT_MODEL_ORDER: ReportModelLabel[] = ["max", "pro", "lite"];
-const REPORT_MODEL_PRESENTATION: Record<ReportModelLabel, { title: string; description: string }> = {
-  max: {
-    title: "max",
-    description: "更偏推理深度与长链路思考。",
-  },
-  pro: {
-    title: "pro",
-    description: "默认档位，兼顾稳定性与生成质量。",
-  },
-  lite: {
-    title: "lite",
-    description: "偏兼容兜底，适合快速切换恢复。",
-  },
-};
 const DEFAULT_PUBLIC_APP_CONFIG: PublicAppConfig = {
   upload_limits: {
     max_total_bytes: 1024 * 1024 * 1024,
@@ -259,6 +244,11 @@ const REPORT_EXPORT_ACTIONS: Array<{
     pendingHint: "可先配置封面标题与日期",
   },
 ];
+const EXPORT_CATEGORY_BY_FORMAT: Record<ReportExportFormat, string> = {
+  md: "report_markdown",
+  docx: "report_docx",
+  pdf: "report_pdf",
+};
 type ThemeMode = "light" | "dark";
 type PdfCoverDraft = {
   title: string;
@@ -275,11 +265,8 @@ type ArtifactPreviewState = {
   error: string;
 };
 
-type ReportModelRecoveryState = {
-  confirmedJsonString: string;
-  failedLabel: ReportModelLabel | null;
-  switchableLabels: ReportModelLabel[];
-};
+type AppView = "workspace" | "admin";
+type AdminTab = "users" | "spaces";
 
 const PDF_COVER_TITLE = "道路交通事故分析报告";
 const PDF_COVER_SUBTITLE = "事故事实梳理、责任分析与研判文书";
@@ -383,20 +370,35 @@ function resolveUiErrorMessage(error: unknown, fallbackMessage: string): string 
   return formatApiErrorMessage(error, fallbackMessage);
 }
 
-function normalizeReportModelLabel(value: unknown): ReportModelLabel {
-  return value === "max" || value === "pro" || value === "lite" ? value : "pro";
+function normalizeReportModelLabel(value: unknown): ReportModelLabel | null {
+  return value === "max" || value === "pro" || value === "lite" ? value : null;
+}
+
+function formatSessionCardDate(value: number | string | Date) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "--";
+  }
+  return date.toLocaleString("zh-CN", {
+    month: "short",
+    day: "numeric",
+  });
 }
 
 function normalizeReportModelOptions(
   options: PublicReportModelOption[] | null | undefined,
-  currentLabel: ReportModelLabel,
+  currentLabel: ReportModelLabel | null,
 ): PublicReportModelOption[] {
   const normalized = new Map<ReportModelLabel, PublicReportModelOption>();
   for (const option of options ?? []) {
     const label = normalizeReportModelLabel(option?.label);
+    if (!label) {
+      continue;
+    }
     normalized.set(label, {
       label,
       active: Boolean(option?.active),
+      display_name: typeof option?.display_name === "string" ? option.display_name : null,
     });
   }
   return REPORT_MODEL_ORDER.map((label) => {
@@ -404,6 +406,7 @@ function normalizeReportModelOptions(
     return {
       label,
       active: candidate ? candidate.active : label === currentLabel,
+      display_name: candidate?.display_name ?? null,
     };
   });
 }
@@ -417,28 +420,6 @@ function normalizeReportModelConfig(
     updated_at: typeof reportModel?.updated_at === "string" ? reportModel.updated_at : null,
     options: normalizeReportModelOptions(reportModel?.options, currentLabel),
   };
-}
-
-function extractSwitchableReportModelLabels(error: unknown): ReportModelLabel[] {
-  if (!(error instanceof ApiError) || !error.details) {
-    return [];
-  }
-  const raw = error.details.switchable_labels;
-  if (!Array.isArray(raw)) {
-    return [];
-  }
-  return REPORT_MODEL_ORDER.filter((label) => raw.includes(label));
-}
-
-function extractFailedReportModelLabel(error: unknown): ReportModelLabel | null {
-  if (!(error instanceof ApiError) || !error.details) {
-    return null;
-  }
-  const label = error.details.selected_label;
-  if (label === "max" || label === "pro" || label === "lite") {
-    return label;
-  }
-  return null;
 }
 
 function resolvePdfCoverCompiledBy(draft: PdfCoverDraft): string {
@@ -537,6 +518,135 @@ function normalizeKnowledgeMessageOrder(messages: ChatMessage[]): ChatMessage[] 
 }
 
 export default function App() {
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
+    const stored = typeof window !== "undefined" ? window.localStorage.getItem(THEME_STORAGE_KEY) : null;
+    return stored === "dark" ? "dark" : "light";
+  });
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authSubmitting, setAuthSubmitting] = useState(false);
+  const [authError, setAuthError] = useState("");
+  const [currentUser, setCurrentUser] = useState<UserSummary | null>(null);
+
+  useEffect(() => {
+    window.localStorage.setItem(THEME_STORAGE_KEY, themeMode);
+  }, [themeMode]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function restoreLogin() {
+      // 首屏无 token：不探测后端，直接进登录页，避免首屏出现 401/500 裸报错
+      if (!hasAuthToken()) {
+        if (!cancelled) {
+          setAuthError("");
+          setAuthLoading(false);
+        }
+        return;
+      }
+      try {
+        const user = await fetchCurrentUser();
+        if (!cancelled) {
+          setCurrentUser(user);
+          setAuthError("");
+        }
+      } catch (error) {
+        clearAuthToken();
+        if (!cancelled && !(error instanceof ApiError && error.status === 401)) {
+          setAuthError(formatApiErrorMessage(error, "恢复登录状态失败。"));
+        }
+      } finally {
+        if (!cancelled) {
+          setAuthLoading(false);
+        }
+      }
+    }
+
+    void restoreLogin();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function handleLogin(payload: { username: string; password: string }) {
+    setAuthSubmitting(true);
+    setAuthError("");
+    try {
+      const result = await login(payload.username, payload.password);
+      setCurrentUser(result.user);
+    } catch (error) {
+      setAuthError(formatApiErrorMessage(error, "登录失败。"));
+      throw error;
+    } finally {
+      setAuthSubmitting(false);
+    }
+  }
+
+  async function handleRegister(payload: { username: string; password: string; displayName?: string }) {
+    setAuthSubmitting(true);
+    setAuthError("");
+    try {
+      const result = await register(payload.username, payload.password, payload.displayName);
+      setCurrentUser(result.user);
+    } catch (error) {
+      setAuthError(formatApiErrorMessage(error, "注册失败。"));
+      throw error;
+    } finally {
+      setAuthSubmitting(false);
+    }
+  }
+
+  if (authLoading) {
+    return (
+      <div className={`app-container theme-${themeMode}`}>
+        <main className="main-content">
+          <header className="page-header">
+            <div>
+              <h1>道路交通事故分析</h1>
+              <p>正在恢复登录状态与工作台...</p>
+            </div>
+          </header>
+        </main>
+      </div>
+    );
+  }
+
+  if (!currentUser) {
+    return (
+      <AuthScreen
+        themeMode={themeMode}
+        loading={authSubmitting}
+        errorMessage={authError}
+        onToggleTheme={() => setThemeMode((current) => (current === "dark" ? "light" : "dark"))}
+        onLogin={handleLogin}
+        onRegister={handleRegister}
+      />
+    );
+  }
+
+  return (
+    <WorkspaceApp
+      currentUser={currentUser}
+      themeMode={themeMode}
+      onThemeModeChange={setThemeMode}
+      onLogout={() => {
+        clearAuthToken();
+        setCurrentUser(null);
+      }}
+    />
+  );
+}
+
+function WorkspaceApp({
+  currentUser,
+  themeMode,
+  onThemeModeChange,
+  onLogout,
+}: {
+  currentUser: UserSummary;
+  themeMode: ThemeMode;
+  onThemeModeChange: (mode: ThemeMode) => void;
+  onLogout: () => void;
+}) {
   const {
     sessions,
     activeSessionId,
@@ -640,25 +750,23 @@ export default function App() {
     setMobileActionMenuId(null);
   };
 
-  const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
-    const stored = typeof window !== "undefined" ? window.localStorage.getItem(THEME_STORAGE_KEY) : null;
-    return stored === "dark" ? "dark" : "light";
-  });
+  const [appView, setAppView] = useState<AppView>("workspace");
+  const [adminTab, setAdminTab] = useState<AdminTab>("users");
   const [publicAppConfig, setPublicAppConfig] = useState<PublicAppConfig>(DEFAULT_PUBLIC_APP_CONFIG);
-  const [isReportModelMenuOpen, setIsReportModelMenuOpen] = useState(false);
-  const [isSwitchingReportModel, setIsSwitchingReportModel] = useState(false);
-  const [reportModelRecovery, setReportModelRecovery] = useState<ReportModelRecoveryState | null>(null);
+  const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
   const [artifactPreview, setArtifactPreview] = useState<ArtifactPreviewState | null>(null);
   const [exportingFormat, setExportingFormat] = useState<ReportExportFormat | null>(null);
   const [isPdfStudioOpen, setIsPdfStudioOpen] = useState(false);
   const [isUploadWorkbenchExpanded, setIsUploadWorkbenchExpanded] = useState(false);
   const [pdfCoverDraft, setPdfCoverDraft] = useState<PdfCoverDraft>(() => buildDefaultPdfCoverDraft(""));
+  const [userModelConfigState, setUserModelConfigState] = useState<CapabilityConfigState | null>(null);
+  const [isUserModelDrawerOpen, setIsUserModelDrawerOpen] = useState(false);
+  const [isSavingUserModelConfig, setIsSavingUserModelConfig] = useState(false);
+  const [userModelConfigError, setUserModelConfigError] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const chatListRef = useRef<HTMLDivElement>(null);
-  const reportModelMenuRef = useRef<HTMLDivElement>(null);
-  const reportModelTriggerRef = useRef<HTMLDivElement>(null);
-  const reportModelLongPressTimerRef = useRef<number | null>(null);
-  const reportModelLongPressTriggeredRef = useRef(false);
+  const accountMenuRef = useRef<HTMLDivElement>(null);
+  const accountMenuTriggerRef = useRef<HTMLButtonElement>(null);
   const sessionsRef = useRef(sessions);
   const pendingTimersRef = useRef<number[]>([]);
   const inputGeneratingSessionIdRef = useRef<string | null>(null);
@@ -667,6 +775,7 @@ export default function App() {
   const reportGeneratingSessionIdRef = useRef<string | null>(null);
   const reportProgressMessageIdRef = useRef<string | null>(null);
   const [reportingSessionId, setReportingSessionId] = useState<string | null>(null);
+  const isAdminUser = currentUser.role === "admin";
   const uploadDropzoneHintLines = buildUploadDropzoneHintLines(publicAppConfig.upload_limits);
   const shouldShowUploadWorkbench = Boolean(activeSession && !activeSession.draftJson && !activeSession.reportResult);
 
@@ -675,41 +784,34 @@ export default function App() {
   }, [sessions]);
 
   useEffect(() => {
-    if (!isReportModelMenuOpen) {
+    if (!isAccountMenuOpen) {
       return;
     }
     const handlePointerDown = (event: Event) => {
       if (
-        reportModelMenuRef.current?.contains(event.target as Node) ||
-        reportModelTriggerRef.current?.contains(event.target as Node)
+        accountMenuRef.current?.contains(event.target as Node) ||
+        accountMenuTriggerRef.current?.contains(event.target as Node)
       ) {
         return;
       }
-      setIsReportModelMenuOpen(false);
+      setIsAccountMenuOpen(false);
     };
     document.addEventListener("pointerdown", handlePointerDown);
     return () => document.removeEventListener("pointerdown", handlePointerDown);
-  }, [isReportModelMenuOpen]);
+  }, [isAccountMenuOpen]);
 
   useEffect(() => () => {
-    if (reportModelLongPressTimerRef.current !== null) {
-      window.clearTimeout(reportModelLongPressTimerRef.current);
-      reportModelLongPressTimerRef.current = null;
-    }
     pendingTimersRef.current.forEach((timerId) => window.clearTimeout(timerId));
     pendingTimersRef.current = [];
     reportAbortControllerRef.current?.abort();
   }, []);
 
   useEffect(() => {
-    window.localStorage.setItem(THEME_STORAGE_KEY, themeMode);
-  }, [themeMode]);
-
-  useEffect(() => {
-    if (!isSidebarOpen) {
-      setIsReportModelMenuOpen(false);
+    if (appView === "admin") {
+      setIsSearchActive(false);
+      setMobileActionMenuId(null);
     }
-  }, [isSidebarOpen]);
+  }, [appView]);
 
   useEffect(() => {
     let cancelled = false;
@@ -727,7 +829,7 @@ export default function App() {
           });
         }
       } catch (error) {
-        console.warn("读取后端公共配置失败，将继续使用前端兜底限制。", error);
+        console.warn("读取后端配置失败，将继续使用前端兜底限制。", error);
       }
     }
 
@@ -735,7 +837,34 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [currentUser.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadUserModelConfigState() {
+      try {
+        const state = await fetchUserModelConfigs();
+        if (cancelled) {
+          return;
+        }
+        setUserModelConfigState(state);
+        setUserModelConfigError("");
+        const configured = new Set(state.capabilities.filter((item) => item.configured).map((item) => item.capability));
+        if (!isAdminUser && (!configured.has("vision") || !configured.has("report"))) {
+          setIsUserModelDrawerOpen(true);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setUserModelConfigError(resolveUiErrorMessage(error, "读取个人模型配置失败。"));
+        }
+      }
+    }
+
+    void loadUserModelConfigState();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser.id, isAdminUser]);
 
   useEffect(() => {
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
@@ -826,7 +955,6 @@ export default function App() {
 
     async function refreshLinkedArtifacts() {
       try {
-        await refreshSessionById(resolvedSessionId);
         const artifacts = await listChatSessionLinkedArtifacts(resolvedSessionId);
         if (cancelled) {
           return;
@@ -849,7 +977,6 @@ export default function App() {
     activeSession?.id,
     activeSession?.sessionState,
     activeSession?.reportResult?.trace_id,
-    refreshSessionById,
   ]);
 
   useEffect(() => {
@@ -1339,86 +1466,19 @@ export default function App() {
     }
   }
 
-  async function applyReportModelSelection(label: ReportModelLabel): Promise<boolean> {
-    if (label === publicAppConfig.report_model.current_label) {
-      setIsReportModelMenuOpen(false);
-      return true;
-    }
+  async function handleSaveUserModelConfig(payload: UpdateCapabilityConfigsPayload) {
     try {
-      setErrorMessage("");
-      setIsSwitchingReportModel(true);
-      const nextReportModel = await updateReportModelSelection(label);
-      setPublicAppConfig((current) => ({
-        ...current,
-        report_model: normalizeReportModelConfig(nextReportModel),
-      }));
-      setIsReportModelMenuOpen(false);
-      return true;
+      setIsSavingUserModelConfig(true);
+      setUserModelConfigError("");
+      const nextState = await updateUserModelConfigs(payload);
+      setUserModelConfigState(nextState);
+      setIsUserModelDrawerOpen(false);
     } catch (error) {
-      setErrorMessage(resolveUiErrorMessage(error, "切换报告模型失败。"));
-      return false;
+      setUserModelConfigError(resolveUiErrorMessage(error, "保存个人模型配置失败。"));
+      throw error;
     } finally {
-      setIsSwitchingReportModel(false);
+      setIsSavingUserModelConfig(false);
     }
-  }
-
-  async function handleSelectReportModel(label: ReportModelLabel) {
-    await applyReportModelSelection(label);
-  }
-
-  async function handleRetryWithReportModel(label: ReportModelLabel) {
-    if (!reportModelRecovery) {
-      return;
-    }
-    const confirmedJsonString = reportModelRecovery.confirmedJsonString;
-    const switched = await applyReportModelSelection(label);
-    if (!switched) {
-      return;
-    }
-    setReportModelRecovery(null);
-    await handleConfirmAndGenerateReport(confirmedJsonString);
-  }
-
-  function clearReportModelLongPressTimer() {
-    if (reportModelLongPressTimerRef.current === null) {
-      return;
-    }
-    window.clearTimeout(reportModelLongPressTimerRef.current);
-    reportModelLongPressTimerRef.current = null;
-  }
-
-  function handleToggleReportModelMenu() {
-    clearReportModelLongPressTimer();
-    reportModelLongPressTriggeredRef.current = false;
-    setIsReportModelMenuOpen((current) => !current);
-  }
-
-  function handleCloseReportModelMenu() {
-    clearReportModelLongPressTimer();
-    reportModelLongPressTriggeredRef.current = false;
-    setIsReportModelMenuOpen(false);
-  }
-
-  function handleMobileReportModelPressStart() {
-    if (isGeneratingReport || isSwitchingReportModel) {
-      return;
-    }
-    clearReportModelLongPressTimer();
-    reportModelLongPressTriggeredRef.current = false;
-    reportModelLongPressTimerRef.current = window.setTimeout(() => {
-      reportModelLongPressTriggeredRef.current = true;
-      setIsReportModelMenuOpen(true);
-    }, 420);
-  }
-
-  function handleMobileReportModelPressEnd() {
-    clearReportModelLongPressTimer();
-    if (!reportModelLongPressTriggeredRef.current) {
-      return;
-    }
-    window.setTimeout(() => {
-      reportModelLongPressTriggeredRef.current = false;
-    }, 0);
   }
 
   async function handleConfirmAndGenerateReport(confirmedJsonString: string) {
@@ -1441,7 +1501,6 @@ export default function App() {
     }
 
     setErrorMessage("");
-    setReportModelRecovery(null);
     setIsGeneratingReport(true);
     setReportingSessionId(sessionId);
 
@@ -1606,16 +1665,6 @@ export default function App() {
         },
       });
       setErrorMessage(message);
-      if (error instanceof ApiError && error.code === "REPORT_MODEL_ENDPOINT_UNAVAILABLE") {
-        const switchableLabels = extractSwitchableReportModelLabels(error);
-        if (switchableLabels.length > 0) {
-          setReportModelRecovery({
-            confirmedJsonString,
-            failedLabel: extractFailedReportModelLabel(error),
-            switchableLabels,
-          });
-        }
-      }
       appendSessionMessages(sessionId, [
         createMessage("assistant", "text", `分析报告生成失败：${message}`),
       ]);
@@ -1665,7 +1714,35 @@ export default function App() {
       anchor.click();
       anchor.remove();
       window.setTimeout(() => window.URL.revokeObjectURL(objectUrl), 1000);
-      await refreshSessionById(sessionId);
+      const exportCategory = EXPORT_CATEGORY_BY_FORMAT[exportFormat];
+      updateSessionById(sessionId, (session) => {
+        const nextLinkedFiles = [...session.linkedFiles];
+        const existingIndex = nextLinkedFiles.findIndex((file) => file.category === exportCategory);
+        if (existingIndex >= 0) {
+          nextLinkedFiles[existingIndex] = {
+            ...nextLinkedFiles[existingIndex],
+            exists: true,
+          };
+        } else {
+          nextLinkedFiles.push({
+            label:
+              exportFormat === "pdf"
+                ? "报告 PDF"
+                : exportFormat === "docx"
+                  ? "报告 Word"
+                  : "报告 Markdown",
+            path: "",
+            category: exportCategory,
+            path_type: "file",
+            exists: true,
+          });
+        }
+
+        return {
+          linkedFiles: nextLinkedFiles,
+          sessionState: exportFormat === "md" ? session.sessionState : "export_ready",
+        };
+      });
       return true;
     } catch (error) {
       const message = resolveUiErrorMessage(error, "报告导出失败。");
@@ -1918,15 +1995,117 @@ export default function App() {
   function renderThemeToggle() {
     const isDarkMode = themeMode === "dark";
     return (
-      <div className="page-header-actions">
+      <button
+        className="theme-toggle-btn"
+        onClick={() => onThemeModeChange(isDarkMode ? "light" : "dark")}
+        title={isDarkMode ? "切换为浅色模式" : "切换为深色模式"}
+        aria-label={isDarkMode ? "切换为浅色模式" : "切换为深色模式"}
+      >
+        {isDarkMode ? <MoonIcon /> : <SunIcon />}
+      </button>
+    );
+  }
+
+  function renderAdminHeaderTabs() {
+    if (!isAdminUser || appView !== "admin") {
+      return null;
+    }
+    return (
+      <div className="admin-header-tabs-shell">
         <button
-          className="theme-toggle-btn"
-          onClick={() => setThemeMode(isDarkMode ? "light" : "dark")}
-          title={isDarkMode ? "切换为浅色模式" : "切换为深色模式"}
-          aria-label={isDarkMode ? "切换为浅色模式" : "切换为深色模式"}
+          type="button"
+          className="admin-header-back-btn"
+          onClick={() => setAppView("workspace")}
         >
-          {isDarkMode ? <MoonIcon /> : <SunIcon />}
+          <ArrowLeftIcon />
+          <span>返回主界面</span>
         </button>
+        <div className="admin-header-tabs" role="tablist" aria-label="管理控制台标签">
+          <button
+            type="button"
+            className={`admin-header-tab ${adminTab === "users" ? "is-active" : ""}`}
+            onClick={() => setAdminTab("users")}
+          >
+            用户管理
+          </button>
+          <button
+            type="button"
+            className={`admin-header-tab ${adminTab === "spaces" ? "is-active" : ""}`}
+            onClick={() => setAdminTab("spaces")}
+          >
+            空间管理
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  function renderHeaderAdminToggle() {
+    if (!isAdminUser) {
+      return null;
+    }
+    return (
+      <button
+        type="button"
+        className={`theme-toggle-btn admin-console-toggle ${appView === "admin" ? "is-active" : ""}`}
+        onClick={() => {
+          if (appView !== "admin") {
+            setAppView("admin");
+          }
+        }}
+        title="打开管理控制台"
+        aria-label="打开管理控制台"
+        aria-pressed={appView === "admin"}
+      >
+        <ShieldIcon />
+      </button>
+    );
+  }
+
+  function renderAccountMenu() {
+    if (!isAccountMenuOpen) {
+      return null;
+    }
+    return (
+      <div ref={accountMenuRef} className="account-popover" role="menu" aria-label="账号菜单">
+        <div className="account-popover-header">
+          <span>{currentUser.username}</span>
+        </div>
+        <div className="account-popover-actions">
+          {isAdminUser ? (
+            <button
+              type="button"
+              className="account-popover-item"
+              onClick={() => {
+                setIsUserModelDrawerOpen(true);
+                setIsAccountMenuOpen(false);
+              }}
+            >
+              模型配置调整
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="account-popover-item"
+              onClick={() => {
+                setIsUserModelDrawerOpen(true);
+                setIsAccountMenuOpen(false);
+              }}
+            >
+              模型配置调整
+            </button>
+          )}
+          <button
+            type="button"
+            className="account-popover-item is-danger"
+            onClick={() => {
+              setIsAccountMenuOpen(false);
+              void onLogout();
+            }}
+          >
+            退出登录
+          </button>
+        </div>
       </div>
     );
   }
@@ -2338,133 +2517,6 @@ export default function App() {
     );
   }
 
-  function renderReportModelRecoveryDialog() {
-    if (!reportModelRecovery) {
-      return null;
-    }
-    const failedLabel = reportModelRecovery.failedLabel;
-    return (
-      <div className="report-model-recovery-overlay" onClick={() => setReportModelRecovery(null)}>
-        <div
-          className="report-model-recovery-shell"
-          role="dialog"
-          aria-modal="true"
-          aria-label="报告模型切换恢复"
-          onClick={(event) => event.stopPropagation()}
-        >
-          <div className="report-model-recovery-header">
-            <div>
-              <span className="report-model-recovery-kicker">报告模型恢复</span>
-              <h3>当前报告端点暂时不可用</h3>
-              <p>
-                {failedLabel
-                  ? `当前失败档位为 ${REPORT_MODEL_PRESENTATION[failedLabel].title}。你可以停止本次生成，或切到其余档位后立即重试。`
-                  : "你可以停止本次生成，或切到其余档位后立即重试。"}
-              </p>
-            </div>
-            <button
-              type="button"
-              className="report-model-recovery-close"
-              onClick={() => setReportModelRecovery(null)}
-            >
-              关闭
-            </button>
-          </div>
-          <div className="report-model-recovery-options">
-            {reportModelRecovery.switchableLabels.map((label) => (
-              <button
-                key={label}
-                type="button"
-                className="report-model-recovery-option"
-                onClick={() => void handleRetryWithReportModel(label)}
-                disabled={isSwitchingReportModel}
-              >
-                <strong>{REPORT_MODEL_PRESENTATION[label].title}</strong>
-                <span>{REPORT_MODEL_PRESENTATION[label].description}</span>
-              </button>
-            ))}
-          </div>
-          <div className="report-model-recovery-actions">
-            <button
-              type="button"
-              className="report-model-recovery-stop"
-              onClick={() => setReportModelRecovery(null)}
-              disabled={isSwitchingReportModel}
-            >
-              停止本次生成
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  function renderReportModelMenu() {
-    if (!isReportModelMenuOpen) {
-      return null;
-    }
-
-    return (
-      <div className="report-model-menu-layer">
-        <button
-          type="button"
-          className="report-model-menu-backdrop"
-          aria-label="关闭报告模型切换栏"
-          onClick={handleCloseReportModelMenu}
-        />
-        <div
-          ref={reportModelMenuRef}
-          className="report-model-menu-shell"
-          role="dialog"
-          aria-modal="true"
-          aria-label="报告模型切换栏"
-        >
-          <div className="report-model-menu">
-            <div className="report-model-menu-header">
-              <div className="report-model-menu-heading">
-                <span>报告模型档位</span>
-              </div>
-              <button
-                type="button"
-                className="report-model-menu-close"
-                onClick={handleCloseReportModelMenu}
-              >
-                关闭
-              </button>
-            </div>
-            <div className="report-model-menu-options">
-              {publicAppConfig.report_model.options.map((option) => (
-                <button
-                  key={option.label}
-                  type="button"
-                  className={`report-model-menu-option ${option.active ? "is-active" : ""}`}
-                  onClick={() => void handleSelectReportModel(option.label)}
-                  disabled={isSwitchingReportModel}
-                >
-                  <div className="report-model-menu-option-copy">
-                    <div className="report-model-menu-option-heading">
-                      <span className={`report-model-menu-icon report-model-menu-icon-${option.label}`} aria-hidden="true">
-                        <ReportModelGlyph label={option.label} />
-                      </span>
-                      <span className="report-model-menu-title">{REPORT_MODEL_PRESENTATION[option.label].title}</span>
-                    </div>
-                    <span className="report-model-menu-description">
-                      {REPORT_MODEL_PRESENTATION[option.label].description}
-                    </span>
-                  </div>
-                  <span className="report-model-menu-status">
-                    {option.active ? "当前" : "切换"}
-                  </span>
-                </button>
-              ))}
-            </div>
-            <p className="report-model-menu-note">桌面端点击头像打开，手机端长按头像呼出切换栏。</p>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   if (!isLoaded) {
     return (
       <div className={`app-container theme-${themeMode}`}>
@@ -2525,232 +2577,209 @@ export default function App() {
           </button>
         </div>
 
-        <div className="sidebar-menu">
-          <button className="sidebar-menu-btn" onClick={handleAddSession} title="新建对话">
-            <ChatPlusIcon />
-            {isSidebarOpen && <span>新建对话</span>}
-          </button>
-          
-          <div className="search-container">
-            <button 
-              className="sidebar-menu-btn" 
-              onClick={() => {
-                setIsSearchActive(!isSearchActive);
-                if (!isSidebarOpen) setIsSidebarOpen(true);
-              }}
-              title="搜索对话"
-            >
-              <SearchIcon />
-              {isSidebarOpen && (
-                !isSearchActive ? (
-                  <span>搜索对话</span>
-                ) : (
-                  <input 
-                    autoFocus
-                    type="text" 
-                    placeholder="搜索历史标题或内容..." 
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    onClick={(e) => e.stopPropagation()}
-                    className="sidebar-search-input"
-                  />
-                )
-              )}
+        <>
+          <div className="sidebar-menu">
+            <button className="sidebar-menu-btn" onClick={handleAddSession} title="新建对话">
+              <ChatPlusIcon />
+              {isSidebarOpen && <span>新建对话</span>}
             </button>
-          </div>
-        </div>
-
-        {isSidebarOpen && (
-          <>
-            <div className="session-list-header">
-              所有对话
-            </div>
-
-            <div className="session-list">
-              {filteredSessions.map((session) => (
-                <div
-                  key={session.id}
-                  data-session-id={session.id}
-                  className={`session-item-wrapper ${isMobileSidebarOpen && mobileActionMenuId === session.id ? "mobile-menu-open" : ""}`}
-                >
-                  <div
-                    className={`session-item ${session.id === activeSessionId ? "active" : ""} ${draggingSessionId === session.id ? "dragging" : ""} ${dragOverSessionId === session.id ? "drag-over" : ""}`}
-                    onClick={() => handleSessionItemClick(session.id)}
-                    draggable={!isMobileSidebarOpen && !searchQuery.trim()}
-                    onDragStart={(event) => handleSessionDragStart(session.id, event)}
-                    onDragOver={(event) => handleSessionDragOver(session.id, event)}
-                    onDrop={(event) => void handleSessionDrop(session.id, event)}
-                    onDragEnd={handleSessionDragEnd}
-                    onTouchStart={(event) => handleMobileRenameTouchStart(session, event)}
-                    onTouchMove={handleMobileRenameTouchMove}
-                    onTouchEnd={(event) => handleMobileRenameTouchEnd(session.id, event)}
-                    onTouchCancel={handleMobileRenameTouchCancel}
-                    title={isMobileSidebarOpen ? "长按会话卡片可重命名" : searchQuery.trim() ? "" : "拖放移动调整顺序"}
-                  >
-                    <div className="session-info" style={{ flex: 1, minWidth: 0, paddingRight: 8 }}>
-                      {editingSessionId === session.id ? (
-                        <input
-                          autoFocus
-                          value={editTitle}
-                          onChange={(e) => setEditTitle(e.target.value)}
-                          onBlur={() => void handleFinishRename(session.id)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") void handleFinishRename(session.id);
-                            if (e.key === "Escape") setEditingSessionId(null);
-                          }}
-                          onClick={(e) => e.stopPropagation()}
-                          style={{
-                            width: '100%',
-                            padding: '2px 4px',
-                            fontSize: '14px',
-                            border: '1px solid #4f46e5',
-                            borderRadius: '4px',
-                            outline: 'none'
-                          }}
-                        />
-                      ) : (
-                        <span 
-                          className="session-title" 
-                          onDoubleClick={isMobileSidebarOpen ? undefined : (e) => handleStartRename(session, e)}
-                          title={isMobileSidebarOpen ? "长按会话卡片可重命名" : "双击重命名"}
-                        >
-                          {session.title}
-                        </span>
-                      )}
-                      {(() => {
-                        const sessionArtifacts = normalizeLinkedArtifacts(session.linkedArtifacts);
-                        if (sessionArtifacts.length === 0) {
-                          return null;
-                        }
-                        return (
-                          <div className="session-linked-files">
-                            {sessionArtifacts.slice(0, 3).map((artifact) => (
-                              <span
-                                key={`${session.id}-${artifact.category}`}
-                                className="session-linked-file-chip"
-                                title={artifact.summary}
-                              >
-                                {formatSessionArtifactChipLabel(artifact.category, artifact.label)}
-                              </span>
-                            ))}
-                            {sessionArtifacts.length > 3 && (
-                              <span className="session-linked-file-more">
-                                +{sessionArtifacts.length - 3}
-                              </span>
-                            )}
-                          </div>
-                        );
-                      })()}
-                    </div>
-                    <div className="session-item-right">
-                      <span className="session-date">
-                        {new Date(session.createdAt).toLocaleString("zh-CN", {
-                          month: "short",
-                          day: "numeric",
-                        })}
-                      </span>
-                      {isSidebarOpen && (
-                        <>
-                          <button
-                            className="pc-delete-btn"
-                            onClick={async (e) => {
-                              e.stopPropagation();
-                              await handleDeleteSession(session.id);
-                            }}
-                            title="删除会话"
-                          >
-                            ×
-                          </button>
-                          <button
-                            className="mobile-action-menu-btn mobile-only"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setMobileActionMenuId(mobileActionMenuId === session.id ? null : session.id);
-                            }}
-                          >
-                            <MoreVertIcon />
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                  {isMobileSidebarOpen && mobileActionMenuId === session.id && (
-                    <div className="mobile-session-actions-bar mobile-only">
-                      <button onClick={(e) => { e.stopPropagation(); moveSessionUp(session.id); }}>
-                        向上移
-                      </button>
-                      <button onClick={(e) => { e.stopPropagation(); moveSessionDown(session.id); }}>
-                        向下移
-                      </button>
-                      <button className="danger" onClick={async (e) => {
-                        e.stopPropagation();
-                        await handleDeleteSession(session.id);
-                      }}>
-                        删除
-                      </button>
-                    </div>
-                  )}
-                </div>
-              ))}
-              {searchQuery && filteredSessions.length === 0 && (
-                <div style={{ padding: '20px', textAlign: 'center', color: '#94a3b8', fontSize: '14px' }}>
-                  没有找到匹配的结果
-                </div>
-              )}
-            </div>
-          </>
-        )}
-
-        <div ref={reportModelTriggerRef} className="sidebar-footer">
-          <div className="report-model-switcher desktop-only">
-            <button
-              type="button"
-              className={`brand-avatar brand-avatar-button ${isReportModelMenuOpen ? "is-open" : ""}`}
-              onClick={handleToggleReportModelMenu}
-              title="切换报告模型档位"
-              aria-label="切换报告模型档位"
-              disabled={isGeneratingReport || isSwitchingReportModel}
-            >
-              <span>R</span>
-            </button>
-            {isSidebarOpen && (
-              <button
-                type="button"
-                className="brand-name brand-switcher-copy"
-                onClick={handleToggleReportModelMenu}
-                disabled={isGeneratingReport || isSwitchingReportModel}
+            
+            <div className="search-container">
+              <button 
+                className="sidebar-menu-btn" 
+                onClick={() => {
+                  setIsSearchActive(!isSearchActive);
+                  if (!isSidebarOpen) setIsSidebarOpen(true);
+                }}
+                title="搜索对话"
               >
-                <span>锐鉴安途</span>
-                <strong>{publicAppConfig.report_model.current_label}</strong>
+                <SearchIcon />
+                {isSidebarOpen && (
+                  !isSearchActive ? (
+                    <span>搜索对话</span>
+                  ) : (
+                    <input 
+                      autoFocus
+                      type="text" 
+                      placeholder="搜索历史标题或内容..." 
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      onClick={(e) => e.stopPropagation()}
+                      className="sidebar-search-input"
+                    />
+                  )
+                )}
               </button>
-            )}
+            </div>
           </div>
-          <div className="report-model-switcher mobile-only">
-            <button
-              type="button"
-              className={`brand-avatar brand-avatar-button brand-avatar-mobile ${isReportModelMenuOpen ? "is-open" : ""}`}
-              onPointerDown={handleMobileReportModelPressStart}
-              onPointerUp={handleMobileReportModelPressEnd}
-              onPointerLeave={handleMobileReportModelPressEnd}
-              onPointerCancel={handleMobileReportModelPressEnd}
-              title="长按切换报告模型档位"
-              aria-label="长按切换报告模型档位"
-              disabled={isGeneratingReport || isSwitchingReportModel}
-            >
-              <span>R</span>
-            </button>
-            {isSidebarOpen && (
-              <div className="brand-mobile-copy">
-                <span className="brand-name">锐鉴安途</span>
-                <strong>{publicAppConfig.report_model.current_label}</strong>
+
+          {isSidebarOpen && (
+            <>
+              <div className="session-list-header">
+                所有对话
               </div>
-            )}
+
+              <div className="session-list">
+                {filteredSessions.map((session) => (
+                  <div
+                    key={session.id}
+                    data-session-id={session.id}
+                    className={`session-item-wrapper ${isMobileSidebarOpen && mobileActionMenuId === session.id ? "mobile-menu-open" : ""}`}
+                  >
+                    <div
+                      className={`session-item ${session.id === activeSessionId ? "active" : ""} ${draggingSessionId === session.id ? "dragging" : ""} ${dragOverSessionId === session.id ? "drag-over" : ""}`}
+                      onClick={() => handleSessionItemClick(session.id)}
+                      draggable={!isMobileSidebarOpen && !searchQuery.trim()}
+                      onDragStart={(event) => handleSessionDragStart(session.id, event)}
+                      onDragOver={(event) => handleSessionDragOver(session.id, event)}
+                      onDrop={(event) => void handleSessionDrop(session.id, event)}
+                      onDragEnd={handleSessionDragEnd}
+                      onTouchStart={(event) => handleMobileRenameTouchStart(session, event)}
+                      onTouchMove={handleMobileRenameTouchMove}
+                      onTouchEnd={(event) => handleMobileRenameTouchEnd(session.id, event)}
+                      onTouchCancel={handleMobileRenameTouchCancel}
+                      title={isMobileSidebarOpen ? "长按会话卡片可重命名" : searchQuery.trim() ? "" : "拖放移动调整顺序"}
+                    >
+                      <div
+                        className="session-info"
+                        style={{ flex: 1, minWidth: 0, paddingRight: 8 }}
+                      >
+                        {editingSessionId === session.id ? (
+                          <input
+                            autoFocus
+                            value={editTitle}
+                            onChange={(e) => setEditTitle(e.target.value)}
+                            onBlur={() => void handleFinishRename(session.id)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") void handleFinishRename(session.id);
+                              if (e.key === "Escape") setEditingSessionId(null);
+                            }}
+                            onClick={(e) => e.stopPropagation()}
+                            style={{
+                              width: '100%',
+                              padding: '2px 4px',
+                              fontSize: '14px',
+                              border: '1px solid var(--primary-color)',
+                              borderRadius: '4px',
+                              outline: 'none'
+                            }}
+                          />
+                        ) : (
+                          <span 
+                            className="session-title" 
+                            onDoubleClick={isMobileSidebarOpen ? undefined : (e) => handleStartRename(session, e)}
+                            title={isMobileSidebarOpen ? "长按会话卡片可重命名" : "双击重命名"}
+                          >
+                            {session.title}
+                          </span>
+                        )}
+                        {(() => {
+                          const sessionArtifacts = normalizeLinkedArtifacts(session.linkedArtifacts);
+                          if (sessionArtifacts.length === 0) {
+                            return null;
+                          }
+                          return (
+                            <div className="session-linked-files">
+                              {sessionArtifacts.slice(0, 3).map((artifact) => (
+                                <span
+                                  key={`${session.id}-${artifact.category}`}
+                                  className="session-linked-file-chip"
+                                  title={artifact.summary}
+                                >
+                                  {formatSessionArtifactChipLabel(artifact.category, artifact.label)}
+                                </span>
+                              ))}
+                              {sessionArtifacts.length > 3 && (
+                                <span className="session-linked-file-more">
+                                  +{sessionArtifacts.length - 3}
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })()}
+                      </div>
+                      <div className="session-item-right">
+                        <span className="session-date">
+                          {formatSessionCardDate(session.createdAt)}
+                        </span>
+                        {isSidebarOpen && (
+                          <>
+                            <button
+                              className="pc-delete-btn"
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                await handleDeleteSession(session.id);
+                              }}
+                              title="删除会话"
+                            >
+                              ×
+                            </button>
+                            <button
+                              className="mobile-action-menu-btn mobile-only"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setMobileActionMenuId(mobileActionMenuId === session.id ? null : session.id);
+                              }}
+                            >
+                              <MoreVertIcon />
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                    {isMobileSidebarOpen && mobileActionMenuId === session.id && (
+                      <div className="mobile-session-actions-bar mobile-only">
+                        <button onClick={(e) => { e.stopPropagation(); moveSessionUp(session.id); }}>
+                          向上移
+                        </button>
+                        <button onClick={(e) => { e.stopPropagation(); moveSessionDown(session.id); }}>
+                          向下移
+                        </button>
+                        <button className="danger" onClick={async (e) => {
+                          e.stopPropagation();
+                          await handleDeleteSession(session.id);
+                        }}>
+                          删除
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+                {searchQuery && filteredSessions.length === 0 && (
+                  <div style={{ padding: '20px', textAlign: 'center', color: '#94a3b8', fontSize: '14px' }}>
+                    没有找到匹配的结果
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </>
+
+        <div className="sidebar-footer">
+          <div className="header-account-menu-shell sidebar-account-menu-shell">
+            <button
+              ref={accountMenuTriggerRef}
+              type="button"
+              className={`sidebar-account-chip sidebar-account-trigger ${isAccountMenuOpen ? "is-open" : ""}`}
+              onClick={() => setIsAccountMenuOpen((current) => !current)}
+              aria-label="打开账号菜单"
+              title="打开账号菜单"
+            >
+              <span className="brand-avatar">{currentUser.username.slice(0, 1).toUpperCase()}</span>
+              {isSidebarOpen && (
+                <div className="sidebar-account-copy">
+                  <strong>{isAdminUser ? currentUser.username : (currentUser.display_name || currentUser.username)}</strong>
+                  <span>{isAdminUser ? "管理员账号" : currentUser.username}</span>
+                </div>
+              )}
+            </button>
+            {renderAccountMenu()}
           </div>
         </div>
       </aside>
 
       <main className="main-content">
-        <header className="page-header">
+        <header className={`page-header ${appView === "admin" ? "is-admin-header" : ""}`}>
           <div className="page-header-title-group">
             <button
               className="mobile-menu-btn"
@@ -2760,166 +2789,173 @@ export default function App() {
             >
               <MenuIcon />
             </button>
-            <div>
-              <h1>道路交通事故分析</h1>
-              <p>智能识别道路交通事故照片/视频，辅助生成带有定责意见与研判论述的分析报告</p>
-            </div>
+            {appView === "admin" ? (
+              renderAdminHeaderTabs()
+            ) : (
+              <div>
+                <h1>道路交通事故分析</h1>
+                <p>智能识别道路交通事故照片/视频，辅助生成带有定责意见与研判论述的分析报告</p>
+              </div>
+            )}
           </div>
-          {renderThemeToggle()}
+          <div className="page-header-actions">
+            {renderHeaderAdminToggle()}
+            {renderThemeToggle()}
+          </div>
         </header>
-
-        <div className="mobile-tabs mobile-only">
-          <button 
-            className={`mobile-tab-btn ${mobileTab === 'chat' ? 'active' : ''}`}
-            onClick={() => setMobileTab('chat')}
-          >
-            对话交互
-          </button>
-          <button 
-            className={`mobile-tab-btn ${mobileTab === 'review' ? 'active' : ''}`}
-            onClick={() => setMobileTab('review')}
-          >
-            分析与审阅
-          </button>
-        </div>
-
-        <div className="workspace workspace-grid">
-          <section className={`panel ${mobileTab !== 'chat' ? 'mobile-hidden' : ''}`} style={{ flex: 1 }}>
-            <div className="panel-header">
-              <h2>聊天与记录</h2>
+        {appView === "admin" && isAdminUser ? (
+          <AdminConsole currentUser={currentUser} activeTab={adminTab} />
+        ) : (
+          <>
+            <div className="mobile-tabs mobile-only">
+              <button 
+                className={`mobile-tab-btn ${mobileTab === 'chat' ? 'active' : ''}`}
+                onClick={() => setMobileTab('chat')}
+              >
+                对话交互
+              </button>
+              <button 
+                className={`mobile-tab-btn ${mobileTab === 'review' ? 'active' : ''}`}
+                onClick={() => setMobileTab('review')}
+              >
+                分析与审阅
+              </button>
             </div>
-            <div className="panel-body chat-list" ref={chatListRef}>
-              {activeSession.messages.map((message, messageIndex) => (
-                <div
-                  key={`${message.id}-${messageIndex}`}
-                  className={`chat-bubble ${message.role} ${message.kind === "progress" ? "progress-bubble" : ""}`}
-                >
-                  {message.kind === "progress" ? (
-                    <div className={`progress-card ${message.meta?.status || "running"}`}>
-                      <div className="progress-card-topline">
-                        {message.meta?.badge && <span className="progress-badge">{message.meta.badge}</span>}
-                        <div className="progress-card-status">
-                          {message.meta?.status === "running" ? (
-                            <span className="spinner spinner-dark" />
-                          ) : (
-                            <span className={`progress-indicator ${message.meta?.status || "running"}`}>
-                              {message.meta?.status === "success" ? "✓" : message.meta?.status === "error" ? "!" : ""}
+
+            <div className="workspace workspace-grid">
+              <section className={`panel ${mobileTab !== 'chat' ? 'mobile-hidden' : ''}`} style={{ flex: 1 }}>
+                <div className="panel-header">
+                  <h2>聊天与记录</h2>
+                </div>
+                <div className="panel-body chat-list" ref={chatListRef}>
+                  {activeSession.messages.map((message, messageIndex) => (
+                    <div
+                      key={`${message.id}-${messageIndex}`}
+                      className={`chat-bubble ${message.role} ${message.kind === "progress" ? "progress-bubble" : ""}`}
+                    >
+                      {message.kind === "progress" ? (
+                        <div className={`progress-card ${message.meta?.status || "running"}`}>
+                          <div className="progress-card-topline">
+                            {message.meta?.badge && <span className="progress-badge">{message.meta.badge}</span>}
+                            <div className="progress-card-status">
+                              {message.meta?.status === "running" ? (
+                                <span className="spinner spinner-dark" />
+                              ) : (
+                                <span className={`progress-indicator ${message.meta?.status || "running"}`}>
+                                  {message.meta?.status === "success" ? "✓" : message.meta?.status === "error" ? "!" : ""}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="progress-card-main">
+                            <strong className="progress-card-title">{message.meta?.title || "处理中"}</strong>
+                            <p className="progress-card-content">{message.content}</p>
+                          </div>
+                          {message.meta?.stages?.length ? (
+                            <div className="progress-stage-list">
+                              {message.meta.stages.map((stage) => (
+                                <div key={`${message.id}-${stage.label}`} className={`progress-stage-item ${stage.state}`}>
+                                  <span className="progress-stage-dot" />
+                                  <span>{stage.label}</span>
+                                </div>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : message.kind === "markdown" ? (
+                        <div className="markdown-report markdown-report-compact">
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                            {normalizeMarkdownForDisplay(message.content)}
+                          </ReactMarkdown>
+                        </div>
+                      ) : message.kind === "json" ? (
+                        <pre style={{ fontSize: '12px', margin: 0 }}>{message.content}</pre>
+                      ) : (
+                        <p style={{ margin: 0 }}>{message.content}</p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <section className={`panel ${mobileTab !== 'review' ? 'mobile-hidden' : ''}`} style={{ flex: 1.2 }}>
+                <div className="panel-header">
+                  <h2>操作与审阅区</h2>
+                </div>
+                <div className="panel-body">
+                  {errorMessage && <div className="error-text">{errorMessage}</div>}
+                  {uploadNoticeMessage && <div className="warning-text">{uploadNoticeMessage}</div>}
+                  {syncError && <div className="error-text">会话记录同步提醒：{syncError}</div>}
+
+                  {activeLinkedArtifacts.length > 0 && (
+                    <div className="artifact-wall-panel">
+                      {renderBrandWatermark("artifact-wall-watermark")}
+                      <div className="artifact-wall-header">
+                        <h3>本会话关联文件</h3>
+                        <span>{activeLinkedArtifacts.length} 项</span>
+                      </div>
+                      <div className="artifact-wall-grid">
+                        {activeLinkedArtifacts.map((artifact) => (
+                          <article
+                            key={artifact.category}
+                            className="artifact-wall-card"
+                            role="button"
+                            tabIndex={0}
+                            aria-label={`预览${artifact.label}`}
+                            onClick={() => void handleOpenArtifactPreview(artifact.category)}
+                            onKeyDown={(event) => handleArtifactCardKeyDown(event, artifact.category)}
+                          >
+                            <span className="artifact-wall-kicker">{artifact.kind}</span>
+                            <strong>{artifact.label}</strong>
+                            <p>{artifact.summary || "点击查看完整中间产物。"}</p>
+                            <div className="artifact-wall-footer">
+                              <span>{artifact.item_count} 项</span>
+                              <span>点击预览</span>
+                            </div>
+                          </article>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <input
+                    ref={fileInputRef}
+                    className="upload-input-hidden"
+                    type="file"
+                    multiple
+                    accept="image/*,video/*"
+                    onChange={handleFileChange}
+                  />
+
+                  {shouldShowUploadWorkbench && renderUploadWorkbenchSurface()}
+
+                  {activeSession.draftJson && !activeSession.reportResult && (
+                    <div>
+                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                          <h3 style={{ margin: 0, fontSize: '16px', color: '#0f172a' }}>事故属性摘要表（可直接点击编辑）</h3>
+                          {activeSession.draftMeta?.media_type && (
+                            <span className="tag">
+                              {activeSession.draftMeta.media_type === "video"
+                                ? "📹 视频识别"
+                                : activeSession.draftMeta.media_type === "mixed"
+                                  ? "🧩 多源识别"
+                                  : "🖼️ 照片识别"}
                             </span>
                           )}
-                        </div>
-                      </div>
-                      <div className="progress-card-main">
-                        <strong className="progress-card-title">{message.meta?.title || "处理中"}</strong>
-                        <p className="progress-card-content">{message.content}</p>
-                      </div>
-                      {message.meta?.stages?.length ? (
-                        <div className="progress-stage-list">
-                          {message.meta.stages.map((stage) => (
-                            <div key={`${message.id}-${stage.label}`} className={`progress-stage-item ${stage.state}`}>
-                              <span className="progress-stage-dot" />
-                              <span>{stage.label}</span>
-                            </div>
-                          ))}
-                        </div>
-                      ) : null}
+                       </div>
+                       <JsonTableEditor 
+                          initialJson={activeSession.draftJson}
+                          onAutoSave={handleAutoSaveDraft}
+                          onConfirm={handleConfirmAndGenerateReport}
+                          disabled={isGeneratingReport}
+                          isGeneratingReport={isGeneratingReport && activeSession.id === reportingSessionId}
+                          onCancelGenerate={handleStopReportGeneration}
+                       />
                     </div>
-                  ) : message.kind === "markdown" ? (
-                    <div className="markdown-report markdown-report-compact">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                        {normalizeMarkdownForDisplay(message.content)}
-                      </ReactMarkdown>
-                    </div>
-                  ) : message.kind === "json" ? (
-                    <pre style={{ fontSize: '12px', margin: 0 }}>{message.content}</pre>
-                  ) : (
-                    <p style={{ margin: 0 }}>{message.content}</p>
                   )}
-                </div>
-              ))}
-            </div>
-          </section>
 
-          <section className={`panel ${mobileTab !== 'review' ? 'mobile-hidden' : ''}`} style={{ flex: 1.2 }}>
-            <div className="panel-header">
-              <h2>操作与审阅区</h2>
-            </div>
-            <div className="panel-body">
-              {errorMessage && <div className="error-text">{errorMessage}</div>}
-              {uploadNoticeMessage && <div className="warning-text">{uploadNoticeMessage}</div>}
-              {syncError && <div className="error-text">会话记录同步提醒：{syncError}</div>}
-
-              {activeLinkedArtifacts.length > 0 && (
-                <div className="artifact-wall-panel">
-                  {renderBrandWatermark("artifact-wall-watermark")}
-                  <div className="artifact-wall-header">
-                    <h3>本会话关联文件</h3>
-                    <span>{activeLinkedArtifacts.length} 项</span>
-                  </div>
-                  <div className="artifact-wall-grid">
-                    {activeLinkedArtifacts.map((artifact) => (
-                      <article
-                        key={artifact.category}
-                        className="artifact-wall-card"
-                        role="button"
-                        tabIndex={0}
-                        aria-label={`预览${artifact.label}`}
-                        onClick={() => void handleOpenArtifactPreview(artifact.category)}
-                        onKeyDown={(event) => handleArtifactCardKeyDown(event, artifact.category)}
-                      >
-                        <span className="artifact-wall-kicker">{artifact.kind}</span>
-                        <strong>{artifact.label}</strong>
-                        <p>{artifact.summary || "点击查看完整中间产物。"}</p>
-                        <div className="artifact-wall-footer">
-                          <span>{artifact.item_count} 项</span>
-                          <span>点击预览</span>
-                        </div>
-                      </article>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              <input
-                ref={fileInputRef}
-                className="upload-input-hidden"
-                type="file"
-                multiple
-                accept="image/*,video/*"
-                onChange={handleFileChange}
-              />
-
-              {/* Upload Area */}
-              {shouldShowUploadWorkbench && renderUploadWorkbenchSurface()}
-
-              {/* Generated Input and Editor */}
-              {activeSession.draftJson && !activeSession.reportResult && (
-                <div>
-                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                      <h3 style={{ margin: 0, fontSize: '16px', color: '#0f172a' }}>事故属性摘要表（可直接点击编辑）</h3>
-                      {activeSession.draftMeta?.media_type && (
-                        <span className="tag">
-                          {activeSession.draftMeta.media_type === "video"
-                            ? "📹 视频识别"
-                            : activeSession.draftMeta.media_type === "mixed"
-                              ? "🧩 多源识别"
-                              : "🖼️ 照片识别"}
-                        </span>
-                      )}
-                   </div>
-                   <JsonTableEditor 
-                      initialJson={activeSession.draftJson}
-                      onAutoSave={handleAutoSaveDraft}
-                      onConfirm={handleConfirmAndGenerateReport}
-                      disabled={isGeneratingReport}
-                      isGeneratingReport={isGeneratingReport && activeSession.id === reportingSessionId}
-                      onCancelGenerate={handleStopReportGeneration}
-                   />
-                </div>
-              )}
-
-              {/* Report Display */}
-              {activeSession.reportResult && (
-                <div>
+                  {activeSession.reportResult && (
+                    <div>
                   <div className="report-export-ribbon">
                     <div className="report-export-ribbon-top">
                       <div className="report-export-heading">
@@ -3130,14 +3166,22 @@ export default function App() {
                   </div>
                 </div>
               )}
+                </div>
+              </section>
             </div>
-          </section>
-        </div>
+          </>
+        )}
       </main>
-      {renderReportModelMenu()}
       {renderUploadWorkbenchDialog()}
-      {renderReportModelRecoveryDialog()}
       {renderArtifactPreviewDialog()}
+      <UserModelConfigDrawer
+        open={isUserModelDrawerOpen}
+        saving={isSavingUserModelConfig}
+        state={userModelConfigState}
+        errorMessage={userModelConfigError}
+        onClose={() => setIsUserModelDrawerOpen(false)}
+        onSave={handleSaveUserModelConfig}
+      />
     </div>
   );
 }

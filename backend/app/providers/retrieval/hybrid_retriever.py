@@ -39,8 +39,8 @@ class HybridRetriever(BaseRetriever):
         self.fallback_reason = (fallback_reason or "").strip()
         self.metadata: dict[str, Any] = {
             "provider": "hybrid_local",
-            "mode": "hybrid" if self._hybrid_available else "sparse_only_fallback",
-            "retrieval_degraded": not self._hybrid_available,
+            "mode": self._resolve_runtime_mode(),
+            "retrieval_degraded": self._resolve_runtime_mode() != "hybrid",
             "dense_index_version": self.dense_index_version,
             "embedding_model": self.embedding_model,
             "reranker_model": self.reranker_model,
@@ -54,10 +54,20 @@ class HybridRetriever(BaseRetriever):
     def _hybrid_available(self) -> bool:
         return (
             self.embedding_client is not None
-            and self.reranker_client is not None
             and self.dense_index is not None
             and not self.fallback_reason
         )
+
+    @property
+    def _rerank_available(self) -> bool:
+        return self.reranker_client is not None
+
+    def _resolve_runtime_mode(self) -> str:
+        if not self._hybrid_available:
+            return "sparse_only_fallback"
+        if self._rerank_available:
+            return "hybrid"
+        return "hybrid_rrf_only"
 
     def retrieve(self, accident_data: dict[str, Any], top_k: int) -> list[dict[str, Any]]:
         query = self._build_initial_query(accident_data)
@@ -133,11 +143,19 @@ class HybridRetriever(BaseRetriever):
             dense_candidates=dense_candidates,
             merge_top_k=config["rrf_merge_top_k"],
         )
-        reranked_candidates = self.reranker_client.rerank(
-            query=query,
-            candidates=merged_candidates,
-            top_n=min(config["rerank_top_k"], len(merged_candidates)),
-        )
+        if self._rerank_available:
+            reranked_candidates = self.reranker_client.rerank(
+                query=query,
+                candidates=merged_candidates,
+                top_n=min(config["rerank_top_k"], len(merged_candidates)),
+            )
+            mode = "hybrid"
+        else:
+            reranked_candidates = self._rank_without_reranker(
+                candidates=merged_candidates,
+                top_n=min(config["rerank_top_k"], len(merged_candidates)),
+            )
+            mode = "hybrid_rrf_only"
         final_candidates = self._select_final_candidates(
             candidates=reranked_candidates,
             limit=final_limit,
@@ -145,7 +163,7 @@ class HybridRetriever(BaseRetriever):
             enforce_type_balance=enforce_type_balance,
         )
         self.metadata = self._build_metadata(
-            mode="hybrid",
+            mode=mode,
             query=query,
             sparse_candidates=sparse_candidates,
             dense_candidates=dense_candidates,
@@ -156,6 +174,23 @@ class HybridRetriever(BaseRetriever):
             retrieval_mode=retrieval_mode,
         )
         return final_candidates
+
+    @staticmethod
+    def _rank_without_reranker(
+        *,
+        candidates: list[dict[str, Any]],
+        top_n: int,
+    ) -> list[dict[str, Any]]:
+        ranked = sorted(
+            (dict(candidate) for candidate in candidates),
+            key=lambda item: float(item.get("rrf_score", 0.0)),
+            reverse=True,
+        )
+        limited = ranked[:top_n]
+        for item in limited:
+            item["rerank_score"] = float(item.get("rrf_score", 0.0))
+            item["score"] = float(item.get("rrf_score", 0.0))
+        return limited
 
     def _collect_sparse_candidates(
         self,
@@ -356,7 +391,7 @@ class HybridRetriever(BaseRetriever):
         metadata: dict[str, Any] = {
             "provider": "hybrid_local",
             "mode": mode,
-            "retrieval_degraded": mode != "hybrid",
+            "retrieval_degraded": mode not in {"hybrid", "hybrid_rrf_only"},
             "fallback_reason": fallback_reason,
             "embedding_model": self.embedding_model,
             "reranker_model": self.reranker_model,

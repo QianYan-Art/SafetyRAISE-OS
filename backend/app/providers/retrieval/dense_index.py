@@ -6,6 +6,8 @@ from typing import Any
 
 import numpy as np
 
+_DENSE_INDEX_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
+
 
 class DenseIndexStore:
     def __init__(
@@ -20,6 +22,18 @@ class DenseIndexStore:
         self.manifest_path = manifest_path
         self.records_path = records_path
         self.vectors_path = vectors_path
+        cache_key = self._build_cache_key(
+            manifest_path=manifest_path,
+            records_path=records_path,
+            vectors_path=vectors_path,
+            expected_model=expected_model,
+            expected_dimensions=expected_dimensions,
+        )
+        cached_payload = _DENSE_INDEX_CACHE.get(cache_key)
+        if cached_payload is not None:
+            self._apply_cached_payload(cached_payload)
+            return
+
         self.manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
         self.records = self._load_jsonl(self.records_path)
         self.vectors = np.load(self.vectors_path, mmap_mode="r")
@@ -41,6 +55,7 @@ class DenseIndexStore:
             [index for index, record in enumerate(self.records) if record.get("record_type") == "rule"],
             dtype=np.int32,
         )
+        _DENSE_INDEX_CACHE[cache_key] = self._build_cached_payload()
 
     @property
     def version(self) -> str:
@@ -113,3 +128,44 @@ class DenseIndexStore:
                     raise ValueError("dense_records.jsonl 中存在非对象行。")
                 records.append(payload)
         return records
+
+    def _build_cached_payload(self) -> dict[str, Any]:
+        return {
+            "manifest": self.manifest,
+            "records": self.records,
+            "vectors": self.vectors,
+            "chunk_indices": self.chunk_indices,
+            "rule_indices": self.rule_indices,
+        }
+
+    def _apply_cached_payload(self, cached_payload: dict[str, Any]) -> None:
+        self.manifest = cached_payload["manifest"]
+        self.records = cached_payload["records"]
+        self.vectors = cached_payload["vectors"]
+        self.chunk_indices = cached_payload["chunk_indices"]
+        self.rule_indices = cached_payload["rule_indices"]
+
+    @classmethod
+    def _build_cache_key(
+        cls,
+        *,
+        manifest_path: Path,
+        records_path: Path,
+        vectors_path: Path,
+        expected_model: str | None,
+        expected_dimensions: int | None,
+    ) -> tuple[Any, ...]:
+        return (
+            str(manifest_path.resolve()),
+            cls._get_mtime_ns(manifest_path),
+            str(records_path.resolve()),
+            cls._get_mtime_ns(records_path),
+            str(vectors_path.resolve()),
+            cls._get_mtime_ns(vectors_path),
+            expected_model or "",
+            int(expected_dimensions) if expected_dimensions is not None else None,
+        )
+
+    @staticmethod
+    def _get_mtime_ns(path: Path) -> int:
+        return int(path.stat().st_mtime_ns)

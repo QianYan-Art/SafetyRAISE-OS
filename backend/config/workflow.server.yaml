@@ -12,10 +12,28 @@ app:
   timezone: "Asia/Shanghai"
   log_level: "INFO"
   output_dir: "backend/data/output"
+  # 只保留最近 60 个未被当前会话结果引用的旧输出目录，避免 213 上无限堆积。
+  output_retain_count: 60
+  # 历史兼容目录：旧版会话曾按 session.json 落盘，当前仅用于迁移读取。
   chat_sessions_dir: "backend/data/chat_sessions"
-  report_model_selection_state_file: "backend/data/runtime/report_model_selection.json"
   lmstudio_host_allowlist: []
   lmstudio_resident_limit: 2
+
+database:
+  dsn: "${DATABASE_DSN:-postgresql://<DB_USER>:<DB_PASSWORD>@<DATA_SERVER_IP>:5432/safetyraise}"
+  min_pool_size: 1
+  max_pool_size: 4
+  connect_timeout_seconds: 10
+
+auth:
+  jwt_secret: "${AUTH_JWT_SECRET:-change-me-in-production}"
+  jwt_algorithm: "HS256"
+  access_token_ttl_minutes: 720
+  bootstrap_admin_username: "${BOOTSTRAP_ADMIN_USERNAME:-safetyraise}"
+  bootstrap_admin_password: "${BOOTSTRAP_ADMIN_PASSWORD:-SafetyRaise@2026}"
+  bootstrap_admin_display_name: "${BOOTSTRAP_ADMIN_DISPLAY_NAME:-SafetyRAISE 管理员}"
+  # 生产强制：jwt_secret 仍为公开默认串则后端拒绝启动（防回退裸奔）
+  require_strong_secret: true
 
 input:
   adapter: "file"
@@ -42,50 +60,18 @@ models:
   report_external:
     provider: "raise"
     endpoints:
-      - name: "openrouter_kimi"
-        selector_label: "pro"
+      - name: "openrouter_deepseek_v4_pro"
         priority: 10
         api_key_env: "OPENROUTER_API_KEY"
         connection:
           _type: "openrouter_channel_conn"
           url: "https://openrouter.ai"
         url: "https://openrouter.ai/api/v1/chat/completions"
-        model: "moonshotai/kimi-k2.5"
+        model: "deepseek/deepseek-v4-pro"
         verbosity: "high"
         timeout_seconds: 1800
         reasoning:
-          enabled: true
-          max_tokens: 32768
-
-      - name: "lite_compatible"
-        selector_label: "lite"
-        priority: 20
-        api_key_env: "${LITE_MODEL_API_KEY_ENV:-LITE_MODEL_API_KEY}"
-        connection:
-          _type: "lmstudio_channel_conn"
-          url: "${LITE_MODEL_ROOT_URL:-http://host.docker.internal:1234}"
-        url: "${LITE_MODEL_CHAT_URL:-http://host.docker.internal:1234/v1/chat/completions}"
-        model: "${LITE_MODEL_NAME:-qwen2.5-7b-instruct}"
-        timeout_seconds: 1800
-        lmstudio_ttl_seconds: 1800
-
-      - name: "duckcoding_gemini31"
-        selector_label: "max"
-        priority: 30
-        api_key_env: "DUCKCODING_API_KEY"
-        connection:
-          _type: "newapi_channel_conn"
-          url: "https://www.duckcoding.ai"
-        url: "https://www.duckcoding.ai/v1/chat/completions"
-        model: "gemini-3.1-pro-preview"
-        timeout_seconds: 1800
-        reasoning_effort: "high"
-        extra_body:
-          extra_body:
-            google:
-              thinking_config:
-                thinking_level: "high"
-                include_thoughts: true
+          effort: "high"
 
     retry:
       max_attempts_per_endpoint: 2
@@ -126,6 +112,7 @@ models:
     cache_ttl_seconds: 21600
 
   retrieval_reranker:
+    enabled: false
     provider: "tei"
     model: "${RETRIEVAL_RERANKER_MODEL:-Alibaba-NLP/gte-multilingual-reranker-base}"
     base_url: "${RETRIEVAL_RERANKER_BASE_URL:-http://retrieval-reranker:80}"

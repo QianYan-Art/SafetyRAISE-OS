@@ -1,15 +1,13 @@
 from fastapi import APIRouter, Depends
 
-from app.api.deps import get_settings
+from app.api.deps import get_current_user, get_settings
 from app.core.settings import Settings
 from app.schemas.workflow import (
     PublicAppConfigResponse,
-    PublicReportModelOptionResponse,
     PublicReportModelResponse,
     PublicUploadLimitsResponse,
-    UpdateReportModelSelectionRequest,
 )
-from app.services.report_model_selection_service import ReportModelSelectionService
+from app.services.auth_service import AuthenticatedUser
 
 router = APIRouter(prefix="/api/v1/app-config", tags=["app-config"])
 
@@ -17,27 +15,11 @@ router = APIRouter(prefix="/api/v1/app-config", tags=["app-config"])
 @router.get("", response_model=PublicAppConfigResponse)
 def get_public_app_config(
     settings: Settings = Depends(get_settings),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ):
     return PublicAppConfigResponse(
         upload_limits=_build_public_upload_limits(settings),
-        report_model=_build_public_report_model(settings),
-    )
-
-
-@router.put("/report-model", response_model=PublicReportModelResponse)
-def update_report_model(
-    request: UpdateReportModelSelectionRequest,
-    settings: Settings = Depends(get_settings),
-):
-    service = ReportModelSelectionService(settings)
-    payload = service.set_selected_label(request.label)
-    return PublicReportModelResponse(
-        current_label=payload["current_label"],
-        updated_at=payload.get("updated_at"),
-        options=[
-            PublicReportModelOptionResponse(**option)
-            for option in payload.get("options", [])
-        ],
+        report_model=_build_public_report_model(settings, current_user=current_user),
     )
 
 
@@ -54,13 +36,12 @@ def _build_public_upload_limits(settings: Settings) -> PublicUploadLimitsRespons
     )
 
 
-def _build_public_report_model(settings: Settings) -> PublicReportModelResponse:
-    payload = ReportModelSelectionService(settings).get_public_state()
-    return PublicReportModelResponse(
-        current_label=payload["current_label"],
-        updated_at=payload.get("updated_at"),
-        options=[
-            PublicReportModelOptionResponse(**option)
-            for option in payload.get("options", [])
-        ],
-    )
+def _build_public_report_model(
+    settings: Settings,
+    *,
+    current_user: AuthenticatedUser,
+) -> PublicReportModelResponse:
+    _ = settings
+    _ = current_user
+    # 报告档位 gear 已下线：报告端点收敛为唯一 deepseek-v4-pro，按 per-user 能力配置解析。
+    return PublicReportModelResponse(current_label=None, updated_at=None, options=[])

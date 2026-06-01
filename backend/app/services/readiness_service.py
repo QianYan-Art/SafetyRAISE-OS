@@ -233,6 +233,8 @@ class ReadinessService:
             return {"ok": True, "enabled": False, "message": "当前检索未启用 reranker 端点。"}
 
         config = self.settings.models.retrieval_reranker
+        if not config.enabled:
+            return {"ok": True, "enabled": False, "message": "当前检索已显式停用 reranker。"}
         try:
             api_key = get_api_key(config.api_key_env) if config.api_key_env else ""
             probe = RerankerClient(
@@ -277,18 +279,22 @@ class ReadinessService:
         dense_index_ok = bool((knowledge_base_check.get("dense_index") or {}).get("ok"))
         embedding_ok = embedding_check["ok"]
         reranker_ok = reranker_check["ok"]
-        if dense_index_ok and embedding_ok and reranker_ok:
+        reranker_enabled = bool(self.settings.models.retrieval_reranker.enabled)
+        if dense_index_ok and embedding_ok and (reranker_ok or not reranker_enabled):
+            mode = "hybrid" if reranker_enabled else "hybrid_rrf_only"
             return {
                 "ok": True,
-                "mode": "hybrid",
-                "message": "hybrid 检索链路已就绪。",
+                "mode": mode,
+                "message": "hybrid 检索链路已就绪。"
+                if reranker_enabled
+                else "hybrid 检索链路已就绪，当前使用 RRF 合并且未启用 reranker。",
             }
         reasons: list[str] = []
         if not dense_index_ok:
             reasons.append("稠密索引不可用")
         if not embedding_ok:
             reasons.append("embedding 服务不可用")
-        if not reranker_ok:
+        if reranker_enabled and not reranker_ok:
             reasons.append("reranker 服务不可用")
         return {
             "ok": True,

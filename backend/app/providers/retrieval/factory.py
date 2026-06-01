@@ -40,7 +40,10 @@ def build_retriever(
             embedding_client = EmbeddingClient(
                 base_url=embedding_cfg.base_url,
                 model=embedding_cfg.model,
-                api_key=get_api_key(embedding_cfg.api_key_env) if embedding_cfg.api_key_env else "",
+                api_key=(
+                    embedding_cfg.api_key
+                    or (get_api_key(embedding_cfg.api_key_env) if embedding_cfg.api_key_env else "")
+                ),
                 provider_name=embedding_cfg.provider,
                 timeout_seconds=embedding_cfg.timeout_seconds,
                 lmstudio_host_allowlist=settings.app.lmstudio_host_allowlist,
@@ -57,15 +60,16 @@ def build_retriever(
             dependency_errors.append(f"embedding 服务初始化失败: {exc}")
 
         reranker_cfg = settings.models.retrieval_reranker
-        try:
-            reranker_client = RerankerClient(
-                base_url=reranker_cfg.base_url,
-                model=reranker_cfg.model,
-                api_key=get_api_key(reranker_cfg.api_key_env) if reranker_cfg.api_key_env else "",
-                timeout_seconds=reranker_cfg.timeout_seconds,
-            )
-        except Exception as exc:  # noqa: BLE001
-            dependency_errors.append(f"reranker 服务初始化失败: {exc}")
+        if reranker_cfg.enabled:
+            try:
+                reranker_client = RerankerClient(
+                    base_url=reranker_cfg.base_url,
+                    model=reranker_cfg.model,
+                    api_key=get_api_key(reranker_cfg.api_key_env) if reranker_cfg.api_key_env else "",
+                    timeout_seconds=reranker_cfg.timeout_seconds,
+                )
+            except Exception as exc:  # noqa: BLE001
+                dependency_errors.append(f"reranker 服务初始化失败: {exc}")
 
         hybrid_cfg = settings.retrieval.hybrid
         try:
@@ -86,7 +90,7 @@ def build_retriever(
             dense_index=dense_index,
             dense_index_version=dense_index.version if dense_index is not None else "",
             embedding_model=settings.models.retrieval_embedding.model,
-            reranker_model=settings.models.retrieval_reranker.model,
+            reranker_model=settings.models.retrieval_reranker.model if reranker_cfg.enabled else "",
             initial_config={
                 "sparse_top_k_chunks": hybrid_cfg.sparse_top_k_chunks,
                 "sparse_top_k_rules": hybrid_cfg.sparse_top_k_rules,

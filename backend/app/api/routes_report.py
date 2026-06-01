@@ -7,13 +7,20 @@ from time import monotonic
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 
-from app.api.deps import get_report_export_service, get_report_service
+from app.api.deps import (
+    get_optional_current_user,
+    get_report_export_service,
+    get_report_service,
+    get_user_capability_config_service,
+)
 from app.api.error_handling import build_sse_error_event
 from app.core.exceptions import RequestCancelledError, WorkflowError
 from app.core.path_guard import resolve_api_path
 from app.schemas.workflow import GenerateReportRequest, GenerateReportResponse
+from app.services.auth_service import AuthenticatedUser
 from app.services.report_export_service import PdfCoverDateMode, PdfCoverOptions, ReportExportFormat, ReportExportService
 from app.services.report_service import ReportService
+from app.services.user_capability_config_service import UserCapabilityConfigService
 
 router = APIRouter(prefix="/api/v1/reports", tags=["reports"])
 REPORT_STREAM_QUEUE_POLL_SECONDS = 0.2
@@ -24,8 +31,15 @@ REPORT_STREAM_HEARTBEAT_SECONDS = 15.0
 def generate_report(
     request: GenerateReportRequest,
     service: ReportService = Depends(get_report_service),
+    current_user: AuthenticatedUser | None = Depends(get_optional_current_user),
+    capability_config_service: UserCapabilityConfigService = Depends(get_user_capability_config_service),
 ):
-    artifact = _run_report_generation(service=service, request=request)
+    artifact = _run_report_generation(
+        service=service,
+        request=request,
+        current_user=current_user,
+        capability_config_service=capability_config_service,
+    )
     return _build_generate_report_response(artifact)
 
 
@@ -34,6 +48,8 @@ def generate_report_stream(
     http_request: Request,
     request: GenerateReportRequest,
     service: ReportService = Depends(get_report_service),
+    current_user: AuthenticatedUser | None = Depends(get_optional_current_user),
+    capability_config_service: UserCapabilityConfigService = Depends(get_user_capability_config_service),
 ):
     event_queue: Queue[str | None] = Queue()
     cancel_event = Event()
@@ -49,6 +65,8 @@ def generate_report_stream(
             artifact = _run_report_generation(
                 service=service,
                 request=request,
+                current_user=current_user,
+                capability_config_service=capability_config_service,
                 progress_callback=emit_event,
                 cancel_event=cancel_event,
             )
@@ -176,6 +194,8 @@ def download_report_export(
 def _run_report_generation(
     service: ReportService,
     request: GenerateReportRequest,
+    current_user: AuthenticatedUser | None = None,
+    capability_config_service: UserCapabilityConfigService | None = None,
     progress_callback=None,  # noqa: ANN001
     cancel_event: Event | None = None,
 ):
@@ -207,6 +227,14 @@ def _run_report_generation(
                 ],
             )
         )
+    capability_overrides = None
+    if current_user is not None:
+        if capability_config_service is None:
+            raise RuntimeError("报告生成缺少模型能力配置服务。")
+        # 普通用户：视觉/报告未配置会在此抛 InputValidationError（→400）；嵌入留空走系统默认。
+        # 管理员：全部留空时返回 None，使用系统默认端点。
+        capability_overrides = capability_config_service.resolve_overrides(current_user)
+
     return service.generate(
         session_id=request.session_id,
         input_path=input_path,
@@ -214,6 +242,7 @@ def _run_report_generation(
         video_path=video_path,
         persist_generated_input=request.persist_generated_input,
         persist_accident_data=request.persist_accident_data,
+        capability_overrides=capability_overrides,
         progress_callback=progress_callback,
         cancel_event=cancel_event,
     )

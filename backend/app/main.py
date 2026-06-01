@@ -9,10 +9,13 @@ from fastapi.responses import JSONResponse
 
 from app.api.deps import get_readiness_service
 from app.api.error_handling import register_exception_handlers
+from app.api.routes_admin import router as admin_router
 from app.api.routes_app_config import router as app_config_router
+from app.api.routes_auth import router as auth_router
 from app.api.routes_chat_sessions import router as chat_session_router
 from app.api.routes_input import router as input_router
 from app.api.routes_report import router as report_router
+from app.api.routes_user_model_configs import router as user_model_config_router
 from app.core.logger import setup_logging
 from app.core.request_context import reset_trace_id, set_trace_id
 from app.core.settings import load_settings
@@ -28,9 +31,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(app_config_router)
+app.include_router(admin_router)
+app.include_router(auth_router)
 app.include_router(report_router)
 app.include_router(input_router)
 app.include_router(chat_session_router)
+app.include_router(user_model_config_router)
 register_exception_handlers(app)
 
 
@@ -129,6 +135,12 @@ def main() -> None:
         return
 
     if args.command == "serve":
+        if settings.auth.require_strong_secret and settings.auth.jwt_secret_is_insecure():
+            raise SystemExit(
+                "拒绝启动：AUTH_JWT_SECRET 仍为公开默认串或为空。"
+                "生产环境必须设置高熵随机密钥（如 `openssl rand -hex 32`），"
+                "否则任何人可伪造管理员 token。"
+            )
         uvicorn.run("app.main:app", host=args.host, port=args.port, reload=False)
 
 

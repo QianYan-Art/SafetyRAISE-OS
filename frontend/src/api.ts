@@ -1,4 +1,11 @@
 import type {
+  AdminCleanupSpacesResponse,
+  AdminCreateUserPayload,
+  AdminSpaceRecord,
+  AdminUpdateSpacePayload,
+  AdminUpdateUserPayload,
+  AdminUserRecord,
+  AuthTokenResponse,
   ChatSessionApiRecord,
   ChatSessionLinkedArtifact,
   ChatSessionUpsertPayload,
@@ -6,12 +13,15 @@ import type {
   GenerateReportResponse,
   LinkedArtifactDetailResponse,
   PdfExportOptions,
+  CapabilityConfigState,
   PublicAppConfig,
-  ReportModelLabel,
   ReportExportFormat,
+  UpdateCapabilityConfigsPayload,
+  UserSummary,
 } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "";
+const AUTH_TOKEN_STORAGE_KEY = "traffic-accident-auth-token";
 
 export interface ApiErrorPayload {
   code: string;
@@ -84,6 +94,201 @@ async function parseJsonResponse<T>(response: Response): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+function getAuthToken(): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    return window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function persistAuthToken(token: string | null): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    if (token) {
+      window.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token);
+    } else {
+      window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+    }
+  } catch {
+    // 忽略本地存储不可用场景，保持 API 可继续工作。
+  }
+}
+
+export function clearAuthToken(): void {
+  persistAuthToken(null);
+}
+
+export function hasAuthToken(): boolean {
+  return Boolean(getAuthToken());
+}
+
+function buildAuthHeaders(headers?: HeadersInit): Headers {
+  const normalized = new Headers(headers);
+  const token = getAuthToken();
+  if (token && !normalized.has("Authorization")) {
+    normalized.set("Authorization", `Bearer ${token}`);
+  }
+  return normalized;
+}
+
+async function authFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+  const headers = buildAuthHeaders(init.headers);
+  return fetch(input, {
+    ...init,
+    headers,
+  });
+}
+
+export async function login(
+  username: string,
+  password: string,
+): Promise<AuthTokenResponse> {
+  const response = await fetch(`${API_BASE}/api/v1/auth/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ username, password }),
+  });
+  const payload = await parseJsonResponse<AuthTokenResponse>(response);
+  persistAuthToken(payload.access_token);
+  return payload;
+}
+
+export async function register(
+  username: string,
+  password: string,
+  displayName?: string,
+): Promise<AuthTokenResponse> {
+  const response = await fetch(`${API_BASE}/api/v1/auth/register`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      username,
+      password,
+      display_name: displayName?.trim() || undefined,
+    }),
+  });
+  const payload = await parseJsonResponse<AuthTokenResponse>(response);
+  persistAuthToken(payload.access_token);
+  return payload;
+}
+
+export async function fetchCurrentUser(): Promise<UserSummary> {
+  const response = await authFetch(`${API_BASE}/api/v1/auth/me`, {
+    method: "GET",
+  });
+  return parseJsonResponse<UserSummary>(response);
+}
+
+export async function fetchUserModelConfigs(): Promise<CapabilityConfigState> {
+  const response = await authFetch(`${API_BASE}/api/v1/user/model-configs`, {
+    method: "GET",
+  });
+  return parseJsonResponse<CapabilityConfigState>(response);
+}
+
+export async function updateUserModelConfigs(
+  payload: UpdateCapabilityConfigsPayload,
+): Promise<CapabilityConfigState> {
+  const response = await authFetch(`${API_BASE}/api/v1/user/model-configs`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonResponse<CapabilityConfigState>(response);
+}
+
+export async function listAdminUsers(): Promise<AdminUserRecord[]> {
+  const response = await authFetch(`${API_BASE}/api/v1/admin/users`, {
+    method: "GET",
+  });
+  return parseJsonResponse<AdminUserRecord[]>(response);
+}
+
+export async function createAdminUser(
+  payload: AdminCreateUserPayload,
+): Promise<AdminUserRecord> {
+  const response = await authFetch(`${API_BASE}/api/v1/admin/users`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonResponse<AdminUserRecord>(response);
+}
+
+export async function updateAdminUser(
+  userId: string,
+  payload: AdminUpdateUserPayload,
+): Promise<AdminUserRecord> {
+  const response = await authFetch(`${API_BASE}/api/v1/admin/users/${encodeURIComponent(userId)}`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonResponse<AdminUserRecord>(response);
+}
+
+export async function deleteAdminUser(userId: string): Promise<void> {
+  const response = await authFetch(`${API_BASE}/api/v1/admin/users/${encodeURIComponent(userId)}`, {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    await parseJsonResponse<{ status: string }>(response);
+  }
+}
+
+export async function listAdminSpaces(): Promise<AdminSpaceRecord[]> {
+  const response = await authFetch(`${API_BASE}/api/v1/admin/spaces`, {
+    method: "GET",
+  });
+  return parseJsonResponse<AdminSpaceRecord[]>(response);
+}
+
+export async function updateAdminSpace(
+  sessionId: string,
+  payload: AdminUpdateSpacePayload,
+): Promise<AdminSpaceRecord> {
+  const response = await authFetch(`${API_BASE}/api/v1/admin/spaces/${encodeURIComponent(sessionId)}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonResponse<AdminSpaceRecord>(response);
+}
+
+export async function deleteAdminSpace(sessionId: string): Promise<void> {
+  const response = await authFetch(`${API_BASE}/api/v1/admin/spaces/${encodeURIComponent(sessionId)}`, {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    await parseJsonResponse<{ status: string }>(response);
+  }
+}
+
+export async function cleanupAdminOrphanSpaces(): Promise<AdminCleanupSpacesResponse> {
+  const response = await authFetch(`${API_BASE}/api/v1/admin/spaces/cleanup-orphans`, {
+    method: "POST",
+  });
+  return parseJsonResponse<AdminCleanupSpacesResponse>(response);
+}
+
 export async function generateInputFromUpload(file: File): Promise<GenerateInputFromUploadResponse> {
   const formData = new FormData();
   formData.append("file", file);
@@ -109,7 +314,7 @@ export async function generateInputFromUpload(file: File): Promise<GenerateInput
     }),
   );
 
-  const response = await fetch(`${API_BASE}/api/v1/inputs/generate-from-upload`, {
+  const response = await authFetch(`${API_BASE}/api/v1/inputs/generate-from-upload`, {
     method: "POST",
     body: formData,
   });
@@ -125,7 +330,7 @@ export async function generateInputFromUploads(
   }
   formData.append("upload_manifest", JSON.stringify(payload.uploadManifest));
 
-  const response = await fetch(`${API_BASE}/api/v1/inputs/generate-from-upload`, {
+  const response = await authFetch(`${API_BASE}/api/v1/inputs/generate-from-upload`, {
     method: "POST",
     body: formData,
   });
@@ -136,7 +341,7 @@ export async function generateReportFromConfirmedInput(
   accidentData: Record<string, unknown>,
   sessionId?: string,
 ): Promise<GenerateReportResponse> {
-  const response = await fetch(`${API_BASE}/api/v1/reports/generate`, {
+  const response = await authFetch(`${API_BASE}/api/v1/reports/generate`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -159,7 +364,7 @@ export async function generateReportFromConfirmedInputStream(
   sessionId?: string,
   signal?: AbortSignal,
 ): Promise<GenerateReportResponse> {
-  const response = await fetch(`${API_BASE}/api/v1/reports/generate/stream`, {
+  const response = await authFetch(`${API_BASE}/api/v1/reports/generate/stream`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -241,7 +446,7 @@ export async function downloadReportExport(
     }
   }
 
-  const response = await fetch(`${API_BASE}/api/v1/reports/${encodeURIComponent(traceId)}/exports/${exportFormat}${query.size ? `?${query.toString()}` : ""}`, {
+  const response = await authFetch(`${API_BASE}/api/v1/reports/${encodeURIComponent(traceId)}/exports/${exportFormat}${query.size ? `?${query.toString()}` : ""}`, {
     method: "GET",
   });
 
@@ -259,21 +464,21 @@ export async function downloadReportExport(
 }
 
 export async function listChatSessions(): Promise<ChatSessionApiRecord[]> {
-  const response = await fetch(`${API_BASE}/api/v1/chat-sessions`, {
+  const response = await authFetch(`${API_BASE}/api/v1/chat-sessions`, {
     method: "GET",
   });
   return parseJsonResponse<ChatSessionApiRecord[]>(response);
 }
 
 export async function fetchChatSession(sessionId: string): Promise<ChatSessionApiRecord> {
-  const response = await fetch(`${API_BASE}/api/v1/chat-sessions/${sessionId}`, {
+  const response = await authFetch(`${API_BASE}/api/v1/chat-sessions/${sessionId}`, {
     method: "GET",
   });
   return parseJsonResponse<ChatSessionApiRecord>(response);
 }
 
 export async function listChatSessionLinkedArtifacts(sessionId: string): Promise<ChatSessionLinkedArtifact[]> {
-  const response = await fetch(`${API_BASE}/api/v1/chat-sessions/${sessionId}/linked-artifacts`, {
+  const response = await authFetch(`${API_BASE}/api/v1/chat-sessions/${sessionId}/linked-artifacts`, {
     method: "GET",
   });
   return parseJsonResponse<ChatSessionLinkedArtifact[]>(response);
@@ -283,7 +488,7 @@ export async function fetchChatSessionLinkedArtifactDetail(
   sessionId: string,
   category: string,
 ): Promise<LinkedArtifactDetailResponse> {
-  const response = await fetch(`${API_BASE}/api/v1/chat-sessions/${sessionId}/linked-artifacts/${encodeURIComponent(category)}`, {
+  const response = await authFetch(`${API_BASE}/api/v1/chat-sessions/${sessionId}/linked-artifacts/${encodeURIComponent(category)}`, {
     method: "GET",
   });
   return parseJsonResponse<LinkedArtifactDetailResponse>(response);
@@ -298,30 +503,17 @@ export function buildChatSessionLinkedArtifactAssetUrl(
 }
 
 export async function fetchPublicAppConfig(): Promise<PublicAppConfig> {
-  const response = await fetch(`${API_BASE}/api/v1/app-config`, {
+  const response = await authFetch(`${API_BASE}/api/v1/app-config`, {
     method: "GET",
   });
   return parseJsonResponse<PublicAppConfig>(response);
-}
-
-export async function updateReportModelSelection(
-  label: ReportModelLabel,
-): Promise<PublicAppConfig["report_model"]> {
-  const response = await fetch(`${API_BASE}/api/v1/app-config/report-model`, {
-    method: "PUT",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ label }),
-  });
-  return parseJsonResponse<PublicAppConfig["report_model"]>(response);
 }
 
 export async function createChatSession(
   payload: ChatSessionUpsertPayload,
   options: { keepalive?: boolean } = {},
 ): Promise<ChatSessionApiRecord> {
-  const response = await fetch(`${API_BASE}/api/v1/chat-sessions`, {
+  const response = await authFetch(`${API_BASE}/api/v1/chat-sessions`, {
     method: "POST",
     keepalive: options.keepalive,
     headers: {
@@ -337,7 +529,7 @@ export async function updateChatSession(
   payload: ChatSessionUpsertPayload,
   options: { keepalive?: boolean } = {},
 ): Promise<ChatSessionApiRecord> {
-  const response = await fetch(`${API_BASE}/api/v1/chat-sessions/${sessionId}`, {
+  const response = await authFetch(`${API_BASE}/api/v1/chat-sessions/${sessionId}`, {
     method: "PUT",
     keepalive: options.keepalive,
     headers: {
@@ -349,7 +541,7 @@ export async function updateChatSession(
 }
 
 export async function deleteChatSession(sessionId: string): Promise<void> {
-  const response = await fetch(`${API_BASE}/api/v1/chat-sessions/${sessionId}`, {
+  const response = await authFetch(`${API_BASE}/api/v1/chat-sessions/${sessionId}`, {
     method: "DELETE",
   });
   if (!response.ok) {
@@ -390,18 +582,7 @@ export function sendChatSessionSnapshot(payload: ChatSessionUpsertPayload): bool
   const serializedPayload = JSON.stringify(payload);
   const targetUrl = `${API_BASE}/api/v1/chat-sessions`;
 
-  if (typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function") {
-    try {
-      const requestBody = new Blob([serializedPayload], { type: "application/json" });
-      if (navigator.sendBeacon(targetUrl, requestBody)) {
-        return true;
-      }
-    } catch (error) {
-      console.warn("sendBeacon 同步会话快照失败，将回退到 keepalive fetch。", error);
-    }
-  }
-
-  void fetch(targetUrl, {
+  void authFetch(targetUrl, {
     method: "POST",
     keepalive: true,
     headers: {

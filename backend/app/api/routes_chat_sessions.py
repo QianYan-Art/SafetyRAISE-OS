@@ -3,7 +3,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 
-from app.api.deps import get_chat_session_service
+from app.api.deps import get_authed_chat_session_service
 from app.schemas.chat_session import (
     ChatSessionLinkedArtifact,
     ChatSessionRecord,
@@ -19,15 +19,15 @@ router = APIRouter(prefix="/api/v1/chat-sessions", tags=["chat-sessions"])
 
 @router.get("", response_model=list[ChatSessionRecord])
 def list_chat_sessions(
-    service: ChatSessionService = Depends(get_chat_session_service),
+    service: ChatSessionService = Depends(get_authed_chat_session_service),
 ):
-    return service.list_sessions()
+    return service.list_sessions(recover_unlinked_outputs=False)
 
 
 @router.get("/{session_id}", response_model=ChatSessionRecord)
 def get_chat_session(
     session_id: str,
-    service: ChatSessionService = Depends(get_chat_session_service),
+    service: ChatSessionService = Depends(get_authed_chat_session_service),
 ):
     return service.get_session(session_id)
 
@@ -35,7 +35,7 @@ def get_chat_session(
 @router.post("", response_model=ChatSessionRecord)
 def create_chat_session(
     request: CreateChatSessionRequest,
-    service: ChatSessionService = Depends(get_chat_session_service),
+    service: ChatSessionService = Depends(get_authed_chat_session_service),
 ):
     return service.create_session(request)
 
@@ -44,7 +44,7 @@ def create_chat_session(
 def update_chat_session(
     session_id: str,
     request: UpdateChatSessionRequest,
-    service: ChatSessionService = Depends(get_chat_session_service),
+    service: ChatSessionService = Depends(get_authed_chat_session_service),
 ):
     return service.update_session(session_id, request)
 
@@ -52,7 +52,7 @@ def update_chat_session(
 @router.delete("/{session_id}")
 def delete_chat_session(
     session_id: str,
-    service: ChatSessionService = Depends(get_chat_session_service),
+    service: ChatSessionService = Depends(get_authed_chat_session_service),
 ):
     service.delete_session(session_id)
     return {"status": "success"}
@@ -61,7 +61,7 @@ def delete_chat_session(
 @router.get("/{session_id}/linked-artifacts", response_model=list[ChatSessionLinkedArtifact])
 def list_chat_session_linked_artifacts(
     session_id: str,
-    service: ChatSessionService = Depends(get_chat_session_service),
+    service: ChatSessionService = Depends(get_authed_chat_session_service),
 ):
     return service.list_linked_artifacts(session_id)
 
@@ -73,7 +73,7 @@ def list_chat_session_linked_artifacts(
 def get_chat_session_linked_artifact_detail(
     session_id: str,
     category: str,
-    service: ChatSessionService = Depends(get_chat_session_service),
+    service: ChatSessionService = Depends(get_authed_chat_session_service),
 ):
     try:
         return service.get_linked_artifact_detail(session_id, category)
@@ -86,7 +86,7 @@ def get_chat_session_linked_artifact_asset(
     session_id: str,
     category: str,
     asset_id: str,
-    service: ChatSessionService = Depends(get_chat_session_service),
+    service: ChatSessionService = Depends(get_authed_chat_session_service),
 ):
     try:
         asset = service.resolve_linked_artifact_asset(session_id, category, asset_id)

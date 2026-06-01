@@ -1,12 +1,17 @@
 from collections import Counter, defaultdict
+import ctypes
 import json
 import math
+import os
 import re
 from pathlib import Path
 from typing import Any
 
 from app.core.exceptions import ProviderError
+from app.core.rust_accel import load_rust_token_accel
 from app.providers.retrieval.base import BaseRetriever
+
+_LOCAL_JSONL_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
 
 
 class LocalJsonlRetriever(BaseRetriever):
@@ -52,6 +57,13 @@ class LocalJsonlRetriever(BaseRetriever):
         self._topic_index: dict[str, Any] = {}
         self._relation_index: dict[str, Any] = {}
         self._synonym_map: dict[str, set[str]] = {}
+        self._chunk_inverted_index: dict[str, list[dict[str, Any]]] = {}
+        self._rule_inverted_index: dict[str, list[dict[str, Any]]] = {}
+        self._topic_entries: list[dict[str, Any]] = []
+        self._case_to_rules: dict[str, list[str]] = {}
+        self._chunk_rust_payload_by_id: dict[str, dict[str, Any]] = {}
+        self._rule_rust_payload_by_id: dict[str, dict[str, Any]] = {}
+        self._record_score_cache: dict[str, dict[str, Any]] = {}
         self._manifest_mtime_ns: int | None = None
         self.metadata: dict[str, Any] = {
             "provider": "local_jsonl",
@@ -59,6 +71,7 @@ class LocalJsonlRetriever(BaseRetriever):
             "data_dir": str(self.data_dir),
             "search_index_enabled": self.enable_search_index,
             "watch_manifest_changes": self.watch_manifest_changes,
+            "token_accel": "rust" if load_rust_token_accel() is not None else "python",
         }
         self._ensure_loaded(force=True)
 
@@ -110,6 +123,12 @@ class LocalJsonlRetriever(BaseRetriever):
         if not should_reload:
             return
 
+        cache_key = self._build_cache_key()
+        cached_payload = _LOCAL_JSONL_CACHE.get(cache_key)
+        if cached_payload is not None:
+            self._apply_cached_payload(cached_payload)
+            return
+
         self._manifest = self._load_json(self.manifest_path)
         self._chunk_records = self._load_jsonl(self.chunks_path)
         self._rule_records = self._load_jsonl(self.rules_path)
@@ -119,22 +138,98 @@ class LocalJsonlRetriever(BaseRetriever):
         self._rule_by_id = {
             str(item.get("rule_id")): item for item in self._rule_records if item.get("rule_id")
         }
+        self._chunk_rust_payload_by_id = self._build_rust_payload_cache(self._chunk_by_id, "chunk")
+        self._rule_rust_payload_by_id = self._build_rust_payload_cache(self._rule_by_id, "rule")
+        self._record_score_cache = self._build_record_score_cache()
         self._load_search_index()
         self._manifest_mtime_ns = self._get_mtime_ns(self.manifest_path)
 
         catalog_meta = self._manifest.get("catalog_meta", {})
-        self.metadata.update(
-            {
-                "catalog_version": catalog_meta.get("catalog_version", ""),
-                "generated_at": self._manifest.get("generated_at", ""),
-                "manifest_path": str(self.manifest_path),
-                "chunks_path": str(self.chunks_path),
-                "rules_path": str(self.rules_path),
-                "search_index_path": str(self.search_index_path),
-                "chunk_records": len(self._chunk_records),
-                "rule_records": len(self._rule_records),
-                "rules_file_used": self.rules_path.name,
-            }
+        self.metadata.update(self._build_loaded_metadata(catalog_meta))
+        _LOCAL_JSONL_CACHE[cache_key] = self._build_cached_payload()
+
+    def _build_loaded_metadata(self, catalog_meta: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "catalog_version": catalog_meta.get("catalog_version", ""),
+            "generated_at": self._manifest.get("generated_at", ""),
+            "manifest_path": str(self.manifest_path),
+            "chunks_path": str(self.chunks_path),
+            "rules_path": str(self.rules_path),
+            "search_index_path": str(self.search_index_path),
+            "chunk_records": len(self._chunk_records or []),
+            "rule_records": len(self._rule_records or []),
+            "rules_file_used": self.rules_path.name,
+        }
+
+    def _build_cached_payload(self) -> dict[str, Any]:
+        return {
+            "manifest": self._manifest,
+            "chunk_records": self._chunk_records,
+            "rule_records": self._rule_records,
+            "chunk_by_id": self._chunk_by_id,
+            "rule_by_id": self._rule_by_id,
+            "search_index": self._search_index,
+            "topic_index": self._topic_index,
+            "relation_index": self._relation_index,
+            "synonym_map": self._synonym_map,
+            "chunk_inverted_index": self._chunk_inverted_index,
+            "rule_inverted_index": self._rule_inverted_index,
+            "topic_entries": self._topic_entries,
+            "case_to_rules": self._case_to_rules,
+            "chunk_rust_payload_by_id": self._chunk_rust_payload_by_id,
+            "rule_rust_payload_by_id": self._rule_rust_payload_by_id,
+            "record_score_cache": self._record_score_cache,
+            "manifest_mtime_ns": self._manifest_mtime_ns,
+            "metadata": {
+                "search_index_loaded": self.metadata.get("search_index_loaded", False),
+                "search_index_generated_at": self.metadata.get("search_index_generated_at", ""),
+                "topic_count": self.metadata.get("topic_count", 0),
+                "synonym_count": self.metadata.get("synonym_count", 0),
+                "search_index_error": self.metadata.get("search_index_error"),
+                **self._build_loaded_metadata(self._manifest.get("catalog_meta", {})),
+            },
+        }
+
+    def _apply_cached_payload(self, cached_payload: dict[str, Any]) -> None:
+        self._manifest = cached_payload["manifest"]
+        self._chunk_records = cached_payload["chunk_records"]
+        self._rule_records = cached_payload["rule_records"]
+        self._chunk_by_id = cached_payload["chunk_by_id"]
+        self._rule_by_id = cached_payload["rule_by_id"]
+        self._search_index = cached_payload["search_index"]
+        self._topic_index = cached_payload["topic_index"]
+        self._relation_index = cached_payload["relation_index"]
+        self._synonym_map = cached_payload["synonym_map"]
+        self._chunk_inverted_index = cached_payload["chunk_inverted_index"]
+        self._rule_inverted_index = cached_payload["rule_inverted_index"]
+        self._topic_entries = cached_payload["topic_entries"]
+        self._case_to_rules = cached_payload["case_to_rules"]
+        self._chunk_rust_payload_by_id = cached_payload["chunk_rust_payload_by_id"]
+        self._rule_rust_payload_by_id = cached_payload["rule_rust_payload_by_id"]
+        self._record_score_cache = cached_payload["record_score_cache"]
+        self._manifest_mtime_ns = cached_payload["manifest_mtime_ns"]
+
+        search_index_error = cached_payload["metadata"].get("search_index_error")
+        if search_index_error:
+            self.metadata["search_index_error"] = search_index_error
+        else:
+            self.metadata.pop("search_index_error", None)
+        self.metadata.update(cached_payload["metadata"])
+
+    def _build_cache_key(self) -> tuple[Any, ...]:
+        search_index_mtime_ns = None
+        if self.enable_search_index and self.search_index_path.exists():
+            search_index_mtime_ns = self._get_mtime_ns(self.search_index_path)
+        return (
+            str(self.manifest_path),
+            self._get_mtime_ns(self.manifest_path),
+            str(self.chunks_path),
+            self._get_mtime_ns(self.chunks_path),
+            str(self.rules_path),
+            self._get_mtime_ns(self.rules_path),
+            str(self.search_index_path),
+            search_index_mtime_ns,
+            self.enable_search_index,
         )
 
     def _load_json(self, path: Path) -> dict[str, Any]:
@@ -168,6 +263,10 @@ class LocalJsonlRetriever(BaseRetriever):
         self._topic_index = {}
         self._relation_index = {}
         self._synonym_map = {}
+        self._chunk_inverted_index = {}
+        self._rule_inverted_index = {}
+        self._topic_entries = []
+        self._case_to_rules = {}
         self.metadata.pop("search_index_error", None)
 
         if not self.enable_search_index:
@@ -188,7 +287,16 @@ class LocalJsonlRetriever(BaseRetriever):
         self._search_index = payload
         self._topic_index = payload.get("topic_index", {})
         self._relation_index = payload.get("relation_index", {})
+        indexes = payload.get("indexes", {})
+        self._chunk_inverted_index = indexes.get("chunk_inverted", {}) if isinstance(indexes, dict) else {}
+        self._rule_inverted_index = indexes.get("rule_inverted", {}) if isinstance(indexes, dict) else {}
         self._synonym_map = self._build_synonym_map(payload.get("synonyms", {}))
+        self._topic_entries = self._build_topic_entries(self._topic_index)
+        case_to_rules = self._relation_index.get("case_to_rules", {})
+        self._case_to_rules = {
+            str(key): [str(rule_id) for rule_id in values or [] if str(rule_id).strip()]
+            for key, values in case_to_rules.items()
+        } if isinstance(case_to_rules, dict) else {}
         self.metadata["search_index_loaded"] = True
         self.metadata["search_index_generated_at"] = payload.get("generated_at", "")
         self.metadata["topic_count"] = len(self._topic_index)
@@ -229,6 +337,12 @@ class LocalJsonlRetriever(BaseRetriever):
         return [token for token, _ in ranked[:30]]
 
     def _tokenize(self, text: str) -> set[str]:
+        rust_accel = load_rust_token_accel()
+        if rust_accel is not None:
+            rust_tokens = self._tokenize_with_rust(rust_accel, text)
+            if rust_tokens is not None:
+                return rust_tokens
+
         normalized = re.sub(r"\s+", " ", text).strip().lower()
         segments = re.findall(r"[\u4e00-\u9fff]{2,}|[a-z0-9_.:/-]{2,}", normalized)
         tokens: set[str] = set()
@@ -266,6 +380,22 @@ class LocalJsonlRetriever(BaseRetriever):
                 tokens.add(segment)
         return {item for item in tokens if len(item) >= 2}
 
+    @staticmethod
+    def _tokenize_with_rust(rust_accel, text: str) -> set[str] | None:  # noqa: ANN001
+        try:
+            raw_ptr = rust_accel.accel_tokenize_text(text.encode("utf-8"))
+            if not raw_ptr:
+                return None
+            try:
+                payload = ctypes.string_at(raw_ptr).decode("utf-8")
+            finally:
+                rust_accel.accel_free_string(raw_ptr)
+        except Exception:  # noqa: BLE001
+            return None
+
+        tokens = {line.strip() for line in payload.splitlines() if line.strip()}
+        return tokens or None
+
     def _search_with_index(
         self,
         query: str,
@@ -277,6 +407,19 @@ class LocalJsonlRetriever(BaseRetriever):
 
         self._boost_topic_rules(query=query, query_tokens=query_tokens, rule_states=rule_states)
         self._boost_related_rules(chunk_states=chunk_states, rule_states=rule_states)
+
+        rust_accel = load_rust_token_accel()
+        limit = max(top_k * 2, self.top_k_chunks + self.top_k_rules)
+        if rust_accel is not None:
+            ranked = self._score_with_rust(
+                rust_accel=rust_accel,
+                query_tokens=query_tokens,
+                chunk_states=chunk_states,
+                rule_states=rule_states,
+                limit=limit,
+            )
+            if ranked is not None:
+                return ranked
 
         ranked: list[dict[str, Any]] = []
         for record_id, state in chunk_states.items():
@@ -297,8 +440,80 @@ class LocalJsonlRetriever(BaseRetriever):
 
         ranked.sort(key=lambda item: item["score"], reverse=True)
         if ranked:
-            return ranked[: max(top_k * 2, self.top_k_chunks + self.top_k_rules)]
+            return ranked[:limit]
         return self._search_by_scan(query_tokens, top_k)
+
+    def _score_with_rust(
+        self,
+        *,
+        rust_accel,  # noqa: ANN001
+        query_tokens: list[str],
+        chunk_states: dict[str, dict[str, Any]],
+        rule_states: dict[str, dict[str, Any]],
+        limit: int,
+    ) -> list[dict[str, Any]] | None:
+        candidates: list[dict[str, Any]] = []
+        record_lookup: dict[tuple[str, str], dict[str, Any]] = {}
+
+        for record_type, states, mapping in (
+            ("chunk", chunk_states, self._chunk_by_id),
+            ("rule", rule_states, self._rule_by_id),
+        ):
+            payload_cache = self._chunk_rust_payload_by_id if record_type == "chunk" else self._rule_rust_payload_by_id
+            for record_id, state in states.items():
+                record = mapping.get(record_id)
+                if not record:
+                    continue
+                key = (record_type, record_id)
+                record_lookup[key] = record
+                payload = dict(payload_cache.get(record_id) or self._build_rust_payload(record, record_type))
+                payload["state"] = {
+                    "match_count": len(state["match_tokens"]),
+                    "tf_sum": float(state["tf_sum"]),
+                    "title_hits": int(state["title_hits"]),
+                    "bonus": float(state["bonus"]),
+                }
+                candidates.append(payload)
+
+        if not candidates:
+            return []
+
+        try:
+            payload = json.dumps(
+                {
+                    "query_tokens": query_tokens,
+                    "min_score": self.min_score,
+                    "limit": limit,
+                    "candidates": candidates,
+                },
+                ensure_ascii=False,
+            )
+            raw_ptr = rust_accel.accel_score_records(payload.encode("utf-8"))
+            if not raw_ptr:
+                return None
+            try:
+                raw_payload = ctypes.string_at(raw_ptr).decode("utf-8")
+            finally:
+                rust_accel.accel_free_string(raw_ptr)
+            items = json.loads(raw_payload)
+        except Exception:  # noqa: BLE001
+            return None
+
+        ranked: list[dict[str, Any]] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            record_type = str(item.get("record_type", ""))
+            record_id = str(item.get("id", ""))
+            record = record_lookup.get((record_type, record_id))
+            if not record:
+                continue
+            try:
+                score = float(item.get("score", 0.0))
+            except (TypeError, ValueError):
+                continue
+            ranked.append(self._to_result(record=record, score=score, record_type=record_type))
+        return ranked
 
     def _collect_index_candidates(
         self,
@@ -308,8 +523,7 @@ class LocalJsonlRetriever(BaseRetriever):
         if not self._search_index:
             return {}
 
-        index_name = "chunk_inverted" if record_type == "chunk" else "rule_inverted"
-        inverted = self._search_index.get("indexes", {}).get(index_name, {})
+        inverted = self._chunk_inverted_index if record_type == "chunk" else self._rule_inverted_index
         states: dict[str, dict[str, Any]] = {}
 
         for token in query_tokens:
@@ -333,16 +547,15 @@ class LocalJsonlRetriever(BaseRetriever):
         rule_states: dict[str, dict[str, Any]],
     ) -> None:
         lowered_query = query.lower()
-        for topic_name, topic_info in self._topic_index.items():
-            keywords = [str(item).lower() for item in topic_info.get("keywords", [])]
-            topic_hit = topic_name.lower() in lowered_query or any(
-                keyword in lowered_query or keyword in query_tokens for keyword in keywords
+        query_token_set = set(query_tokens)
+        for topic_entry in self._topic_entries:
+            topic_hit = topic_entry["topic_name"] in lowered_query or any(
+                keyword in lowered_query or keyword in query_token_set for keyword in topic_entry["keywords"]
             )
             if not topic_hit:
                 continue
 
-            for index, item in enumerate(topic_info.get("rules", [])[: self.top_k_rules * 4]):
-                rule_id = str(item.get("rule_id", ""))
+            for index, rule_id in enumerate(topic_entry["rule_ids"][: self.top_k_rules * 4]):
                 if not rule_id:
                     continue
                 state = rule_states.setdefault(rule_id, self._new_score_state())
@@ -353,7 +566,6 @@ class LocalJsonlRetriever(BaseRetriever):
         chunk_states: dict[str, dict[str, Any]],
         rule_states: dict[str, dict[str, Any]],
     ) -> None:
-        case_to_rules = self._relation_index.get("case_to_rules", {})
         ranked_cases = sorted(
             chunk_states.items(),
             key=lambda item: (
@@ -364,7 +576,7 @@ class LocalJsonlRetriever(BaseRetriever):
         )
 
         for _, (chunk_id, _) in enumerate(ranked_cases[:3]):
-            related_rule_ids = case_to_rules.get(chunk_id, [])
+            related_rule_ids = self._case_to_rules.get(chunk_id, [])
             for index, rule_id in enumerate(related_rule_ids[:5]):
                 state = rule_states.setdefault(str(rule_id), self._new_score_state())
                 state["bonus"] += max(0.10 - (index * 0.01), 0.03)
@@ -411,13 +623,11 @@ class LocalJsonlRetriever(BaseRetriever):
         return ranked[:limit]
 
     def _score_record(self, record: dict[str, Any], query_tokens: list[str]) -> float:
-        content = str(record.get("content", "")).lower()
-        title = str(record.get("title", "")).lower()
-        tags = " ".join(record.get("tags") or []).lower()
-        rule_type = str(record.get("rule_type", "")).lower()
-        scenarios = " ".join(record.get("scenarios") or []).lower()
-        liability_subjects = " ".join(record.get("liability_subjects") or []).lower()
-        haystack = " ".join([title, tags, rule_type, scenarios, liability_subjects, content])
+        cached = self._record_score_cache.get(self._build_record_cache_key(record))
+        if cached is None:
+            cached = self._build_record_score_payload(record)
+        title = cached["title"]
+        haystack = cached["haystack"]
 
         hits = 0
         title_hits = 0
@@ -433,9 +643,9 @@ class LocalJsonlRetriever(BaseRetriever):
         coverage = hits / max(min(len(query_tokens), 8), 1)
         score = coverage * 0.55
         score += min(title_hits, 2) * 0.08
-        if record.get("category") or record.get("rule_type"):
+        if cached["has_field_score"]:
             score += 0.05
-        if record.get("scenarios") or record.get("liability_subjects"):
+        if cached["has_detail_score"]:
             score += 0.04
         return min(round(score, 4), 1.0)
 
@@ -493,6 +703,78 @@ class LocalJsonlRetriever(BaseRetriever):
             for item in group:
                 mapping.setdefault(item, set()).update(group)
         return mapping
+
+    def _build_topic_entries(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
+        entries: list[dict[str, Any]] = []
+        for topic_name, topic_info in payload.items():
+            if not isinstance(topic_info, dict):
+                continue
+            entries.append(
+                {
+                    "topic_name": str(topic_name).lower(),
+                    "keywords": {str(item).lower() for item in topic_info.get("keywords", []) if str(item).strip()},
+                    "rule_ids": [
+                        str(item.get("rule_id", "")).strip()
+                        for item in topic_info.get("rules", [])
+                        if isinstance(item, dict) and str(item.get("rule_id", "")).strip()
+                    ],
+                }
+            )
+        return entries
+
+    def _build_rust_payload_cache(
+        self,
+        records: dict[str, dict[str, Any]],
+        record_type: str,
+    ) -> dict[str, dict[str, Any]]:
+        return {
+            record_id: self._build_rust_payload(record, record_type)
+            for record_id, record in records.items()
+        }
+
+    def _build_rust_payload(self, record: dict[str, Any], record_type: str) -> dict[str, Any]:
+        return {
+            "id": self._resolve_record_identifier(record),
+            "record_type": record_type,
+            "title": str(record.get("title", "")),
+            "content": str(record.get("content", "")),
+            "category": str(record.get("category", "")),
+            "rule_type": str(record.get("rule_type", "")),
+            "tags": [str(item) for item in (record.get("tags") or []) if str(item).strip()],
+            "scenarios": [str(item) for item in (record.get("scenarios") or []) if str(item).strip()],
+            "liability_subjects": [str(item) for item in (record.get("liability_subjects") or []) if str(item).strip()],
+        }
+
+    def _build_record_score_cache(self) -> dict[str, dict[str, Any]]:
+        cache: dict[str, dict[str, Any]] = {}
+        for record in list(self._chunk_by_id.values()) + list(self._rule_by_id.values()):
+            cache[self._build_record_cache_key(record)] = self._build_record_score_payload(record)
+        return cache
+
+    def _build_record_score_payload(self, record: dict[str, Any]) -> dict[str, Any]:
+        content = str(record.get("content", "")).lower()
+        title = str(record.get("title", "")).lower()
+        tags = " ".join(str(item) for item in (record.get("tags") or [])).lower()
+        rule_type = str(record.get("rule_type", "")).lower()
+        scenarios = " ".join(str(item) for item in (record.get("scenarios") or [])).lower()
+        liability_subjects = " ".join(str(item) for item in (record.get("liability_subjects") or [])).lower()
+        return {
+            "title": title,
+            "haystack": " ".join([title, tags, rule_type, scenarios, liability_subjects, content]),
+            "has_field_score": bool(record.get("category") or record.get("rule_type")),
+            "has_detail_score": bool(record.get("scenarios") or record.get("liability_subjects")),
+        }
+
+    def _build_record_cache_key(self, record: dict[str, Any]) -> str:
+        if record.get("chunk_id"):
+            return f"chunk:{record['chunk_id']}"
+        if record.get("rule_id"):
+            return f"rule:{record['rule_id']}"
+        return f"source:{record.get('source_id', 'unknown')}"
+
+    @staticmethod
+    def _resolve_record_identifier(record: dict[str, Any]) -> str:
+        return str(record.get("chunk_id") or record.get("rule_id") or record.get("source_id") or "unknown")
 
     def _resolve_data_dir(
         self,

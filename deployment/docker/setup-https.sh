@@ -13,22 +13,38 @@ if [ ! -f "$ENV_FILE" ]; then
   exit 1
 fi
 
-set -a
-. "$ENV_FILE"
-set +a
+read_env_value() {
+  key="$1"
+  default_value="${2:-}"
+  value=$(sed -n "s/^${key}=//p" "$ENV_FILE" | tail -n 1)
+  if [ -n "$value" ]; then
+    printf '%s' "$value"
+  else
+    printf '%s' "$default_value"
+  fi
+}
 
-PRIMARY_DOMAIN=${LETSENCRYPT_PRIMARY_DOMAIN:-example.com}
-DOMAINS_CSV=${LETSENCRYPT_DOMAINS:-$PRIMARY_DOMAIN}
-EMAIL=${LETSENCRYPT_EMAIL:-}
-NGINX_HOST_PATH=${FRONTEND_NGINX_HOST_PATH:-/srv/safetyraise/nginx}
-LETSENCRYPT_CONF=${LETSENCRYPT_CONF_HOST_PATH:-/srv/safetyraise/letsencrypt/conf}
-LETSENCRYPT_WWW=${LETSENCRYPT_WWW_HOST_PATH:-/srv/safetyraise/letsencrypt/www}
+PRIMARY_DOMAIN=$(read_env_value "LETSENCRYPT_PRIMARY_DOMAIN" "example.com")
+DOMAINS_CSV=$(read_env_value "LETSENCRYPT_DOMAINS" "$PRIMARY_DOMAIN")
+EMAIL=$(read_env_value "LETSENCRYPT_EMAIL" "")
+NGINX_HOST_PATH=$(read_env_value "FRONTEND_NGINX_HOST_PATH" "/srv/safetyraise/nginx")
+LETSENCRYPT_CONF=$(read_env_value "LETSENCRYPT_CONF_HOST_PATH" "/srv/safetyraise/letsencrypt/conf")
+LETSENCRYPT_WWW=$(read_env_value "LETSENCRYPT_WWW_HOST_PATH" "/srv/safetyraise/letsencrypt/www")
 CRON_FILE=/etc/cron.d/safetyraise-cert-renew
-FRONTEND_WAIT_ATTEMPTS=${FRONTEND_WAIT_ATTEMPTS:-30}
-FRONTEND_WAIT_SECONDS=${FRONTEND_WAIT_SECONDS:-1}
+FRONTEND_WAIT_ATTEMPTS=$(read_env_value "FRONTEND_WAIT_ATTEMPTS" "30")
+FRONTEND_WAIT_SECONDS=$(read_env_value "FRONTEND_WAIT_SECONDS" "1")
+DOMAINS_SPACE=$(printf '%s' "$DOMAINS_CSV" | tr ',' ' ' | xargs)
+
+get_frontend_container_id() {
+  docker ps \
+    --filter "label=com.docker.compose.service=frontend" \
+    --filter "status=running" \
+    -q \
+  | head -n 1
+}
 
 is_frontend_running() {
-  docker ps --filter "name=^/docker-frontend-1$" --filter "status=running" -q | grep -q .
+  [ -n "$(get_frontend_container_id)" ]
 }
 
 wait_for_frontend_running() {
@@ -45,14 +61,35 @@ wait_for_frontend_running() {
 }
 
 reload_frontend_nginx() {
+  frontend_container_id=
   if ! wait_for_frontend_running; then
     return 1
   fi
-  docker exec docker-frontend-1 nginx -s reload
+  frontend_container_id=$(get_frontend_container_id)
+  if [ -z "$frontend_container_id" ]; then
+    echo "未找到 frontend 运行容器，无法热重载 Nginx。" >&2
+    return 1
+  fi
+  docker exec "$frontend_container_id" nginx -s reload
+}
+
+render_http_conf() {
+  sed \
+    -e 's/server_name example.com;/server_name '"${DOMAINS_SPACE}"';/' \
+    -e 's/return 301 https:\/\/example.com\$request_uri;/return 301 https:\/\/'"${PRIMARY_DOMAIN}"'\$request_uri;/' \
+    "$HTTP_CONF_SRC" > "$NGINX_HOST_PATH/default.conf"
+}
+
+render_https_conf() {
+  sed \
+    -e 's/server_name example.com;/server_name '"${DOMAINS_SPACE}"';/' \
+    -e 's/return 301 https:\/\/example.com\$request_uri;/return 301 https:\/\/'"${PRIMARY_DOMAIN}"'\$request_uri;/' \
+    -e 's#/etc/letsencrypt/live/example.com/#/etc/letsencrypt/live/'"${PRIMARY_DOMAIN}"'/#g' \
+    "$HTTPS_CONF_SRC" > "$NGINX_HOST_PATH/default.conf"
 }
 
 mkdir -p "$NGINX_HOST_PATH" "$LETSENCRYPT_CONF" "$LETSENCRYPT_WWW"
-cp "$HTTP_CONF_SRC" "$NGINX_HOST_PATH/default.conf"
+render_http_conf
 
 echo "已写入 HTTP 校验配置，准备启动前端容器。"
 sh "$COMPOSE_SCRIPT" up -d --build frontend
@@ -80,7 +117,7 @@ docker run --rm \
   certbot/certbot:latest \
   "$@"
 
-cp "$HTTPS_CONF_SRC" "$NGINX_HOST_PATH/default.conf"
+render_https_conf
 echo "证书申请成功，切换 HTTPS 配置。"
 sh "$COMPOSE_SCRIPT" up -d frontend
 reload_frontend_nginx

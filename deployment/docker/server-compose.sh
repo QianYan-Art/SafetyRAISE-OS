@@ -11,4 +11,13 @@ if [ ! -f "$ENV_FILE" ]; then
   exit 1
 fi
 
-exec docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "$@"
+if docker compose version >/dev/null 2>&1; then
+  exec docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "$@"
+fi
+
+if command -v docker-compose >/dev/null 2>&1; then
+  exec docker-compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "$@"
+fi
+
+echo "未找到可用的 Docker Compose，请先安装 docker compose plugin 或 docker-compose。" >&2
+exit 1

@@ -1,17 +1,4 @@
 services:
-  retrieval-reranker:
-    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9
-    restart: unless-stopped
-    command:
-      - "--model-id"
-      - "${RETRIEVAL_RERANKER_MODEL:-Alibaba-NLP/gte-multilingual-reranker-base}"
-      - "--port"
-      - "80"
-    expose:
-      - "80"
-    volumes:
-      - ${HF_HOME_HOST_PATH:-/srv/safetyraise/huggingface}:/data
-
   backend:
     build:
       context: ../..
@@ -20,8 +7,6 @@ services:
         INSTALL_VIDEO_DEPS: ${INSTALL_VIDEO_DEPS:-false}
     image: safetyraise-backend:latest
     restart: unless-stopped
-    depends_on:
-      - retrieval-reranker
     env_file:
       - ../../.env.server
     environment:
@@ -32,7 +17,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - backend_data:/app/backend/data
+      - ${BACKEND_DATA_HOST_PATH:-/srv/safetyraise/runtime}:/app/backend/data
       - ${KBASE_HOST_PATH:-/srv/safetyraise/kbase}:/opt/ts-analysis/kbase:ro
       - ${MODELS_HOST_PATH:-/srv/safetyraise/models}:/opt/ts-analysis/models:ro
 
@@ -53,6 +38,3 @@ services:
       - ${FRONTEND_NGINX_HOST_PATH:-/srv/safetyraise/nginx}:/etc/nginx/conf.d:ro
       - ${LETSENCRYPT_CONF_HOST_PATH:-/srv/safetyraise/letsencrypt/conf}:/etc/letsencrypt:ro
       - ${LETSENCRYPT_WWW_HOST_PATH:-/srv/safetyraise/letsencrypt/www}:/var/www/certbot:ro
-
-volumes:
-  backend_data:

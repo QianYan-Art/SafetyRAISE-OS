@@ -109,16 +109,13 @@ class PublicUploadLimitsResponse(StrictModel):
 class PublicReportModelOptionResponse(StrictModel):
     label: Literal["max", "pro", "lite"]
     active: bool
+    display_name: Optional[str] = None
 
 
 class PublicReportModelResponse(StrictModel):
-    current_label: Literal["max", "pro", "lite"]
+    current_label: Optional[Literal["max", "pro", "lite"]] = None
     updated_at: Optional[str] = None
     options: list[PublicReportModelOptionResponse] = Field(default_factory=list)
-
-
-class UpdateReportModelSelectionRequest(StrictModel):
-    label: Literal["max", "pro", "lite"]
 
 
 class PublicAppConfigResponse(StrictModel):

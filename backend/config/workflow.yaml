@@ -27,15 +27,29 @@ app:
   log_level: "INFO"
   # 报告产物输出目录，最终会生成 report.md / report.json / guidance.json / run_log.json。
   output_dir: "backend/data/output"
-  # 聊天会话持久化目录，每个会话一个子目录，里面保存 session.json。
+  # 旧报告输出目录的全局保留数量；0 表示不自动清理。
+  output_retain_count: 0
+  # 历史兼容目录：旧版会话曾按 session.json 落盘，当前仅用于迁移读取。
   chat_sessions_dir: "backend/data/chat_sessions"
-  # 报告模型档位的全局持久化状态文件。前端切换 max / pro / lite 时只会改这个文件。
-  report_model_selection_state_file: "backend/data/runtime/report_model_selection.json"
   # 哪些 host 需要按 LM Studio JIT 兼容模式处理。
   # 命中后不会主动调用 /api/v1/models/load，而是直接走 chat/completions。
   # 如无此类端点，可保持空数组。
   lmstudio_host_allowlist: []
   lmstudio_resident_limit: 2
+
+database:
+  dsn: "${DATABASE_DSN:-postgresql://<DB_USER>:<DB_PASSWORD>@127.0.0.1:5432/safetyraise}"
+  min_pool_size: 1
+  max_pool_size: 4
+  connect_timeout_seconds: 10
+
+auth:
+  jwt_secret: "${AUTH_JWT_SECRET:-change-me-in-production}"
+  jwt_algorithm: "HS256"
+  access_token_ttl_minutes: 720
+  bootstrap_admin_username: "${BOOTSTRAP_ADMIN_USERNAME:-safetyraise}"
+  bootstrap_admin_password: "${BOOTSTRAP_ADMIN_PASSWORD:-SafetyRaise@2026}"
+  bootstrap_admin_display_name: "${BOOTSTRAP_ADMIN_DISPLAY_NAME:-SafetyRAISE 管理员}"
 
 # 输入适配器配置
 input:
@@ -76,55 +90,20 @@ models:
     # 当前后端实际按 OpenAI Compatible 接口调用，这个字段主要用于配置语义，不建议随意改动。
     provider: "raise"
     # 报告模型端点列表。
-    # 三个端点都按完整独立配置维护，切换只影响报告生成链路。
+    # 当前仅保留唯一的 deepseek/deepseek-v4-pro 端点。
     endpoints:
-      # pro 档，默认选中。
-      - name: "openrouter_kimi"
-        selector_label: "pro"
+      - name: "openrouter_deepseek_v4_pro"
         priority: 10
         connection:
           _type: "openrouter_channel_conn"
           key: *openrouter_api_key
           url: "https://openrouter.ai"
         url: "https://openrouter.ai/api/v1/chat/completions"
-        model: "moonshotai/kimi-k2.5"
+        model: "deepseek/deepseek-v4-pro"
         verbosity: "high"
         timeout_seconds: 1800
         reasoning:
-          enabled: true
-          max_tokens: 32768
-
-      # lite 档，偏兼容兜底。
-      - name: "lite_compatible"
-        selector_label: "lite"
-        priority: 20
-        connection:
-          _type: "lmstudio_channel_conn"
-          key: *lite_api_key
-          url: "${LITE_MODEL_ROOT_URL:-http://127.0.0.1:1234}"
-        url: "${LITE_MODEL_CHAT_URL:-http://127.0.0.1:1234/v1/chat/completions}"
-        model: "${LITE_MODEL_NAME:-qwen2.5-7b-instruct}"
-        lmstudio_ttl_seconds: 1800
-        timeout_seconds: 1800
-
-      # max 档，DuckCoding 上的 Gemini 3.1 Pro Preview，初始优先级最低。
-      - name: "duckcoding_gemini31"
-        selector_label: "max"
-        priority: 30
-        connection:
-          _type: "newapi_channel_conn"
-          key: *duckcoding_api_key
-          url: "https://www.duckcoding.ai"
-        url: "https://www.duckcoding.ai/v1/chat/completions"
-        model: "gemini-3.1-pro-preview"
-        timeout_seconds: 1800
-        reasoning_effort: "high"
-        extra_body:
-          extra_body:
-            google:
-              thinking_config:
-                thinking_level: "high"
-                include_thoughts: true
+          effort: "high"
 
     # 报告端点重试策略。
     retry:
@@ -186,6 +165,7 @@ models:
   # 服务器本地 reranker 服务。
   # 注意：这里要求的是 /rerank 接口，仓库内置的 retrieval-reranker sidecar 就是为它准备的。
   retrieval_reranker:
+    enabled: false
     provider: "tei"
     model: "Alibaba-NLP/gte-multilingual-reranker-base"
     base_url: "http://127.0.0.1:8081"

@@ -272,7 +272,8 @@ class OpenAIReportProvider(BaseLLMProvider):
 
         choice = choices[0]
         message = choice.get("message") or {}
-        reasoning_content = self._extract_content(message.get("reasoning_content"))
+        reasoning_content = self._extract_reasoning_content(message)
+        reasoning_details = message.get("reasoning_details")
         return LLMGenerateResult(
             content=self._extract_content(message.get("content")),
             tool_calls=self._extract_tool_calls(message),
@@ -283,6 +284,7 @@ class OpenAIReportProvider(BaseLLMProvider):
                 "response_id": data.get("id"),
                 "response_model": data.get("model"),
                 "reasoning_content_length": len(reasoning_content),
+                "reasoning_details_count": len(reasoning_details) if isinstance(reasoning_details, list) else 0,
             },
         )
 
@@ -311,6 +313,25 @@ class OpenAIReportProvider(BaseLLMProvider):
                 )
             )
         return tool_calls
+
+    @staticmethod
+    def _extract_reasoning_content(message: dict[str, Any]) -> str:
+        for field_name in ("reasoning_content", "reasoning"):
+            extracted = OpenAIReportProvider._extract_content(message.get(field_name))
+            if extracted:
+                return extracted
+        reasoning_details = message.get("reasoning_details")
+        if not isinstance(reasoning_details, list):
+            return ""
+        parts: list[str] = []
+        for item in reasoning_details:
+            if not isinstance(item, dict):
+                continue
+            for key in ("text", "reasoning", "summary"):
+                extracted = OpenAIReportProvider._extract_content(item.get(key))
+                if extracted:
+                    parts.append(extracted)
+        return "\n".join(parts).strip()
 
     @staticmethod
     def _extract_content(content: Any) -> str:
@@ -364,6 +385,9 @@ class OpenAIReportProvider(BaseLLMProvider):
     @staticmethod
     def _has_reasoning_output(result: LLMGenerateResult) -> bool:
         if result.reasoning_content.strip():
+            return True
+        details_count = result.response_metadata.get("reasoning_details_count")
+        if isinstance(details_count, int) and details_count > 0:
             return True
         usage = result.response_metadata.get("usage")
         if not isinstance(usage, dict):

@@ -1,14 +1,20 @@
+# ---- Python ----
 .venv/
 __pycache__/
 *.pyc
 .pytest_cache/
 
+# ---- Rust native build output ----
+backend/native/query_token_accel/target/
+
+# ---- Backend runtime data (generated; lives on data server) ----
 backend/data/backup/
 backend/data/chat_sessions/
 backend/data/input_generation/
 backend/data/output/
 backend/data/runtime/
 
+# ---- Frontend ----
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
@@ -16,10 +22,22 @@ frontend/vite.config.js
 frontend/vite.config.d.ts
 *.tsbuildinfo
 
-.env.server
+# ---- Secrets / environment (NEVER commit) ----
 .env
 .env.local
 .env.*.local
+.env.server
+.env.server.*
+*.bak.*
+
+# ---- Local tooling / agent state ----
+.serena/
+.mission/
 deployment/dist/
 
+# ---- Snapshots / archives ----
+*.bundle
+*.tgz
+
+# ---- Local test scaffolding ----
 test/

@@ -160,6 +160,8 @@ class RetrievalEmbeddingModelSettings(BaseModel):
     model: str = "text-embedding-qwen3-embedding-0.6b"
     base_url: str = "http://127.0.0.1:1234/v1"
     api_key_env: Optional[str] = None
+    # 内联 key：仅供 per-user 嵌入 override 使用（优先于 api_key_env）
+    api_key: Optional[str] = None
     timeout_seconds: int = Field(default=120, ge=5)
     lmstudio_ttl_seconds: Optional[int] = Field(default=None, ge=1)
     dimensions: int = Field(default=1024, ge=1, le=32768)
@@ -175,6 +177,7 @@ class RetrievalEmbeddingModelSettings(BaseModel):
 
 
 class RetrievalRerankerModelSettings(BaseModel):
+    enabled: bool = True
     provider: str = "tei"
     model: str = "Alibaba-NLP/gte-multilingual-reranker-base"
     base_url: str = "http://127.0.0.1:8081"
@@ -213,7 +216,6 @@ class ReportEndpointConnectionSettings(BaseModel):
 class ReportEndpointSettings(BaseModel):
     name: str = "primary"
     priority: Optional[int] = None
-    selector_label: Optional[Literal["max", "pro", "lite"]] = None
     connection: Optional[ReportEndpointConnectionSettings] = None
     url: str
     model: Optional[str] = None
@@ -304,14 +306,42 @@ class AppSettings(BaseModel):
     timezone: str = "Asia/Shanghai"
     log_level: str = "INFO"
     output_dir: str = "backend/data/output"
+    output_retain_count: int = Field(default=0, ge=0, le=10000)
     chat_sessions_dir: str = "backend/data/chat_sessions"
-    report_model_selection_state_file: str = "backend/data/runtime/report_model_selection.json"
     lmstudio_host_allowlist: list[str] = Field(default_factory=list)
     lmstudio_resident_limit: int = Field(default=2, ge=1, le=4)
 
 
+class DatabaseSettings(BaseModel):
+    dsn: str = "postgresql://<DB_USER>:<DB_PASSWORD>@127.0.0.1:5432/safetyraise"
+    min_pool_size: int = Field(default=1, ge=1, le=10)
+    max_pool_size: int = Field(default=4, ge=1, le=20)
+    connect_timeout_seconds: int = Field(default=10, ge=1, le=60)
+
+
+DEFAULT_JWT_SECRET = "change-me-in-production"
+
+
+class AuthSettings(BaseModel):
+    jwt_secret: str = DEFAULT_JWT_SECRET
+    jwt_algorithm: str = "HS256"
+    access_token_ttl_minutes: int = Field(default=720, ge=5, le=43200)
+    bootstrap_admin_username: str = "safetyraise"
+    bootstrap_admin_password: str = "SafetyRaise@2026"
+    bootstrap_admin_display_name: str = "SafetyRAISE 管理员"
+    # 生产 profile 置 true：启动时若 jwt_secret 仍是公开默认串则 fail-fast，
+    # 防止某次部署丢失 AUTH_JWT_SECRET 后静默回落公开默认串（可被伪造 admin）。
+    require_strong_secret: bool = False
+
+    def jwt_secret_is_insecure(self) -> bool:
+        secret = str(self.jwt_secret or "").strip()
+        return not secret or secret == DEFAULT_JWT_SECRET
+
+
 class Settings(BaseModel):
     app: AppSettings
+    database: DatabaseSettings = Field(default_factory=DatabaseSettings)
+    auth: AuthSettings = Field(default_factory=AuthSettings)
     input: InputSettings
     models: ModelsSettings
     prompts: PromptSettings
@@ -334,10 +364,6 @@ class Settings(BaseModel):
     @property
     def chat_sessions_dir_path(self) -> Path:
         return self.resolve_path(self.app.chat_sessions_dir)
-
-    @property
-    def report_model_selection_state_file_path(self) -> Path:
-        return self.resolve_path(self.app.report_model_selection_state_file)
 
     @property
     def guidance_prompt_file(self) -> Path:
@@ -386,8 +412,6 @@ def load_settings(config_path: Optional[str] = None) -> Settings:
 
     settings = Settings.model_validate(payload)
     settings.output_dir_path.mkdir(parents=True, exist_ok=True)
-    settings.chat_sessions_dir_path.mkdir(parents=True, exist_ok=True)
-    settings.report_model_selection_state_file_path.parent.mkdir(parents=True, exist_ok=True)
     settings.input_generation_backup_dir_path.mkdir(parents=True, exist_ok=True)
     settings.input_generation_workspace_dir_path.mkdir(parents=True, exist_ok=True)
     return settings

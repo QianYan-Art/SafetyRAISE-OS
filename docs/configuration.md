@@ -56,38 +56,18 @@ base_url: "${RETRIEVAL_EMBEDDING_BASE_URL:-http://127.0.0.1:1234/v1}"
 
 那么当前进程里若存在 `RETRIEVAL_EMBEDDING_BASE_URL`，就会覆盖默认值。
 
-## 模型档位说明
+## 报告模型说明
 
-前端只展示三个档位：
+报告生成端点已收敛为**单一端点**（默认 `openrouter_deepseek_v4_pro` → `deepseek/deepseek-v4-pro`）。`max/pro/lite` 档位与 `selector_label` 已下线。
 
-1. `max`
-2. `pro`
-3. `lite`
+- 系统默认报告端点 = `report_external.endpoints` 中按 `priority` 排在首位的端点。
+- 视觉 / 嵌入重排 / 报告模型按「每用户能力配置」（`user_capability_configs`）解析：用户在前端「模型接入设置」里填 `url + key + model`，留空时仅嵌入回退系统默认，视觉/报告必须由普通用户自行填写（管理员留空则用系统默认，便于测试）。
 
-后端当前默认映射示例：
-
-| 档位 | 默认端点名 | 说明 |
-| --- | --- | --- |
-| `max` | `duckcoding_gemini31` | 高成本高质量档 |
-| `pro` | `openrouter_kimi` | 默认报告主档 |
-| `lite` | `lite_compatible` | 本地或兼容 OpenAI 的轻量模型 |
-
-这里的“档位”是产品抽象，不等于固定供应商。你可以只改配置，不改前端文案。
-
-`report_external.endpoints` 这一组配置有几个硬约束：
+`report_external.endpoints` 约束：
 
 1. 至少保留一个端点
 2. 每个端点都要有唯一的 `name`
-3. 每个端点都要有合法的 `selector_label`
-4. `selector_label` 只能取 `max`、`pro`、`lite`
-5. 如果同时保留三个档位，建议按 `pro -> lite -> max` 或 `pro -> max -> lite` 的顺序维护优先级，避免默认选项混乱
-
-推荐修改方式：
-
-1. 只想替换 `pro` 档供应商：改 `openrouter_kimi`
-2. 只想替换 `lite` 档模型或服务地址：改 `lite_compatible` 和 `LITE_MODEL_*`
-3. 只想替换 `max` 档供应商：改 `duckcoding_gemini31`
-4. 不要把前端档位名直接写成供应商名，前端依赖的是 `selector_label`
+3. 替换报告供应商：改该端点的 `name`、`url`、`model`、`api_key_env` 或 `connection`
 
 ## 关键环境变量分组
 
@@ -99,14 +79,9 @@ base_url: "${RETRIEVAL_EMBEDDING_BASE_URL:-http://127.0.0.1:1234/v1}"
 | `EXPERT_LOCAL_BASE_URL` | 专家模型服务地址 |
 | `EXPERT_LOCAL_API_KEY_ENV` | 若服务端需要鉴权，指向真实 key 的环境变量名 |
 
-### 2. lite 档位模型
+### 2. lite 档位模型（已下线）
 
-| 变量 | 作用 |
-| --- | --- |
-| `LITE_MODEL_NAME` | lite 模型名称 |
-| `LITE_MODEL_ROOT_URL` | lite 服务根地址 |
-| `LITE_MODEL_CHAT_URL` | lite 聊天补全地址 |
-| `LITE_MODEL_API_KEY` | lite 服务 key |
+`lite` 报告档位与 `LITE_MODEL_*` 环境变量已随档位机制移除，报告端点收敛为单一远端端点。此小节仅作历史保留，新部署无需配置 `LITE_MODEL_*`。
 
 ### 3. 报告 / 视觉模型
 

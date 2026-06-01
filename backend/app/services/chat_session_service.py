@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 import mimetypes
@@ -9,11 +10,14 @@ from typing import Any
 from uuid import uuid4
 
 from pydantic import ValidationError
+from psycopg.types.json import Jsonb
 
 from app.core.exceptions import SessionNotFoundError
 from app.core.settings import Settings
 from app.providers.retrieval.factory import build_retriever
 from app.providers.retrieval.mock_retriever import MockRetriever
+from app.services.auth_service import AuthenticatedUser
+from app.services.database_service import DatabaseService
 from app.schemas.chat_session import (
     ChatMessageRecord,
     ChatSessionLinkedArtifact,
@@ -41,6 +45,12 @@ AGENTIC_MESSAGE_PREFIX = "### Agentic RAG 新增片段（节选）"
 logger = logging.getLogger(__name__)
 _SESSION_LOCKS: dict[str, RLock] = {}
 _SESSION_LOCKS_GUARD = Lock()
+_LEGACY_SESSION_MIGRATED_DATA_ROOTS: set[str] = set()
+_LEGACY_SESSION_MIGRATED_GUARD = Lock()
+_OUTPUT_DIR_METADATA_CACHE: dict[str, dict[str, Any]] = {}
+_OUTPUT_DIR_METADATA_GUARD = Lock()
+_YOLO_DIR_MANIFEST_CACHE: dict[str, dict[str, Any]] = {}
+_YOLO_DIR_MANIFEST_GUARD = Lock()
 
 
 def _get_session_lock(session_id: str) -> RLock:
@@ -53,37 +63,56 @@ def _get_session_lock(session_id: str) -> RLock:
 
 
 class ChatSessionService:
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, current_user: AuthenticatedUser | None = None):
         self.settings = settings
+        self.current_user = current_user
+        self.database_service = DatabaseService(settings)
+        self._history_retriever = None
+        self._history_retriever_ready = False
 
-    def list_sessions(self) -> list[ChatSessionRecord]:
+    def list_sessions(self, *, recover_unlinked_outputs: bool = True) -> list[ChatSessionRecord]:
+        self._migrate_legacy_file_sessions()
         sessions: list[ChatSessionRecord] = []
-        root = self.settings.chat_sessions_dir_path
-        if not root.exists():
-            return sessions
-
-        for session_dir in root.iterdir():
-            if not session_dir.is_dir():
-                continue
-            session_file = session_dir / "session.json"
-            if not session_file.exists():
-                continue
+        with self.database_service.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    select id, title, owner_user_id::text as owner_user_id, owner_username,
+                           created_at, updated_at, sort_order, source_type, source_name,
+                           messages, draft_json, draft_meta, report_result, session_state
+                    from chat_sessions
+                    """
+                )
+                rows = list(cur.fetchall())
+        for row in rows:
             try:
-                with _get_session_lock(session_dir.name):
-                    sessions.append(self._load_session_file(session_file))
-            except (JSONDecodeError, OSError, UnicodeDecodeError, ValidationError) as exc:
-                logger.warning("跳过损坏的会话文件：%s；错误：%s", session_file, exc)
+                with _get_session_lock(str(row["id"])):
+                    sessions.append(self._load_session_row(row, include_linked_files=False))
+            except (OSError, UnicodeDecodeError, ValidationError, TypeError, ValueError) as exc:
+                logger.warning("跳过损坏的会话记录：%s；错误：%s", row.get("id"), exc)
                 continue
-        sessions = self._attach_latest_unlinked_report_to_recent_session(sessions)
+        sessions = [session for session in sessions if self._can_access_session(session)]
+        if recover_unlinked_outputs:
+            sessions = self._attach_latest_unlinked_report_to_recent_session(sessions)
         sessions.sort(key=self._session_sort_key)
         return sessions
 
-    def get_session(self, session_id: str) -> ChatSessionRecord:
-        session_file = self._session_file(session_id)
-        if not session_file.exists():
-            raise SessionNotFoundError(f"会话不存在: {session_id}")
+    def get_session(
+        self,
+        session_id: str,
+        *,
+        include_linked_files: bool = True,
+        include_linked_artifacts: bool = True,
+    ) -> ChatSessionRecord:
         with _get_session_lock(session_id):
-            return self._load_session_file(session_file)
+            record = self._load_session_by_id(
+                session_id,
+                include_linked_files=include_linked_files,
+                include_linked_artifacts=include_linked_artifacts,
+            )
+        if not self._can_access_session(record):
+            raise SessionNotFoundError(f"会话不存在: {session_id}")
+        return record
 
     def create_session(self, request: CreateChatSessionRequest) -> ChatSessionRecord:
         timestamp = request.created_at or request.updated_at or self._now_ms()
@@ -92,6 +121,8 @@ class ChatSessionService:
             record = ChatSessionRecord(
                 id=session_id,
                 title=request.title,
+                owner_user_id=request.owner_user_id or getattr(self.current_user, "id", None),
+                owner_username=request.owner_username or getattr(self.current_user, "username", None),
                 created_at=timestamp,
                 updated_at=request.updated_at or timestamp,
                 sort_order=request.sort_order,
@@ -145,16 +176,24 @@ class ChatSessionService:
             session_dir = self._session_dir(session_id)
             if session_dir.exists():
                 shutil.rmtree(session_dir, ignore_errors=True)
+            with self.database_service.connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("delete from chat_sessions where id = %s", (session_id,))
+                conn.commit()
 
     def list_linked_artifacts(self, session_id: str) -> list[ChatSessionLinkedArtifact]:
-        return list(self.get_session(session_id).linked_artifacts)
+        return list(self.get_session(session_id, include_linked_files=False).linked_artifacts)
 
     def get_linked_artifact_detail(
         self,
         session_id: str,
         category: str,
     ) -> LinkedArtifactDetailResponse:
-        record = self.get_session(session_id)
+        record = self.get_session(
+            session_id,
+            include_linked_files=False,
+            include_linked_artifacts=False,
+        )
         detail = self._build_linked_artifact_detail(record, category)
         if detail is None:
             raise SessionNotFoundError(f"会话产物不存在: {session_id}/{category}")
@@ -166,8 +205,33 @@ class ChatSessionService:
         category: str,
         asset_id: str,
     ) -> LinkedArtifactAsset:
+        if category == "images_and_keyframes":
+            # 画廊解析走轻量枚举：asset_id 为路径派生稳定哈希，枚举阶段不做
+            # per-asset exists()，只对命中的那一个资源做存在性与安全校验，
+            # 避免一次画廊渲染里 N 次 asset 请求各自触发 O(N) 次远端 stat。
+            record = self.get_session(
+                session_id,
+                include_linked_files=False,
+                include_linked_artifacts=False,
+            )
+            ordered_assets, _ = self._enumerate_images_and_keyframes_assets(record)
+            return self._match_linked_artifact_asset(
+                ordered_assets, session_id, category, asset_id
+            )
+
         detail = self.get_linked_artifact_detail(session_id, category)
-        for asset in detail.assets:
+        return self._match_linked_artifact_asset(
+            detail.assets, session_id, category, asset_id
+        )
+
+    def _match_linked_artifact_asset(
+        self,
+        assets: list[LinkedArtifactAsset],
+        session_id: str,
+        category: str,
+        asset_id: str,
+    ) -> LinkedArtifactAsset:
+        for asset in assets:
             if asset.asset_id != asset_id:
                 continue
             asset_path = Path(asset.path).resolve()
@@ -178,15 +242,30 @@ class ChatSessionService:
             return asset
         raise SessionNotFoundError(f"会话产物资源不存在: {session_id}/{category}/{asset_id}")
 
-    def _refresh_linked_views(self, record: ChatSessionRecord) -> ChatSessionRecord:
-        linked_files = self._collect_linked_files(record)
-        linked_artifacts = self._collect_linked_artifacts(record)
+    def _refresh_linked_views(
+        self,
+        record: ChatSessionRecord,
+        *,
+        include_linked_files: bool = True,
+        include_linked_artifacts: bool = True,
+    ) -> ChatSessionRecord:
+        linked_files = self._collect_linked_files(record) if include_linked_files else []
+        linked_artifacts = self._collect_linked_artifacts(record) if include_linked_artifacts else []
         return record.model_copy(
             update={
                 "linked_files": linked_files,
                 "linked_artifacts": linked_artifacts,
             }
         )
+
+    def _can_access_session(self, record: ChatSessionRecord) -> bool:
+        if self.current_user is None:
+            return True
+        if self.current_user.is_admin:
+            return True
+        owner_user_id = str(record.owner_user_id or "").strip()
+        owner_username = str(record.owner_username or "").strip()
+        return owner_user_id == self.current_user.id or owner_username == self.current_user.username
 
     def _collect_linked_files(self, record: ChatSessionRecord) -> list[ChatSessionLinkedFile]:
         collected: list[ChatSessionLinkedFile] = []
@@ -252,24 +331,28 @@ class ChatSessionService:
         ]
         artifacts: list[ChatSessionLinkedArtifact] = []
         for category in categories:
-            detail = self._build_linked_artifact_detail(record, category)
-            if detail is None:
+            artifact = self._build_linked_artifact_summary(record, category)
+            if artifact is None:
                 continue
-            meta_item_count = detail.meta.get("item_count")
-            if isinstance(meta_item_count, int) and meta_item_count >= 0:
-                item_count = meta_item_count
-            else:
-                item_count = max(len(detail.content), len(detail.assets))
-            artifacts.append(
-                ChatSessionLinkedArtifact(
-                    label=detail.label,
-                    category=detail.category,
-                    kind=detail.kind,
-                    item_count=item_count,
-                    summary=detail.summary,
-                )
-            )
+            artifacts.append(artifact)
         return artifacts
+
+    def _build_linked_artifact_summary(
+        self,
+        record: ChatSessionRecord,
+        category: str,
+    ) -> ChatSessionLinkedArtifact | None:
+        builders = {
+            "knowledge_snippets": self._build_knowledge_snippets_summary,
+            "agentic_queries": self._build_agentic_queries_summary,
+            "yolo_full_output": self._build_yolo_full_output_summary,
+            "structured_accident_info": self._build_structured_accident_info_summary,
+            "images_and_keyframes": self._build_images_and_keyframes_summary,
+        }
+        builder = builders.get(category)
+        if builder is None:
+            return None
+        return builder(record)
 
     def _build_linked_artifact_detail(
         self,
@@ -287,6 +370,126 @@ class ChatSessionService:
         if builder is None:
             return None
         return builder(record)
+
+    def _build_knowledge_snippets_summary(
+        self,
+        record: ChatSessionRecord,
+    ) -> ChatSessionLinkedArtifact | None:
+        report_result = record.report_result or {}
+        initial_count = len(self._coerce_snippet_list(report_result.get("initial_knowledge_snippets")))
+        final_count = len(self._coerce_snippet_list(report_result.get("knowledge_snippets")))
+        if initial_count <= 0 and final_count <= 0:
+            return None
+        item_count = final_count or initial_count
+        return ChatSessionLinkedArtifact(
+            label="检索到的知识库片段",
+            category="knowledge_snippets",
+            kind="document",
+            item_count=item_count,
+            summary=f"首轮 {initial_count} 条，最终 {item_count} 条",
+        )
+
+    def _build_agentic_queries_summary(
+        self,
+        record: ChatSessionRecord,
+    ) -> ChatSessionLinkedArtifact | None:
+        report_result = record.report_result or {}
+        rounds = self._coerce_round_list(report_result.get("agentic_retrieval_rounds"))
+        if not rounds:
+            return None
+        return ChatSessionLinkedArtifact(
+            label="模型自主搜索关键词",
+            category="agentic_queries",
+            kind="log",
+            item_count=len(rounds),
+            summary=f"共 {len(rounds)} 轮自主检索",
+        )
+
+    def _build_yolo_full_output_summary(
+        self,
+        record: ChatSessionRecord,
+    ) -> ChatSessionLinkedArtifact | None:
+        generation_payload = self._resolve_generation_payload(record)
+        preview_payload = generation_payload.get("yolo_summary_preview")
+        summary_path = str(generation_payload.get("yolo_summary_path") or "").strip()
+        if not isinstance(preview_payload, dict) and not summary_path:
+            return None
+
+        video_source_count = 0
+        if isinstance(preview_payload, dict):
+            video_source_count = int(preview_payload.get("video_source_count", 0) or 0)
+            if video_source_count <= 0 and isinstance(preview_payload.get("videos"), list):
+                video_source_count = len(preview_payload.get("videos") or [])
+        if video_source_count <= 0:
+            video_source_count = 1
+
+        return ChatSessionLinkedArtifact(
+            label="YOLO 输出的完整内容",
+            category="yolo_full_output",
+            kind="json",
+            item_count=video_source_count,
+            summary=f"共 {video_source_count} 个视频源的轨迹与事件摘要",
+        )
+
+    def _build_structured_accident_info_summary(
+        self,
+        record: ChatSessionRecord,
+    ) -> ChatSessionLinkedArtifact | None:
+        generation_payload = self._resolve_generation_payload(record)
+        has_structured_payload = bool(self._parse_json_object(record.draft_json))
+        has_structured_payload = has_structured_payload or isinstance(generation_payload.get("generated_input"), dict)
+        has_structured_payload = has_structured_payload or bool(generation_payload.get("input_path"))
+        if not has_structured_payload:
+            return None
+        return ChatSessionLinkedArtifact(
+            label="结构化事故信息",
+            category="structured_accident_info",
+            kind="json",
+            item_count=1,
+            summary="包含事故信息草稿或校验后的结构化结果",
+        )
+
+    def _build_images_and_keyframes_summary(
+        self,
+        record: ChatSessionRecord,
+    ) -> ChatSessionLinkedArtifact | None:
+        generation_payload = self._resolve_generation_payload(record)
+        upload_groups = generation_payload.get("upload_groups")
+        frame_manifest = generation_payload.get("frame_manifest")
+        preview_payload = generation_payload.get("yolo_summary_preview")
+
+        upload_image_count = 0
+        upload_video_count = 0
+        if isinstance(upload_groups, list):
+            for item in upload_groups:
+                if not isinstance(item, dict):
+                    continue
+                upload_image_count += int(item.get("image_count", 0) or 0)
+                upload_video_count += int(item.get("video_count", 0) or 0)
+
+        key_frame_count = len(frame_manifest) if isinstance(frame_manifest, list) else 0
+        yolo_preview_count = 0
+        if isinstance(preview_payload, dict):
+            yolo_preview_count = int(preview_payload.get("video_source_count", 0) or 0)
+
+        total_assets = upload_image_count + upload_video_count + key_frame_count + yolo_preview_count
+        if total_assets <= 0:
+            workspace_dir = str(generation_payload.get("workspace_dir") or "").strip()
+            frames_dir = str(generation_payload.get("frames_dir") or "").strip()
+            if not workspace_dir and not frames_dir:
+                return None
+
+        summary = (
+            f"共 {total_assets} 项素材，"
+            f"其中原始图片 {upload_image_count} 张、视频 {upload_video_count} 个、关键帧 {key_frame_count} 张"
+        )
+        return ChatSessionLinkedArtifact(
+            label="图片与关键帧",
+            category="images_and_keyframes",
+            kind="gallery",
+            item_count=max(total_assets, 1),
+            summary=summary,
+        )
 
     def _build_knowledge_snippets_detail(
         self,
@@ -509,26 +712,47 @@ class ChatSessionService:
             ],
         )
 
-    def _build_images_and_keyframes_detail(
+    @staticmethod
+    def _stable_asset_id(path_value: str) -> str:
+        digest = hashlib.sha1(str(path_value).encode("utf-8")).hexdigest()
+        return f"img-{digest[:16]}"
+
+    @staticmethod
+    def _asset_path_exists(path_value: str) -> bool:
+        try:
+            return Path(path_value).resolve().exists()
+        except OSError:
+            return False
+
+    def _enumerate_images_and_keyframes_assets(
         self,
         record: ChatSessionRecord,
-    ) -> LinkedArtifactDetailResponse | None:
+    ) -> tuple[list[LinkedArtifactAsset], dict[str, dict[str, Any]]]:
+        """枚举图片/关键帧/YOLO 资产候选，asset_id 为路径派生稳定哈希。
+
+        这里刻意不做 per-asset exists() 过滤：是否存在交由调用方按场景决定
+        （详情页用于展示过滤，资产解析只校验命中的那一个）。这样画廊渲染时
+        N 次 asset 请求不会各自触发 O(N) 次远端 stat。
+        """
         workspace_dir = self._resolve_generation_workspace(record)
         generation_payload = self._resolve_generation_payload(record)
+        upload_groups_payload = generation_payload.get("upload_groups")
         category_meta = self._build_category_meta_map(
-            generation_payload.get("upload_groups"),
+            upload_groups_payload,
             workspace_dir,
         )
         asset_rows: list[dict[str, Any]] = []
         seen_paths: set[str] = set()
 
         if workspace_dir:
-            upload_manifest = self._read_json_if_exists(workspace_dir / "upload_manifest.json")
-            manifest_items = (
-                upload_manifest.get("items", [])
-                if isinstance(upload_manifest, dict)
-                else []
-            )
+            manifest_items = self._extract_upload_manifest_items_from_payload(upload_groups_payload)
+            if not manifest_items:
+                upload_manifest = self._read_json_if_exists(workspace_dir / "upload_manifest.json")
+                manifest_items = (
+                    upload_manifest.get("items", [])
+                    if isinstance(upload_manifest, dict)
+                    else []
+                )
             for item in manifest_items:
                 if not isinstance(item, dict):
                     continue
@@ -543,6 +767,7 @@ class ChatSessionService:
                     reason="原始上传材料",
                     sequence=int(item.get("sequence", item.get("group_sequence", 0)) or 0),
                     annotation_label="原始上传",
+                    require_exists=False,
                 )
                 if asset is None:
                     continue
@@ -580,6 +805,7 @@ class ChatSessionService:
                     sequence=int(item.get("sequence", 0) or 0),
                     timestamp_seconds=float(item.get("timestamp_seconds", 0.0) or 0.0),
                     annotation_label="关键帧",
+                    require_exists=False,
                 )
                 if asset is None:
                     continue
@@ -601,80 +827,95 @@ class ChatSessionService:
                     }
                 )
 
-            yolo_dir = workspace_dir / "yolo"
-            if yolo_dir.exists():
-                for path in sorted(yolo_dir.rglob("*")):
-                    if not path.is_file() or path.suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp"}:
-                        continue
-                    normalized_path = str(path.resolve())
-                    if normalized_path in seen_paths:
-                        continue
-                    relative_parts = path.relative_to(yolo_dir).parts
-                    category_id = relative_parts[0] if len(relative_parts) > 1 else ""
-                    category_label = category_meta.get(category_id, {}).get("category_label", "")
-                    asset = self._build_asset_payload(
-                        path_value=str(path.resolve()),
-                        kind="yolo_annotated",
-                        media_type="image",
-                        file_name=path.name,
-                        category_id=category_id,
-                        category_label=str(category_label),
-                        source_name=path.parent.name,
-                        reason="YOLO 标注输出",
-                        annotation_label="YOLO 标注图",
-                    )
-                    if asset is None:
-                        continue
-                    seen_paths.add(normalized_path)
-                    category_sequence = self._resolve_category_sequence(category_meta, category_id)
-                    asset_rows.append(
-                        {
-                            "sort_key": (
-                                category_sequence,
-                                2,
-                                0,
-                                0,
-                                float(len(asset_rows)),
-                            ),
-                            "payload": asset,
-                        }
-                    )
-
-        if not asset_rows:
-            return None
+            yolo_manifest = self._extract_yolo_asset_manifest_from_payload(
+                generation_payload.get("yolo_asset_manifest")
+            )
+            if not yolo_manifest:
+                yolo_dir = workspace_dir / "yolo"
+                if yolo_dir.exists():
+                    yolo_manifest = self._build_legacy_yolo_asset_manifest(yolo_dir)
+            for item in yolo_manifest:
+                if not isinstance(item, dict):
+                    continue
+                normalized_path = str(Path(str(item.get("path") or "")).resolve())
+                if normalized_path in seen_paths:
+                    continue
+                category_id = str(item.get("category_id") or "")
+                category_label = str(item.get("category_label") or category_meta.get(category_id, {}).get("category_label", ""))
+                asset = self._build_asset_payload(
+                    path_value=item.get("path"),
+                    kind="yolo_annotated",
+                    media_type="image",
+                    file_name=str(item.get("file_name") or Path(str(item.get("path") or "")).name),
+                    category_id=category_id,
+                    category_label=category_label,
+                    source_name=str(item.get("source_name") or ""),
+                    reason="YOLO 标注输出",
+                    annotation_label="YOLO 标注图",
+                    require_exists=False,
+                )
+                if asset is None:
+                    continue
+                seen_paths.add(normalized_path)
+                category_sequence = self._resolve_category_sequence(category_meta, asset["category_id"])
+                asset_rows.append(
+                    {
+                        "sort_key": (
+                            category_sequence,
+                            2,
+                            0,
+                            0,
+                            float(len(asset_rows)),
+                        ),
+                        "payload": asset,
+                    }
+                )
 
         ordered_rows = sorted(asset_rows, key=lambda item: item["sort_key"])
+        ordered_assets: list[LinkedArtifactAsset] = []
+        for row in ordered_rows:
+            payload = dict(row["payload"])
+            ordered_assets.append(
+                LinkedArtifactAsset(
+                    asset_id=self._stable_asset_id(str(payload["path"])),
+                    kind=str(payload["kind"]),
+                    media_type=str(payload["media_type"]),
+                    file_name=str(payload["file_name"]),
+                    path=str(payload["path"]),
+                    mime_type=payload.get("mime_type"),
+                    category_id=payload.get("category_id"),
+                    category_label=payload.get("category_label"),
+                    source_name=payload.get("source_name"),
+                    reason=payload.get("reason"),
+                    sequence=payload.get("sequence"),
+                    timestamp_seconds=payload.get("timestamp_seconds"),
+                    annotation_label=payload.get("annotation_label"),
+                )
+            )
+        return ordered_assets, category_meta
+
+    def _build_images_and_keyframes_detail(
+        self,
+        record: ChatSessionRecord,
+    ) -> LinkedArtifactDetailResponse | None:
+        ordered_assets, category_meta = self._enumerate_images_and_keyframes_assets(record)
+        assets = [asset for asset in ordered_assets if self._asset_path_exists(asset.path)]
+        if not assets:
+            return None
+
+        workspace_dir = self._resolve_generation_workspace(record)
         grouped_content: dict[str, dict[str, Any]] = {}
-        assets: list[LinkedArtifactAsset] = []
         upload_image_count = 0
         upload_video_count = 0
         key_frame_count = 0
 
-        for index, row in enumerate(ordered_rows, start=1):
-            payload = dict(row["payload"])
-            if payload["kind"] == "upload_image":
+        for asset in assets:
+            if asset.kind == "upload_image":
                 upload_image_count += 1
-            elif payload["kind"] == "upload_video":
+            elif asset.kind == "upload_video":
                 upload_video_count += 1
-            elif payload["kind"] == "key_frame":
+            elif asset.kind == "key_frame":
                 key_frame_count += 1
-
-            asset = LinkedArtifactAsset(
-                asset_id=f"asset-{index:03d}",
-                kind=str(payload["kind"]),
-                media_type=str(payload["media_type"]),
-                file_name=str(payload["file_name"]),
-                path=str(payload["path"]),
-                mime_type=payload.get("mime_type"),
-                category_id=payload.get("category_id"),
-                category_label=payload.get("category_label"),
-                source_name=payload.get("source_name"),
-                reason=payload.get("reason"),
-                sequence=payload.get("sequence"),
-                timestamp_seconds=payload.get("timestamp_seconds"),
-                annotation_label=payload.get("annotation_label"),
-            )
-            assets.append(asset)
 
             group_key = str(asset.category_id or "ungrouped")
             category_info = category_meta.get(group_key, {})
@@ -773,6 +1014,10 @@ class ChatSessionService:
         workspace_dir: Path,
         generation_payload: dict[str, Any],
     ) -> list[dict[str, Any]]:
+        payload_manifest = generation_payload.get("frame_manifest")
+        if isinstance(payload_manifest, list):
+            return [item for item in payload_manifest if isinstance(item, dict)]
+
         key_frame_manifest = self._read_json_if_exists(workspace_dir / "key_frame_manifest.json")
         if isinstance(key_frame_manifest, list):
             return [item for item in key_frame_manifest if isinstance(item, dict)]
@@ -780,11 +1025,78 @@ class ChatSessionService:
         frame_manifest = self._read_json_if_exists(workspace_dir / "frame_manifest.json")
         if isinstance(frame_manifest, list):
             return [item for item in frame_manifest if isinstance(item, dict)]
-
-        payload_manifest = generation_payload.get("frame_manifest")
-        if isinstance(payload_manifest, list):
-            return [item for item in payload_manifest if isinstance(item, dict)]
         return []
+
+    def _extract_upload_manifest_items_from_payload(self, upload_groups_payload: Any) -> list[dict[str, Any]]:
+        if not isinstance(upload_groups_payload, list):
+            return []
+
+        items: list[dict[str, Any]] = []
+        for group in upload_groups_payload:
+            if not isinstance(group, dict):
+                continue
+            category_id = str(group.get("category_id") or "").strip()
+            category_label = str(group.get("category_label") or "").strip()
+            category_subtitle = str(group.get("category_subtitle") or "").strip()
+            category_sequence = int(group.get("sequence", 0) or 0)
+            for file_item in group.get("files", []) or []:
+                if not isinstance(file_item, dict):
+                    continue
+                media_type = str(file_item.get("media_type") or "").strip()
+                path_value = str(file_item.get("path") or "").strip()
+                if not media_type or not path_value:
+                    continue
+                items.append(
+                    {
+                        "path": path_value,
+                        "media_type": media_type,
+                        "original_name": str(file_item.get("original_name") or Path(path_value).name),
+                        "category_id": category_id,
+                        "category_label": category_label,
+                        "category_subtitle": category_subtitle,
+                        "category_sequence": category_sequence,
+                        "group_sequence": int(file_item.get("sequence", 0) or 0),
+                        "sequence": int(file_item.get("sequence", 0) or 0),
+                    }
+                )
+        return items
+
+    def _extract_yolo_asset_manifest_from_payload(self, payload: Any) -> list[dict[str, Any]]:
+        if not isinstance(payload, list):
+            return []
+        return [item for item in payload if isinstance(item, dict) and str(item.get("path") or "").strip()]
+
+    def _build_legacy_yolo_asset_manifest(self, yolo_dir: Path) -> list[dict[str, Any]]:
+        resolved_dir = yolo_dir.resolve()
+        cache_key = str(resolved_dir)
+        current_mtime_ns = self._get_output_dir_mtime_ns(resolved_dir)
+        with _YOLO_DIR_MANIFEST_GUARD:
+            cached = _YOLO_DIR_MANIFEST_CACHE.get(cache_key)
+        if cached and cached.get("mtime_ns") == current_mtime_ns:
+            return [dict(item) for item in cached.get("items", [])]
+
+        items: list[dict[str, Any]] = []
+        for path in sorted(resolved_dir.rglob("*")):
+            if not path.is_file() or path.suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp"}:
+                continue
+            relative_parts = path.relative_to(resolved_dir).parts
+            items.append(
+                {
+                    "path": str(path.resolve()),
+                    "file_name": path.name,
+                    "category_id": relative_parts[0] if len(relative_parts) > 1 else "",
+                    "category_label": "",
+                    "source_name": path.parent.name,
+                }
+            )
+
+        payload = {
+            "mtime_ns": current_mtime_ns,
+            "items": items,
+        }
+        with _YOLO_DIR_MANIFEST_GUARD:
+            _YOLO_DIR_MANIFEST_CACHE[cache_key] = payload
+        return [dict(item) for item in items]
 
     def _build_asset_payload(
         self,
@@ -799,9 +1111,12 @@ class ChatSessionService:
         sequence: int | None = None,
         timestamp_seconds: float | None = None,
         annotation_label: str | None = None,
+        require_exists: bool = True,
     ) -> dict[str, Any] | None:
         path = self._resolve_safe_path(path_value)
-        if path is None or not path.exists():
+        if path is None:
+            return None
+        if require_exists and not path.exists():
             return None
         normalized_media_type = media_type or ("video" if path.suffix.lower() in {".mp4", ".mov", ".avi", ".mkv", ".webm"} else "image")
         guessed_mime_type = mimetypes.guess_type(path.name)[0]
@@ -857,26 +1172,186 @@ class ChatSessionService:
         return 999
 
     def _write_session(self, record: ChatSessionRecord) -> None:
-        session_dir = self._session_dir(record.id)
-        session_dir.mkdir(parents=True, exist_ok=True)
-        session_file = self._session_file(record.id)
-        temp_file = session_dir / f".{session_file.name}.{uuid4().hex}.tmp"
-        payload = json.dumps(record.model_dump(), ensure_ascii=False, indent=2)
-        with _get_session_lock(record.id):
-            try:
-                temp_file.write_text(payload, encoding="utf-8")
-                temp_file.replace(session_file)
-            finally:
-                temp_file.unlink(missing_ok=True)
+        payload = record.model_dump()
+        with self.database_service.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    insert into chat_sessions (
+                        id, title, owner_user_id, owner_username, created_at, updated_at,
+                        sort_order, source_type, source_name, messages, draft_json,
+                        draft_meta, report_result, session_state
+                    )
+                    values (
+                        %s, %s, nullif(%s, '')::uuid, %s, %s, %s,
+                        %s, %s, %s, %s::jsonb, %s,
+                        %s::jsonb, %s::jsonb, %s
+                    )
+                    on conflict (id) do update
+                    set title = excluded.title,
+                        owner_user_id = excluded.owner_user_id,
+                        owner_username = excluded.owner_username,
+                        created_at = excluded.created_at,
+                        updated_at = excluded.updated_at,
+                        sort_order = excluded.sort_order,
+                        source_type = excluded.source_type,
+                        source_name = excluded.source_name,
+                        messages = excluded.messages,
+                        draft_json = excluded.draft_json,
+                        draft_meta = excluded.draft_meta,
+                        report_result = excluded.report_result,
+                        session_state = excluded.session_state
+                    """,
+                    (
+                        record.id,
+                        record.title,
+                        record.owner_user_id or "",
+                        record.owner_username,
+                        record.created_at,
+                        record.updated_at,
+                        record.sort_order,
+                        record.source_type,
+                        record.source_name,
+                        Jsonb(payload.get("messages") or []),
+                        record.draft_json,
+                        Jsonb(payload.get("draft_meta")),
+                        Jsonb(payload.get("report_result")),
+                        record.session_state,
+                    ),
+                )
+            conn.commit()
 
-    def _load_session_file(self, session_file: Path) -> ChatSessionRecord:
-        record = ChatSessionRecord.model_validate(json.loads(session_file.read_text(encoding="utf-8")))
-        migrated_record = self._apply_session_state(
-            self._refresh_linked_views(self._migrate_session_record(record))
+    def _load_session_row(
+        self,
+        row: dict[str, Any],
+        *,
+        include_linked_files: bool = True,
+        include_linked_artifacts: bool = True,
+    ) -> ChatSessionRecord:
+        record = ChatSessionRecord.model_validate(
+            {
+                "id": row["id"],
+                "title": row["title"],
+                "owner_user_id": row.get("owner_user_id"),
+                "owner_username": row.get("owner_username"),
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+                "sort_order": row.get("sort_order"),
+                "source_type": row.get("source_type"),
+                "source_name": row.get("source_name"),
+                "messages": row.get("messages") or [],
+                "draft_json": row.get("draft_json") or "",
+                "draft_meta": row.get("draft_meta"),
+                "report_result": row.get("report_result"),
+                "session_state": row.get("session_state") or "draft",
+            }
         )
-        if migrated_record != record:
+        migrated_record = self._apply_session_state(self._migrate_session_record(record))
+        if self._has_persisted_changes(record, migrated_record):
             self._write_session(migrated_record)
-        return migrated_record
+        return self._refresh_linked_views(
+            migrated_record,
+            include_linked_files=include_linked_files,
+            include_linked_artifacts=include_linked_artifacts,
+        )
+
+    def _load_session_by_id(
+        self,
+        session_id: str,
+        *,
+        include_linked_files: bool = True,
+        include_linked_artifacts: bool = True,
+    ) -> ChatSessionRecord:
+        with self.database_service.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    select id, title, owner_user_id::text as owner_user_id, owner_username,
+                           created_at, updated_at, sort_order, source_type, source_name,
+                           messages, draft_json, draft_meta, report_result, session_state
+                    from chat_sessions
+                    where id = %s
+                    """,
+                    (session_id,),
+                )
+                row = cur.fetchone()
+        if row is not None:
+            return self._load_session_row(
+                row,
+                include_linked_files=include_linked_files,
+                include_linked_artifacts=include_linked_artifacts,
+            )
+
+        legacy_file = self._session_file(session_id)
+        if legacy_file.exists():
+            record = self._load_session_file(
+                legacy_file,
+                include_linked_files=include_linked_files,
+                include_linked_artifacts=include_linked_artifacts,
+            )
+            self._write_session(record)
+            return record
+        raise SessionNotFoundError(f"会话不存在: {session_id}")
+
+    def _load_session_file(
+        self,
+        session_file: Path,
+        *,
+        include_linked_files: bool = True,
+        include_linked_artifacts: bool = True,
+    ) -> ChatSessionRecord:
+        record = ChatSessionRecord.model_validate(json.loads(session_file.read_text(encoding="utf-8")))
+        migrated_record = self._apply_session_state(self._migrate_session_record(record))
+        return self._refresh_linked_views(
+            migrated_record,
+            include_linked_files=include_linked_files,
+            include_linked_artifacts=include_linked_artifacts,
+        )
+
+    @staticmethod
+    def _has_persisted_changes(current: ChatSessionRecord, candidate: ChatSessionRecord) -> bool:
+        return ChatSessionService._build_persisted_payload(current) != ChatSessionService._build_persisted_payload(
+            candidate
+        )
+
+    @staticmethod
+    def _build_persisted_payload(record: ChatSessionRecord) -> dict[str, Any]:
+        payload = record.model_dump(exclude={"linked_files", "linked_artifacts"})
+        for field in ("draft_meta", "report_result"):
+            if payload.get(field) == {}:
+                payload[field] = None
+        return payload
+
+    def _migrate_legacy_file_sessions(self) -> None:
+        root = self.settings.chat_sessions_dir_path
+        if not root.exists():
+            return
+        data_root_key = str(self.settings.backend_data_dir_path)
+        with _LEGACY_SESSION_MIGRATED_GUARD:
+            if data_root_key in _LEGACY_SESSION_MIGRATED_DATA_ROOTS:
+                return
+        with self.database_service.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("select id from chat_sessions")
+                existing_ids = {str(row["id"]) for row in cur.fetchall()}
+        migrated_any = False
+        for session_dir in root.iterdir():
+            if not session_dir.is_dir():
+                continue
+            session_file = session_dir / "session.json"
+            if not session_file.exists() or session_dir.name in existing_ids:
+                continue
+            try:
+                with _get_session_lock(session_dir.name):
+                    record = self._load_session_file(session_file)
+                    self._write_session(record)
+                    migrated_any = True
+            except (JSONDecodeError, OSError, UnicodeDecodeError, ValidationError) as exc:
+                logger.warning("迁移旧会话文件失败：%s；错误：%s", session_file, exc)
+        if migrated_any:
+            logger.info("已把旧会话文件迁移到 PostgreSQL。")
+        with _LEGACY_SESSION_MIGRATED_GUARD:
+            _LEGACY_SESSION_MIGRATED_DATA_ROOTS.add(data_root_key)
 
     def _apply_session_state(self, record: ChatSessionRecord) -> ChatSessionRecord:
         return record.model_copy(update={"session_state": self._resolve_session_state(record)})
@@ -1000,6 +1475,13 @@ class ChatSessionService:
         output_dir = Path(output_dir_value).resolve()
         if not self._is_safe_data_path(output_dir):
             return dict(report_result)
+        if not output_dir.exists():
+            return dict(report_result)
+
+        cached_mtime_ns = self._coerce_output_dir_mtime_ns(report_result.get("_output_dir_mtime_ns"))
+        current_mtime_ns = self._get_output_dir_mtime_ns(output_dir)
+        if cached_mtime_ns is not None and current_mtime_ns == cached_mtime_ns:
+            return dict(report_result)
 
         refreshed = self._build_report_result_from_output_dir(
             output_dir,
@@ -1012,17 +1494,16 @@ class ChatSessionService:
             return None
 
         candidates: list[tuple[int, dict[str, Any]]] = []
-        for output_dir in self.settings.output_dir_path.iterdir():
-            if not output_dir.is_dir():
+        for entry in self._list_output_dir_metadata():
+            if entry["session_id"] != record.id:
                 continue
-            if self._get_output_session_id(output_dir) != record.id:
-                continue
+            output_dir = Path(entry["path"])
 
             recovered = self._build_report_result_from_output_dir(output_dir)
             if not recovered:
                 continue
 
-            mtime_ms = int(output_dir.stat().st_mtime * 1000)
+            mtime_ms = int(float(entry["mtime"]) * 1000)
             candidates.append((mtime_ms, recovered))
 
         if not candidates:
@@ -1073,6 +1554,7 @@ class ChatSessionService:
             "trace_id": str((run_log or {}).get("trace_id") or existing_result.get("trace_id") or output_dir.name),
             "status": "success",
             "output_dir": str(output_dir.resolve()),
+            "_output_dir_mtime_ns": self._get_output_dir_mtime_ns(output_dir),
             "guidance": guidance_payload,
             "report": {
                 "report_markdown": report_markdown,
@@ -1249,10 +1731,14 @@ class ChatSessionService:
         return {}
 
     def _build_retriever_for_history(self):
+        if self._history_retriever_ready:
+            return self._history_retriever
         try:
-            return build_retriever(self.settings)
+            self._history_retriever = build_retriever(self.settings)
         except Exception:
-            return MockRetriever(min_score=self.settings.retrieval.min_score, degraded=True)
+            self._history_retriever = MockRetriever(min_score=self.settings.retrieval.min_score, degraded=True)
+        self._history_retriever_ready = True
+        return self._history_retriever
 
     def _parse_json_object(self, payload: Any) -> dict[str, Any]:
         if isinstance(payload, dict):
@@ -1441,26 +1927,20 @@ class ChatSessionService:
         session_index = {session.id: index for index, session in enumerate(next_sessions)}
         attached = False
 
-        for output_dir in sorted(
-            self.settings.output_dir_path.iterdir(),
-            key=lambda path: path.stat().st_mtime,
-            reverse=True,
-        ):
-            if not output_dir.is_dir():
-                continue
-
-            trace_id = self._get_output_trace_id(output_dir)
+        for entry in self._list_output_dir_metadata():
+            output_dir = Path(entry["path"])
+            trace_id = entry["trace_id"]
             if trace_id in known_trace_ids:
                 continue
 
-            session_id = self._get_output_session_id(output_dir)
+            session_id = entry["session_id"]
             if not session_id or session_id not in session_index:
                 continue
 
             target_index = session_index[session_id]
             target_session = next_sessions[target_index]
             current_output_mtime = self._get_report_output_mtime(target_session.report_result)
-            if current_output_mtime is not None and output_dir.stat().st_mtime <= current_output_mtime:
+            if current_output_mtime is not None and float(entry["mtime"]) <= current_output_mtime:
                 continue
 
             recovered_report_result = self._build_report_result_from_output_dir(
@@ -1506,6 +1986,41 @@ class ChatSessionService:
         run_log = self._read_json_if_exists(output_dir / "run_log.json")
         return str((run_log or {}).get("session_id") or "").strip()
 
+    def _list_output_dir_metadata(self) -> list[dict[str, Any]]:
+        if not self.settings.output_dir_path.exists():
+            return []
+
+        entries: list[dict[str, Any]] = []
+        for output_dir in self.settings.output_dir_path.iterdir():
+            if not output_dir.is_dir():
+                continue
+
+            resolved = output_dir.resolve()
+            mtime_ns = self._get_output_dir_mtime_ns(resolved)
+            cache_key = str(resolved)
+            cached: dict[str, Any] | None = None
+            with _OUTPUT_DIR_METADATA_GUARD:
+                cached = _OUTPUT_DIR_METADATA_CACHE.get(cache_key)
+
+            if cached and cached.get("mtime_ns") == mtime_ns:
+                entries.append(cached)
+                continue
+
+            run_log = self._read_json_if_exists(resolved / "run_log.json")
+            payload = {
+                "path": cache_key,
+                "mtime": float(resolved.stat().st_mtime),
+                "mtime_ns": mtime_ns,
+                "trace_id": str((run_log or {}).get("trace_id") or resolved.name).strip(),
+                "session_id": str((run_log or {}).get("session_id") or "").strip(),
+            }
+            with _OUTPUT_DIR_METADATA_GUARD:
+                _OUTPUT_DIR_METADATA_CACHE[cache_key] = payload
+            entries.append(payload)
+
+        entries.sort(key=lambda item: float(item["mtime"]), reverse=True)
+        return entries
+
     def _get_report_output_mtime(self, report_result: Any) -> float | None:
         if not isinstance(report_result, dict):
             return None
@@ -1517,6 +2032,22 @@ class ChatSessionService:
         if not output_dir.exists() or not self._is_safe_data_path(output_dir):
             return None
         return output_dir.stat().st_mtime
+
+    @staticmethod
+    def _coerce_output_dir_mtime_ns(value: Any) -> int | None:
+        try:
+            if value is None or value == "":
+                return None
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _get_output_dir_mtime_ns(output_dir: Path) -> int | None:
+        try:
+            return int(output_dir.stat().st_mtime_ns)
+        except OSError:
+            return None
 
     @staticmethod
     def _session_sort_key(record: ChatSessionRecord) -> tuple[int, int, int, str]:

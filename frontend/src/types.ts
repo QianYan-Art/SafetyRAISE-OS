@@ -262,15 +262,147 @@ export interface PublicAppConfig {
     max_total_videos: number;
   };
   report_model: {
-    current_label: ReportModelLabel;
+    current_label: ReportModelLabel | null;
     updated_at?: string | null;
     options: PublicReportModelOption[];
   };
 }
 
 export type ReportModelLabel = "max" | "pro" | "lite";
+export type UserRole = "admin" | "user";
 
 export interface PublicReportModelOption {
   label: ReportModelLabel;
   active: boolean;
+  display_name?: string | null;
+}
+
+export interface UserSummary {
+  id: string;
+  username: string;
+  display_name?: string | null;
+  role: UserRole;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AuthTokenResponse {
+  access_token: string;
+  token_type: "bearer";
+  user: UserSummary;
+}
+
+export interface UserModelConfigRecord {
+  label: ReportModelLabel;
+  display_name: string;
+  base_url: string;
+  api_key: string;
+  configured: boolean;
+  provider_name: string;
+  updated_at?: string | null;
+}
+
+export interface UserModelConfigState {
+  current_label: ReportModelLabel | null;
+  updated_at?: string | null;
+  options: UserModelConfigRecord[];
+}
+
+export interface UpdateUserModelConfigItem {
+  label: ReportModelLabel;
+  display_name?: string | null;
+  base_url?: string | null;
+  api_key?: string | null;
+}
+
+export type ModelCapability = "vision" | "embedding" | "report";
+
+export interface EmbeddingTuningParams {
+  top_k?: number | null;
+  dense_top_k_chunks?: number | null;
+  dense_top_k_rules?: number | null;
+}
+
+export interface CapabilityConfigRecord {
+  capability: ModelCapability;
+  configured: boolean;
+  base_url?: string | null;
+  model_name?: string | null;
+  api_key_masked?: string | null;
+  params: EmbeddingTuningParams;
+}
+
+export interface CapabilityConfigState {
+  role: string;
+  capabilities: CapabilityConfigRecord[];
+  system_defaults: Record<string, EmbeddingTuningParams>;
+}
+
+export interface UpdateCapabilityConfigItem {
+  capability: ModelCapability;
+  base_url?: string | null;
+  model_name?: string | null;
+  api_key?: string | null;
+  params?: EmbeddingTuningParams | null;
+}
+
+export interface UpdateCapabilityConfigsPayload {
+  items: UpdateCapabilityConfigItem[];
+}
+
+export interface UpdateUserModelConfigsPayload {
+  items: UpdateUserModelConfigItem[];
+  active_label?: ReportModelLabel | null;
+}
+
+export interface AdminUserRecord {
+  id: string;
+  username: string;
+  display_name?: string | null;
+  role: UserRole;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdminCreateUserPayload {
+  username: string;
+  password: string;
+  display_name?: string | null;
+  role?: UserRole;
+  is_active?: boolean;
+}
+
+export interface AdminUpdateUserPayload {
+  display_name?: string | null;
+  password?: string | null;
+  role?: UserRole;
+  is_active?: boolean;
+}
+
+export interface AdminSpaceRecord {
+  session_id: string;
+  owner_user_id?: string | null;
+  owner_username?: string | null;
+  title: string;
+  created_at: number;
+  updated_at: number;
+  session_state: string;
+  source_type?: string | null;
+  source_name?: string | null;
+  message_count: number;
+  linked_artifact_count: number;
+  redacted: boolean;
+}
+
+export interface AdminUpdateSpacePayload {
+  title?: string | null;
+  owner_user_id?: string | null;
+  sort_order?: number | null;
+}
+
+export interface AdminCleanupSpacesResponse {
+  status: string;
+  deleted_count: number;
 }
