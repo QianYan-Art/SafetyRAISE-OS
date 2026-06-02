@@ -260,7 +260,7 @@ sh deployment/docker/setup-https.sh
 3. 专家模型：当前生产配置默认走 `https://<MODEL_API_HOST>/v1`，模型名用实际服务里的 `safetyraise`
 4. 报告 / 视觉模型：优先用远端 API，减少显存和部署复杂度
 5. reranker：当前不作为必需资产
-6. 会话与全局档位状态：当前已改为 PostgreSQL 持久化
+6. 会话与运行时状态：当前已改为 PostgreSQL 持久化
 7. 旧报告输出目录：服务端默认只额外保留最近 `60` 个“未被当前会话结果引用”的旧输出目录，避免 213 上无限堆积
 8. Dense 索引：当前可用 `backend/app/tools/build_dense_index.py` 基于现有 embedding 端点重建，再同步到 `213:/srv/safetyraise-data/kbase/data`
 
@@ -296,7 +296,7 @@ sh deployment/docker/setup-https.sh
    - 这时访问 `80/443` 看起来像服务不通，实质是没有生效的 Nginx 站点配置。
 5. `ready=false` 不一定是后端挂了
    - 当前 212 的典型降级项是：知识库目录为空、YOLO 权重缺失、embedding 探测超时。
-6. 会话、模型档位状态和运行时目录还留在 212 本地
+6. 会话与运行时目录曾留在 212 本地
    - 当前已经分别改为 PostgreSQL 持久化和 213 远端挂载。
 7. HTTPS 脚本直接 `source .env.server`
    - 当前脚本已经修正为按 key 读取，后续不要再改回去，否则带空格/中文的环境值会让证书脚本直接失败。

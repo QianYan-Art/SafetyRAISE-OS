@@ -61,8 +61,6 @@ PowerShell 示例：
 
 ```powershell
 $env:OPENROUTER_API_KEY="your-openrouter-key"
-$env:DUCKCODING_API_KEY="your-duckcoding-key"
-$env:LITE_MODEL_API_KEY=""
 $env:EXPERT_LOCAL_MODEL="suyuan37/SafetyRAISE-TS-Qwen3"
 $env:EXPERT_LOCAL_BASE_URL="http://127.0.0.1:1234/v1"
 ```
@@ -145,9 +143,10 @@ ffprobe
 
 默认示例里：
 
-1. 专家模型本地走 Ollama 风格地址
-2. `lite` 档位走兼容 OpenAI 的本地或远端端点
-3. `pro / max / 视觉` 端点保留公开可接入的示例配置
+1. 专家模型走 OpenAI 兼容地址（如 LM Studio / vLLM 暴露的 `/v1`）
+2. 报告模型走兼容 OpenAI 的远端端点（单一端点，默认 `deepseek/deepseek-v4-pro`）
+3. 视觉 / 嵌入端点同为 OpenAI 兼容
+4. 用户在前端只需把地址填到 `/v1`，系统自动补全 `/chat/completions`（报告/视觉）或 `/embeddings`（嵌入）
 
 最容易忽略的是：
 

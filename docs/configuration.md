@@ -88,13 +88,12 @@ base_url: "${RETRIEVAL_EMBEDDING_BASE_URL:-http://127.0.0.1:1234/v1}"
 | 变量 | 作用 |
 | --- | --- |
 | `OPENROUTER_API_KEY` | OpenRouter key |
-| `DUCKCODING_API_KEY` | DuckCoding key |
 
 说明：
 
-1. `OPENROUTER_API_KEY` 默认同时服务于 `pro` 报告端点和视觉模型端点
-2. `DUCKCODING_API_KEY` 默认服务于 `max` 报告端点
-3. 如果你给 `lite` 档接入远端服务，优先使用 `LITE_MODEL_API_KEY`
+1. `OPENROUTER_API_KEY` 默认同时服务于单一报告端点（`openrouter_deepseek_v4_pro`）与视觉模型端点
+2. 报告端点已收敛为单一端点，旧的 `max / pro / lite` 档位及 `DUCKCODING_API_KEY` / `LITE_MODEL_*` 多档位变量均已移除
+3. 用户在前端自填 `url + key + model` 时只需填到 `/v1`，系统自动补全 `/chat/completions`（报告/视觉）或 `/embeddings`（嵌入）
 
 ### 4. embedding / reranker
 
