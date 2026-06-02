@@ -95,7 +95,27 @@ kbase/data/dense_vectors.f16.npy
 
 如果这些文件缺失，`hybrid_local` 检索链路无法正常工作。
 
-如果还没有 Embedding 服务、Reranker 服务或 Dense 索引，先用最小样例切到 `local_jsonl`，跑通基础检索后再补 `hybrid_local`。
+如果还没有 Embedding 服务、Reranker 服务或 Dense 索引，可以先用仓库自带的最小样例切到 `local_jsonl`，跑通基础检索后再补 `hybrid_local`。
+
+仓库在 `examples/kbase/minimal/` 提供了一份最小知识库样例，零外部依赖即可跑通基础检索：
+
+1. 把样例三件套拷到默认运行时目录：
+
+   ```powershell
+   New-Item -ItemType Directory -Force kbase/data | Out-Null
+   Copy-Item examples/kbase/minimal/manifest.json        kbase/data/
+   Copy-Item examples/kbase/minimal/kbase_chunks.jsonl   kbase/data/
+   Copy-Item examples/kbase/minimal/liability_rules.jsonl kbase/data/
+   ```
+
+2. 把 `backend/config/workflow.yaml` 的 `retrieval.provider` 改为 `local_jsonl`：
+
+   ```yaml
+   retrieval:
+     provider: "local_jsonl"
+   ```
+
+`local_jsonl` 只依赖上述三件套，不需要 `search_index.json`、Embedding 服务和 Dense 索引。验证基础检索通过后，再准备 Dense 索引并切回默认的 `hybrid_local`。
 
 ## 准备 YOLO 与视频依赖
 
