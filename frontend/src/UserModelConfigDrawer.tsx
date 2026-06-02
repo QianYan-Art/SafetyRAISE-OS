@@ -184,7 +184,7 @@ export function UserModelConfigDrawer(props: UserModelConfigDrawerProps) {
                     maxLength={255}
                     value={draft[cap].baseUrl}
                     onChange={(e) => patch(cap, "baseUrl", e.target.value)}
-                    placeholder="例如 https://openrouter.ai/api/v1/chat/completions"
+                    placeholder="例如 https://api.openai.com/v1（填到 /v1 即可，系统自动补全）"
                     disabled={saving}
                   />
                 </div>

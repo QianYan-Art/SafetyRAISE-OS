@@ -13,8 +13,8 @@ from app.adapters.input.file_input_adapter import FileInputAdapter
 from app.core.exceptions import ConfigurationError, InputValidationError, RequestCancelledError
 from app.core.settings import ReportEndpointConnectionSettings, ReportEndpointSettings, Settings, get_api_key
 from app.providers.llm.base import BaseLLMProvider
+from app.providers.llm.lmstudio_compat import build_chat_completions_url
 from app.providers.llm.openai_compatible_expert import OpenAICompatibleExpertProvider
-from app.providers.llm.ollama_expert import OllamaExpertProvider
 from app.providers.llm.openai_report import OpenAIReportProvider
 from app.providers.llm.openai_vision import OpenAIVisionProvider
 from app.providers.lmstudio_residency import LMStudioResidencyManager, LMStudioResidencySpec
@@ -174,10 +174,9 @@ class ReportService:
         model_cfg = self.settings.models.expert_local
         provider = model_cfg.provider.strip().lower()
 
-        if provider in {"local", "ollama"}:
-            return OllamaExpertProvider(config=model_cfg)
-
-        if provider in {"openai", "openai_compatible", "openai-compatible", "lmstudio"}:
+        # 专家模型已统一收敛为 OpenAI 兼容协议（含 LM Studio / vLLM 等本地承载）。
+        # 旧的 Ollama 原生协议（provider=ollama/local）已下线，本地模型请改用 OpenAI 兼容服务承载。
+        if provider in {"openai", "openai_compatible", "openai-compatible", "lmstudio", "local"}:
             api_key = get_api_key(model_cfg.api_key_env) if model_cfg.api_key_env else None
             return OpenAICompatibleExpertProvider(
                 config=model_cfg,
@@ -187,7 +186,9 @@ class ReportService:
                 lmstudio_residency_companions=lmstudio_residency_companions,
             )
 
-        raise ConfigurationError(f"不支持的专家模型提供器: {self.settings.models.expert_local.provider}")
+        raise ConfigurationError(
+            f"不支持的专家模型提供器: {self.settings.models.expert_local.provider}（已仅支持 OpenAI 兼容协议）"
+        )
 
     def _default_report_endpoint(self) -> ReportEndpointSettings:
         """报告端点 3→1：始终解析为唯一的默认报告端点（按优先级取第一个）。"""
@@ -237,16 +238,19 @@ class ReportService:
         ):
             return selected_endpoint, []
 
+        raw_base_url = report_override.get("base_url")
+        # 用户只需填到 /v1，这里自动补全为 /v1/chat/completions；留空则沿用系统默认端点。
+        resolved_url = build_chat_completions_url(raw_base_url) if raw_base_url else selected_endpoint.url
         override_endpoint = selected_endpoint.model_copy(
             update={
                 "name": "user_report",
-                "url": report_override.get("base_url") or selected_endpoint.url,
+                "url": resolved_url,
                 "model": report_override.get("model_name") or selected_endpoint.model,
                 "api_key_env": None,
                 "connection": ReportEndpointConnectionSettings(
                     connection_type="inline",
                     key=report_override.get("api_key") or "",
-                    url=report_override.get("base_url") or selected_endpoint.url,
+                    url=resolved_url,
                 ),
             }
         )
@@ -274,7 +278,9 @@ class ReportService:
     def _synthesize_override_endpoint(model_cfg, override: dict[str, Any], *, name: str):
         """把用户 override(base_url/api_key/model)收敛为单端点配置 + 内联 key。仅 OpenAI 兼容格式。"""
         base = model_cfg.endpoints[0] if model_cfg.endpoints else ReportEndpointSettings(name=name, url="")
-        new_url = override.get("base_url") or base.url
+        raw_base_url = override.get("base_url")
+        # 用户只需填到 /v1，这里自动补全为 /v1/chat/completions；留空则沿用系统默认端点。
+        new_url = build_chat_completions_url(raw_base_url) if raw_base_url else base.url
         new_model = override.get("model_name") or base.model or model_cfg.model
         inline_key = override.get("api_key") or ""
         endpoint = base.model_copy(
