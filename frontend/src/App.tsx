@@ -2864,7 +2864,7 @@ function WorkspaceApp({
                         </div>
                       ) : message.kind === "markdown" ? (
                         <div className="markdown-report markdown-report-compact">
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          <ReactMarkdown remarkPlugins={[remarkGfm]} components={reportMarkdownComponents}>
                             {normalizeMarkdownForDisplay(message.content)}
                           </ReactMarkdown>
                         </div>
@@ -3159,9 +3159,16 @@ function WorkspaceApp({
                   <div>
                     <h3 className="content-section-title">分析研判报告正文</h3>
                     <div className="report-surface markdown-report">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={reportMarkdownComponents}>
-                        {normalizeMarkdownForDisplay(activeSession.reportResult.report.report_markdown)}
-                      </ReactMarkdown>
+                      {(() => {
+                        const normalized = normalizeMarkdownForDisplay(activeSession.reportResult.report.report_markdown);
+                        return normalized ? (
+                          <ReactMarkdown remarkPlugins={[remarkGfm]} components={reportMarkdownComponents}>
+                            {normalized}
+                          </ReactMarkdown>
+                        ) : (
+                          <p style={{ margin: 0, color: "#8a8a8a" }}>暂无报告内容。</p>
+                        );
+                      })()}
                     </div>
                   </div>
                 </div>
