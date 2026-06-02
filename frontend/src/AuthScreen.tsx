@@ -186,6 +186,15 @@ export function AuthScreen(props: AuthScreenProps) {
       </section>
 
       <section className="auth-form-panel">
+        <button
+          type="button"
+          className="theme-toggle-btn auth-form-theme-toggle"
+          onClick={onToggleTheme}
+          aria-label={isDarkMode ? "切换为浅色模式" : "切换为深色模式"}
+          title={isDarkMode ? "切换为浅色模式" : "切换为深色模式"}
+        >
+          {isDarkMode ? <MoonIcon /> : <SunIcon />}
+        </button>
         <div className="auth-form-shell">
           <div className="seg-tabs auth-seg-tabs" role="tablist" aria-label="登录注册切换">
             <button

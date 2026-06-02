@@ -413,6 +413,10 @@ button {
   pointer-events: none;
 }
 
+.auth-form-theme-toggle {
+  display: none;
+}
+
 .auth-form-shell {
   position: relative;
   z-index: 1;
@@ -1412,18 +1416,15 @@ button {
   }
 
   .auth-hero-panel {
-    min-height: auto;
-    padding: 20px 20px 16px;
-  }
-
-  .auth-hero-content p,
-  .auth-hero-points {
     display: none;
   }
 
-  .auth-hero-content h1 {
-    font-size: 22px;
-    margin: 8px 0;
+  .auth-form-theme-toggle {
+    display: inline-flex;
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    z-index: 2;
   }
 
   .drawer-shell {
