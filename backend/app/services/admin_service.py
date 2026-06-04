@@ -134,11 +134,24 @@ class AdminService:
                 cur.execute("delete from users where id = %s", (user_id,))
             conn.commit()
 
-    def list_spaces(self) -> list[AdminSpaceRecord]:
+    def list_spaces(self, *, exclude_owner_user_id: str | None = None, exclude_owner_username: str | None = None) -> list[AdminSpaceRecord]:
         with self.database_service.connection() as conn:
             with conn.cursor() as cur:
-                cur.execute(
+                params: list[str] = []
+                owner_filter = ""
+                if exclude_owner_user_id or exclude_owner_username:
+                    owner_filter = """
+                    where (%s = '' or owner_user_id is null or owner_user_id::text <> %s)
+                      and (%s = '' or owner_username is null or owner_username <> %s)
                     """
+                    params = [
+                        exclude_owner_user_id or "",
+                        exclude_owner_user_id or "",
+                        exclude_owner_username or "",
+                        exclude_owner_username or "",
+                    ]
+                cur.execute(
+                    f"""
                     select
                         id as session_id,
                         owner_user_id::text as owner_user_id,
@@ -182,8 +195,10 @@ class AdminService:
                             end
                         ) as linked_artifact_count
                     from chat_sessions
+                    {owner_filter}
                     order by updated_at desc, created_at desc
-                    """
+                    """,
+                    params,
                 )
                 rows = list(cur.fetchall())
         return [

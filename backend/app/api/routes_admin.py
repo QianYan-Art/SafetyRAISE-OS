@@ -54,10 +54,10 @@ def delete_user(
 
 @router.get("/spaces", response_model=list[AdminSpaceRecord])
 def list_spaces(
-    _current_user: AuthenticatedUser = Depends(require_admin_user),
+    current_user: AuthenticatedUser = Depends(require_admin_user),
     service: AdminService = Depends(get_admin_service),
 ):
-    return service.list_spaces()
+    return service.list_spaces(exclude_owner_user_id=current_user.id, exclude_owner_username=current_user.username)
 
 
 @router.patch("/spaces/{session_id}", response_model=AdminSpaceRecord)

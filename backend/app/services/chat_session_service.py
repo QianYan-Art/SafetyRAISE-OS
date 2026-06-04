@@ -75,14 +75,26 @@ class ChatSessionService:
         sessions: list[ChatSessionRecord] = []
         with self.database_service.connection() as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    select id, title, owner_user_id::text as owner_user_id, owner_username,
-                           created_at, updated_at, sort_order, source_type, source_name,
-                           messages, draft_json, draft_meta, report_result, session_state
-                    from chat_sessions
-                    """
-                )
+                if self.current_user is None:
+                    cur.execute(
+                        """
+                        select id, title, owner_user_id::text as owner_user_id, owner_username,
+                               created_at, updated_at, sort_order, source_type, source_name,
+                               messages, draft_json, draft_meta, report_result, session_state
+                        from chat_sessions
+                        """
+                    )
+                else:
+                    cur.execute(
+                        """
+                        select id, title, owner_user_id::text as owner_user_id, owner_username,
+                               created_at, updated_at, sort_order, source_type, source_name,
+                               messages, draft_json, draft_meta, report_result, session_state
+                        from chat_sessions
+                        where owner_user_id = %s or owner_username = %s
+                        """,
+                        (self.current_user.id, self.current_user.username),
+                    )
                 rows = list(cur.fetchall())
         for row in rows:
             try:
@@ -260,8 +272,6 @@ class ChatSessionService:
 
     def _can_access_session(self, record: ChatSessionRecord) -> bool:
         if self.current_user is None:
-            return True
-        if self.current_user.is_admin:
             return True
         owner_user_id = str(record.owner_user_id or "").strip()
         owner_username = str(record.owner_username or "").strip()
