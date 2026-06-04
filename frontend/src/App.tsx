@@ -1830,7 +1830,7 @@ function WorkspaceApp({
   }
 
   function handleSessionDragStart(sessionId: string, event: DragEvent<HTMLDivElement>) {
-    if (searchQuery.trim()) {
+    if (searchQuery.trim() || editingSessionId === sessionId) {
       event.preventDefault();
       return;
     }
@@ -2629,7 +2629,7 @@ function WorkspaceApp({
                     <div
                       className={`session-item ${session.id === activeSessionId ? "active" : ""} ${draggingSessionId === session.id ? "dragging" : ""} ${dragOverSessionId === session.id ? "drag-over" : ""}`}
                       onClick={() => handleSessionItemClick(session.id)}
-                      draggable={!isMobileSidebarOpen && !searchQuery.trim()}
+                      draggable={!isMobileSidebarOpen && !searchQuery.trim() && editingSessionId !== session.id}
                       onDragStart={(event) => handleSessionDragStart(session.id, event)}
                       onDragOver={(event) => handleSessionDragOver(session.id, event)}
                       onDrop={(event) => void handleSessionDrop(session.id, event)}
@@ -2655,6 +2655,8 @@ function WorkspaceApp({
                               if (e.key === "Escape") setEditingSessionId(null);
                             }}
                             onClick={(e) => e.stopPropagation()}
+                            onMouseDown={(e) => e.stopPropagation()}
+                            onPointerDown={(e) => e.stopPropagation()}
                             style={{
                               width: '100%',
                               padding: '2px 4px',
