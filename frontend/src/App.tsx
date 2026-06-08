@@ -2638,7 +2638,7 @@ function WorkspaceApp({
                       onTouchMove={handleMobileRenameTouchMove}
                       onTouchEnd={(event) => handleMobileRenameTouchEnd(session.id, event)}
                       onTouchCancel={handleMobileRenameTouchCancel}
-                      title={isMobileSidebarOpen ? "长按会话卡片可重命名" : searchQuery.trim() ? "" : "拖放移动调整顺序"}
+                      title={isMobileSidebarOpen ? "长按会话卡片可重命名" : searchQuery.trim() || editingSessionId === session.id ? "" : "拖放移动调整顺序"}
                     >
                       <div
                         className="session-info"
