@@ -191,6 +191,15 @@ IDENTITY_FILE=/root/.ssh/<DATA_SERVER_IP>_ssh.key sh deployment/docker/mount-213
 IDENTITY_FILE=/root/.ssh/<DATA_SERVER_IP>_ssh.key sh deployment/docker/mount-213-runtime.sh
 ```
 
+> 上面两条是一次性手动挂载（重启后会丢失）。生产环境请改用持久化方案，把挂载固化为 systemd 单元并启用开机自启与重启自愈：
+>
+> ```bash
+> REMOTE_HOST=<DATA_SERVER_IP> IDENTITY_FILE=/root/.ssh/<DATA_SERVER_IP>_ssh.key \
+>   sh deployment/docker/setup-sshfs-mounts.sh
+> ```
+>
+> 该脚本生成 `srv-safetyraise-kbase.mount` / `srv-safetyraise-runtime.mount`（开机自启）与 `safetyraise-backend-bindrefresh.service`（开机在挂载就绪后刷新 backend 的 bind mount）。应用服务器重启后挂载会自动恢复，无需人工介入。
+
 5. 让 `212` 能访问 `213:5432`
 6. 执行：
 
