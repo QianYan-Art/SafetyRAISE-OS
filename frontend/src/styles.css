@@ -5897,13 +5897,34 @@ button {
     --report-action-gap: 12px;
   }
 
-  /* Force vertical layout for the workspace */
+  /* Use the dynamic viewport height so mobile browser chrome (URL bar)
+     doesn't push the bottom of the content out of reach. */
+  .app-container {
+    height: 100dvh;
+  }
+
+  /* Force vertical layout for the workspace and make it the single
+     scroll container on mobile. Nested scroll areas (.workspace +
+     .panel-body) fail to engage touch scroll on some phones, so the
+     visible panel flows with its content and the workspace scrolls. */
   .workspace, .workspace-grid {
     display: flex;
     flex-direction: column;
     padding: 16px;
     gap: 16px;
     overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .workspace > .panel {
+    flex: 0 0 auto;
+    overflow: visible;
+  }
+
+  .workspace > .panel > .panel-body {
+    flex: 0 0 auto;
+    overflow: visible;
+    min-height: 0;
   }
 
   /* Make header compact */
