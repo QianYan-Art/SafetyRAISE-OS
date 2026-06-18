@@ -23,7 +23,7 @@ export function normalizeMarkdownForDisplay(source: string): string {
   content = content
     .split("\n")
     .map((line) => {
-      if (/^\s*(```|~~~)/.test(line)) {
+      if (/^\s{0,3}(```|~~~)/.test(line)) {
         inFence = !inFence;
         return line;
       }
