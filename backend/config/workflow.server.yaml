@@ -85,7 +85,7 @@ models:
       - name: "openrouter_qwen_vision"
         priority: 10
         url: "https://openrouter.ai/api/v1/chat/completions"
-        model: "qwen/qwen3.6-plus"
+        model: "qwen/qwen3.7-plus"
         verbosity: "high"
         timeout_seconds: 1800
         reasoning:

@@ -127,7 +127,7 @@ models:
         # 视觉模型接口地址，必须兼容 OpenAI Chat Completions 且支持图像输入。
         url: "https://openrouter.ai/api/v1/chat/completions"
         # 视觉模型名称。
-        model: "qwen/qwen3.6-plus"
+        model: "qwen/qwen3.7-plus"
         verbosity: "high"
         # 单次调用超时时间，单位秒。
         timeout_seconds: 1800
