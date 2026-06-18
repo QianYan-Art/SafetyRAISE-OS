@@ -3631,6 +3631,8 @@ button {
   isolation: isolate;
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  max-width: 100%;
   gap: 16px;
   padding: 20px;
   border-radius: 24px;
@@ -3704,6 +3706,7 @@ button {
   gap: 18px;
   align-items: stretch;
   position: relative;
+  min-width: 0;
   z-index: 1;
 }
 
@@ -3895,6 +3898,7 @@ button {
   flex-direction: column;
   gap: 10px;
   width: 100%;
+  min-width: 0;
   max-width: 392px;
   padding: 16px;
   border-radius: 18px;
@@ -5913,6 +5917,7 @@ button {
     padding: 16px;
     gap: 16px;
     overflow-y: auto;
+    overflow-x: hidden;
     -webkit-overflow-scrolling: touch;
   }
 
