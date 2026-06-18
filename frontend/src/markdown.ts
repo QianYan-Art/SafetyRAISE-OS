@@ -17,6 +17,23 @@ export function normalizeMarkdownForDisplay(source: string): string {
     .replace(SPACED_STRONG_LABEL, "**$1** ")
     .replace(TIGHT_STRONG_LABEL, "**$1** ");
 
+  // 修复模型输出的 ATX 标题缺空格（`#标题` → `# 标题`）。CommonMark 要求 `#` 后必须有空格
+  // 才识别为标题，否则会被当成普通文本、`#` 字面漏出。跳过围栏代码块，避免误伤 shell 注释等。
+  let inFence = false;
+  content = content
+    .split("\n")
+    .map((line) => {
+      if (/^\s*(```|~~~)/.test(line)) {
+        inFence = !inFence;
+        return line;
+      }
+      if (inFence) {
+        return line;
+      }
+      return line.replace(/^(\s{0,3})(#{1,6})(?=[^#\s])/, "$1$2 ");
+    })
+    .join("\n");
+
   const repairedLines = content.split("\n").flatMap((rawLine) => {
     if (rawLine.split("|").length >= 7 && MARKDOWN_TABLE_SEPARATOR.test(rawLine)) {
       return rawLine
