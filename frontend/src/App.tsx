@@ -2925,7 +2925,7 @@ function WorkspaceApp({
                     className="upload-input-hidden"
                     type="file"
                     multiple
-                    accept="image/*,video/*"
+                    accept=".png,.jpg,.jpeg,.webp,.bmp,.gif,.heic,.heif,.mp4,.mov,.avi,.mkv,.webm,.m4v,image/*,video/*"
                     onChange={handleFileChange}
                   />
 
