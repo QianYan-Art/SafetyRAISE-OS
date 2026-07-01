@@ -185,8 +185,8 @@ function normalizeLegacySession(rawSession: Partial<ChatSession> & { id?: string
   };
 }
 
-function buildSessionStorageKey(currentUser: Pick<UserSummary, "id" | "username">): string {
-  return `${SESSION_STORAGE_KEY_PREFIX}:${currentUser.id}:${currentUser.username}`;
+function buildSessionStorageKey(currentUser: Pick<UserSummary, "id">): string {
+  return `${SESSION_STORAGE_KEY_PREFIX}:${currentUser.id}`;
 }
 
 function loadStoredSessions(storageKey: string): ChatSession[] {
@@ -211,16 +211,17 @@ function saveStoredSessions(storageKey: string, sessions: ChatSession[]): void {
   }
 }
 
-export function useChatHistory(currentUser: Pick<UserSummary, "id" | "username">) {
+export function useChatHistory(currentUser: Pick<UserSummary, "id">) {
   const storageKey = useMemo(
     () => buildSessionStorageKey(currentUser),
-    [currentUser.id, currentUser.username],
+    [currentUser.id],
   );
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
   const syncTimersRef = useRef<Map<string, number>>(new Map());
+  const saveTimerRef = useRef<number | null>(null);
   const mountedRef = useRef(true);
   const sessionsRef = useRef<ChatSession[]>([]);
 
@@ -338,6 +339,10 @@ export function useChatHistory(currentUser: Pick<UserSummary, "id" | "username">
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      if (saveTimerRef.current !== null) {
+        window.clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
       for (const timerId of syncTimersRef.current.values()) {
         window.clearTimeout(timerId);
       }
@@ -349,7 +354,19 @@ export function useChatHistory(currentUser: Pick<UserSummary, "id" | "username">
     if (!isLoaded) {
       return;
     }
-    saveStoredSessions(storageKey, sessions);
+    if (saveTimerRef.current !== null) {
+      window.clearTimeout(saveTimerRef.current);
+    }
+    saveTimerRef.current = window.setTimeout(() => {
+      saveStoredSessions(storageKey, sessions);
+      saveTimerRef.current = null;
+    }, SYNC_DEBOUNCE_MS);
+    return () => {
+      if (saveTimerRef.current !== null) {
+        window.clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
+    };
   }, [isLoaded, sessions, storageKey]);
 
   const persistSessionOnPagehide = useCallback((sessionId: string) => {
@@ -373,6 +390,10 @@ export function useChatHistory(currentUser: Pick<UserSummary, "id" | "username">
 
   useEffect(() => {
     let cancelled = false;
+    if (saveTimerRef.current !== null) {
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
     setSessions([]);
     sessionsRef.current = [];
     setActiveSessionId(null);
