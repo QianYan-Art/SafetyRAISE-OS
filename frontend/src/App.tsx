@@ -625,6 +625,7 @@ export default function App() {
 
   return (
     <WorkspaceApp
+      key={currentUser.id}
       currentUser={currentUser}
       themeMode={themeMode}
       onThemeModeChange={setThemeMode}
@@ -662,7 +663,7 @@ function WorkspaceApp({
     persistSessionOnPagehide,
     persistPendingSessionsOnPagehide,
     deleteSession,
-  } = useChatHistory();
+  } = useChatHistory(currentUser);
 
   const [pendingUploadGroups, setPendingUploadGroups] = useState<PendingUploadGroupState[]>(
     () => createInitialPendingUploadGroups(),

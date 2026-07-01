@@ -148,7 +148,7 @@ export function UserModelConfigDrawer(props: UserModelConfigDrawerProps) {
             <p>
               {isAdmin
                 ? "管理员：这里保存的三能力配置就是系统测试时默认使用的端点。专家小模型由系统固定，不可设置。"
-                : "视觉与报告模型必须填写；嵌入留空则沿用管理员配置。仅支持标准 OpenAI 兼容接口，密钥仅存于你的账号。"}
+                : "视觉与报告模型必须填写；嵌入留空则沿用管理员配置。专家小模型由系统统一配置，不可单独设置。仅支持标准 OpenAI 兼容接口，密钥仅存于你的账号。"}
             </p>
           </div>
           <button type="button" className="btn-icon drawer-close-btn" onClick={onClose} aria-label="关闭抽屉">

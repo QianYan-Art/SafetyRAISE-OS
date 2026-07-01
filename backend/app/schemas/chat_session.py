@@ -51,8 +51,6 @@ class ChatSessionRecord(BaseModel):
 class CreateChatSessionRequest(StrictModel):
     id: Optional[str] = None
     title: str = "新交通事故"
-    owner_user_id: Optional[str] = None
-    owner_username: Optional[str] = None
     created_at: Optional[int] = None
     updated_at: Optional[int] = None
     sort_order: Optional[int] = None
@@ -66,8 +64,6 @@ class CreateChatSessionRequest(StrictModel):
 
 class UpdateChatSessionRequest(StrictModel):
     title: Optional[str] = None
-    owner_user_id: Optional[str] = None
-    owner_username: Optional[str] = None
     updated_at: Optional[int] = None
     sort_order: Optional[int] = None
     source_type: Optional[str] = None

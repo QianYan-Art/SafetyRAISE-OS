@@ -18,6 +18,7 @@ import type {
   ChatSessionUpsertPayload,
   GenerateInputFromUploadResponse,
   GenerateReportResponse,
+  UserSummary,
 } from "./types";
 
 export interface ChatSession {
@@ -45,7 +46,7 @@ type SessionUpdate =
 const KNOWLEDGE_MESSAGE_PREFIX = "### 首轮知识库片段（节选）";
 const AGENTIC_MESSAGE_PREFIX = "### Agentic RAG 新增片段（节选）";
 
-const STORAGE_KEY = "traffic_accident_chat_sessions";
+const SESSION_STORAGE_KEY_PREFIX = "traffic_accident_chat_sessions";
 const SYNC_DEBOUNCE_MS = 300;
 
 function sortSessions(sessions: ChatSession[]): ChatSession[] {
@@ -184,51 +185,43 @@ function normalizeLegacySession(rawSession: Partial<ChatSession> & { id?: string
   };
 }
 
-function loadLegacySessions(): ChatSession[] {
+function buildSessionStorageKey(currentUser: Pick<UserSummary, "id">): string {
+  return `${SESSION_STORAGE_KEY_PREFIX}:${currentUser.id}`;
+}
+
+function loadStoredSessions(storageKey: string): ChatSession[] {
   try {
-    const stored = localStorage.getItem(STORAGE_KEY);
+    const stored = localStorage.getItem(storageKey);
     if (!stored) {
       return [];
     }
     const parsed = JSON.parse(stored) as Array<Partial<ChatSession> & { id?: string }>;
     return sortSessions(parsed.map(normalizeLegacySession).filter(Boolean) as ChatSession[]);
   } catch (error) {
-    console.error("读取旧版本地会话失败", error);
+    console.error("读取本地会话缓存失败", error);
     return [];
   }
 }
 
-async function migrateLegacySessions(): Promise<ChatSession[]> {
-  const legacySessions = loadLegacySessions();
-  if (legacySessions.length === 0) {
-    return [];
-  }
-
-  const migrated: ChatSession[] = [];
-  for (const session of legacySessions) {
-    try {
-      const created = await createChatSession(buildChatSessionPayload(session, true));
-      migrated.push(mapApiSession(created));
-    } catch (error) {
-      console.error("迁移旧版本地会话失败", error);
-      migrated.push(session);
-    }
-  }
-
+function saveStoredSessions(storageKey: string, sessions: ChatSession[]): void {
   try {
-    localStorage.removeItem(STORAGE_KEY);
+    localStorage.setItem(storageKey, JSON.stringify(sessions));
   } catch (error) {
-    console.error("清理旧版本地会话失败", error);
+    console.error("写入本地会话缓存失败", error);
   }
-  return sortSessions(migrated);
 }
 
-export function useChatHistory() {
+export function useChatHistory(currentUser: Pick<UserSummary, "id">) {
+  const storageKey = useMemo(
+    () => buildSessionStorageKey(currentUser),
+    [currentUser.id],
+  );
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
   const syncTimersRef = useRef<Map<string, number>>(new Map());
+  const saveTimerRef = useRef<number | null>(null);
   const mountedRef = useRef(true);
   const sessionsRef = useRef<ChatSession[]>([]);
 
@@ -346,12 +339,36 @@ export function useChatHistory() {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      if (saveTimerRef.current !== null) {
+        window.clearTimeout(saveTimerRef.current);
+        saveStoredSessions(storageKey, sessionsRef.current);
+        saveTimerRef.current = null;
+      }
       for (const timerId of syncTimersRef.current.values()) {
         window.clearTimeout(timerId);
       }
       syncTimersRef.current.clear();
     };
-  }, []);
+  }, [storageKey]);
+
+  useEffect(() => {
+    if (!isLoaded) {
+      return;
+    }
+    if (saveTimerRef.current !== null) {
+      window.clearTimeout(saveTimerRef.current);
+    }
+    saveTimerRef.current = window.setTimeout(() => {
+      saveStoredSessions(storageKey, sessions);
+      saveTimerRef.current = null;
+    }, SYNC_DEBOUNCE_MS);
+    return () => {
+      if (saveTimerRef.current !== null) {
+        window.clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
+    };
+  }, [isLoaded, sessions, storageKey]);
 
   const persistSessionOnPagehide = useCallback((sessionId: string) => {
     const session = sessionsRef.current.find((item) => item.id === sessionId);
@@ -374,6 +391,20 @@ export function useChatHistory() {
 
   useEffect(() => {
     let cancelled = false;
+    if (saveTimerRef.current !== null) {
+      window.clearTimeout(saveTimerRef.current);
+      saveStoredSessions(storageKey, sessionsRef.current);
+      saveTimerRef.current = null;
+    }
+    setSessions([]);
+    sessionsRef.current = [];
+    setActiveSessionId(null);
+    setIsLoaded(false);
+    setSyncError(null);
+    for (const timerId of syncTimersRef.current.values()) {
+      window.clearTimeout(timerId);
+    }
+    syncTimersRef.current.clear();
 
     async function loadSessions() {
       try {
@@ -387,12 +418,9 @@ export function useChatHistory() {
           setSessions(nextSessions);
           setSyncError(null);
         } else {
-          const migrated = await migrateLegacySessions();
-          if (cancelled) {
-            return;
-          }
-          sessionsRef.current = migrated;
-          setSessions(migrated);
+          const storedSessions = loadStoredSessions(storageKey);
+          sessionsRef.current = storedSessions;
+          setSessions(storedSessions);
         }
       } catch (error) {
         if (cancelled) {
@@ -400,9 +428,9 @@ export function useChatHistory() {
         }
         console.error("加载会话失败", error);
         setSyncError(formatApiErrorMessage(error, "加载会话失败。"));
-        const legacySessions = loadLegacySessions();
-        sessionsRef.current = legacySessions;
-        setSessions(legacySessions);
+        const storedSessions = loadStoredSessions(storageKey);
+        sessionsRef.current = storedSessions;
+        setSessions(storedSessions);
       } finally {
         if (!cancelled) {
           setIsLoaded(true);
@@ -414,7 +442,7 @@ export function useChatHistory() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [storageKey]);
 
   useEffect(() => {
     if (sessions.length === 0) {
