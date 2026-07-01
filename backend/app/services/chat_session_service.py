@@ -91,7 +91,8 @@ class ChatSessionService:
                                created_at, updated_at, sort_order, source_type, source_name,
                                messages, draft_json, draft_meta, report_result, session_state
                         from chat_sessions
-                        where owner_user_id = %s or owner_username = %s
+                        where owner_user_id = %s
+                           or (owner_user_id is null and owner_username = %s)
                         """,
                         (self.current_user.id, self.current_user.username),
                     )
@@ -133,8 +134,8 @@ class ChatSessionService:
             record = ChatSessionRecord(
                 id=session_id,
                 title=request.title,
-                owner_user_id=request.owner_user_id or getattr(self.current_user, "id", None),
-                owner_username=request.owner_username or getattr(self.current_user, "username", None),
+                owner_user_id=getattr(self.current_user, "id", None),
+                owner_username=getattr(self.current_user, "username", None),
                 created_at=timestamp,
                 updated_at=request.updated_at or timestamp,
                 sort_order=request.sort_order,
@@ -159,6 +160,8 @@ class ChatSessionService:
             updates = request.model_dump(exclude_unset=True)
             merged_payload = current.model_dump()
             merged_payload.update(updates)
+            merged_payload["owner_user_id"] = current.owner_user_id
+            merged_payload["owner_username"] = current.owner_username
             merged_payload["updated_at"] = updates.get("updated_at", self._now_ms())
             merged = ChatSessionRecord.model_validate(merged_payload)
             merged = self._sync_draft_artifacts(merged)
@@ -275,7 +278,9 @@ class ChatSessionService:
             return True
         owner_user_id = str(record.owner_user_id or "").strip()
         owner_username = str(record.owner_username or "").strip()
-        return owner_user_id == self.current_user.id or owner_username == self.current_user.username
+        if owner_user_id:
+            return owner_user_id == self.current_user.id
+        return owner_username == self.current_user.username
 
     def _collect_linked_files(self, record: ChatSessionRecord) -> list[ChatSessionLinkedFile]:
         collected: list[ChatSessionLinkedFile] = []
