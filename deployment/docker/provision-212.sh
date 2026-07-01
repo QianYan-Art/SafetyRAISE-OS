@@ -28,6 +28,18 @@ else
   exit 1
 fi
 
+mkdir -p /etc/docker
+cat > /etc/docker/daemon.json <<'EOF'
+{
+  "live-restore": true,
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "20m",
+    "max-file": "5"
+  }
+}
+EOF
+
 systemctl enable --now docker
 
 mkdir -p \
@@ -39,4 +51,4 @@ mkdir -p \
   /srv/safetyraise/models \
   /srv/safetyraise/huggingface
 
-echo "212 基础环境已准备完成：docker / ${COMPOSE_LABEL} / sshfs / 目录骨架。"
+echo "212 基础环境已准备完成：docker / ${COMPOSE_LABEL} / sshfs / 目录骨架 / Docker 日志上限。"

@@ -178,6 +178,7 @@ sh deployment/docker/provision-212.sh
 2. 当前脚本已经兼容两种形式：
    - 有 plugin 时用 `docker compose`
    - 没 plugin 时回退到 `docker-compose`
+3. 当前脚本还会预写 `/etc/docker/daemon.json`，把宿主机默认 Docker 日志限制为 `json-file + 20m * 5`
 
 2. 把仓库放到 `212`，准备 `.env.server`
 3. 在 `213` 准备 PostgreSQL、知识库目录与运行时目录
@@ -227,6 +228,8 @@ sh deployment/docker/setup-https.sh
 2. HTTPS 脚本不会再 `source` 整份 `.env.server`；它们只按 key 读取 `LETSENCRYPT_*` / `FRONTEND_*` 字段，避免被中文显示名等业务配置污染
 3. 在证书真正申请成功前，至少要先让 `/srv/safetyraise/nginx/default.conf` 生效
 4. 如果直接用 `127.0.0.1` 或公网 IP 访问，没有带正式域名 `Host`，默认站点会返回 `444`
+5. 当前 `frontend / backend` 的 Docker 日志已经在 compose 里显式限制为 `json-file + 20m * 5`
+6. `setup-https.sh` 还会同步写入 `/etc/logrotate.d/safetyraise-cert-renew`，避免续期日志无限增长
 
 ## Nginx / HTTPS 相关脚本
 
@@ -250,6 +253,7 @@ sh deployment/docker/setup-https.sh
 5. 写入自动续期 cron
 6. frontend 容器定位按 compose service label，不再依赖旧容器名
 7. 不再 `source .env.server`，避免 `BOOTSTRAP_ADMIN_DISPLAY_NAME=SafetyRAISE 管理员` 这类配置把 shell 脚本打断
+8. 同步写入 `/etc/logrotate.d/safetyraise-cert-renew`，把续期日志限制为 `daily + rotate 14`
 
 ### `renew-https.sh`
 

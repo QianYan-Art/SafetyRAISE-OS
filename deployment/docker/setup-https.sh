@@ -31,6 +31,7 @@ NGINX_HOST_PATH=$(read_env_value "FRONTEND_NGINX_HOST_PATH" "/srv/safetyraise/ng
 LETSENCRYPT_CONF=$(read_env_value "LETSENCRYPT_CONF_HOST_PATH" "/srv/safetyraise/letsencrypt/conf")
 LETSENCRYPT_WWW=$(read_env_value "LETSENCRYPT_WWW_HOST_PATH" "/srv/safetyraise/letsencrypt/www")
 CRON_FILE=/etc/cron.d/safetyraise-cert-renew
+LOGROTATE_FILE=/etc/logrotate.d/safetyraise-cert-renew
 FRONTEND_WAIT_ATTEMPTS=$(read_env_value "FRONTEND_WAIT_ATTEMPTS" "30")
 FRONTEND_WAIT_SECONDS=$(read_env_value "FRONTEND_WAIT_SECONDS" "1")
 DOMAINS_SPACE=$(printf '%s' "$DOMAINS_CSV" | tr ',' ' ' | xargs)
@@ -129,8 +130,22 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 EOF
 chmod 644 "$CRON_FILE"
 
+cat > "$LOGROTATE_FILE" <<'EOF'
+/var/log/safetyraise-cert-renew.log {
+    daily
+    rotate 14
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+    create 0640 root adm
+}
+EOF
+chmod 644 "$LOGROTATE_FILE"
+
 if command -v systemctl >/dev/null 2>&1; then
   systemctl enable --now cron >/dev/null 2>&1 || true
 fi
 
-echo "HTTPS 已启用，自动续期任务已写入 $CRON_FILE。"
+echo "HTTPS 已启用，自动续期任务已写入 $CRON_FILE，日志轮转规则已写入 $LOGROTATE_FILE。"
