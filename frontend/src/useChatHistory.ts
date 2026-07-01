@@ -341,6 +341,7 @@ export function useChatHistory(currentUser: Pick<UserSummary, "id">) {
       mountedRef.current = false;
       if (saveTimerRef.current !== null) {
         window.clearTimeout(saveTimerRef.current);
+        saveStoredSessions(storageKey, sessionsRef.current);
         saveTimerRef.current = null;
       }
       for (const timerId of syncTimersRef.current.values()) {
@@ -348,7 +349,7 @@ export function useChatHistory(currentUser: Pick<UserSummary, "id">) {
       }
       syncTimersRef.current.clear();
     };
-  }, []);
+  }, [storageKey]);
 
   useEffect(() => {
     if (!isLoaded) {
@@ -392,6 +393,7 @@ export function useChatHistory(currentUser: Pick<UserSummary, "id">) {
     let cancelled = false;
     if (saveTimerRef.current !== null) {
       window.clearTimeout(saveTimerRef.current);
+      saveStoredSessions(storageKey, sessionsRef.current);
       saveTimerRef.current = null;
     }
     setSessions([]);
