@@ -37,6 +37,7 @@ class DatabaseService:
                     conninfo=key,
                     min_size=self.settings.database.min_pool_size,
                     max_size=self.settings.database.max_pool_size,
+                    check=ConnectionPool.check_connection,
                     kwargs={
                         "connect_timeout": self.settings.database.connect_timeout_seconds,
                     },
