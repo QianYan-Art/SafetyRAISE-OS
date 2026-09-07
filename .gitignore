@@ -33,6 +33,8 @@ frontend/vite.config.d.ts
 # ---- Local tooling / agent state ----
 .serena/
 .mission/
+.doc-maintenance/
+kbase/
 deployment/dist/
 
 # ---- Snapshots / archives ----
