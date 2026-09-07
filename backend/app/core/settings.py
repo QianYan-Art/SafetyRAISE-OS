@@ -199,7 +199,7 @@ class ReportRetrySettings(BaseModel):
 
 
 class ReasoningSettings(BaseModel):
-    effort: Optional[Literal["none", "minimal", "low", "medium", "high", "xhigh"]] = None
+    effort: Optional[Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]] = None
     max_tokens: Optional[int] = Field(default=None, ge=1)
     enabled: Optional[bool] = None
     exclude: Optional[bool] = None
@@ -224,7 +224,7 @@ class ReportEndpointSettings(BaseModel):
     temperature: Optional[float] = Field(default=None, ge=0, le=2)
     lmstudio_ttl_seconds: Optional[int] = Field(default=None, ge=1)
     verbosity: Optional[Literal["low", "medium", "high"]] = None
-    reasoning_effort: Optional[Literal["none", "minimal", "low", "medium", "high", "xhigh"]] = None
+    reasoning_effort: Optional[Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]] = None
     reasoning: Optional[ReasoningSettings] = None
     extra_body: dict[str, Any] = Field(default_factory=dict)
 
