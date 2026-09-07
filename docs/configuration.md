@@ -58,7 +58,7 @@ base_url: "${RETRIEVAL_EMBEDDING_BASE_URL:-http://127.0.0.1:1234/v1}"
 
 ## 报告模型说明
 
-报告生成端点已收敛为**单一端点**（默认 `openrouter_deepseek_v4_pro` → `deepseek/deepseek-v4-pro`）。`max/pro/lite` 档位与 `selector_label` 已下线。
+报告生成端点已收敛为**单一端点**（默认端点名 `openrouter_deepseek_v4_pro`，当前模型 `tencent/hy4-preview`；端点名为历史保留，与具体模型无关）。`max/pro/lite` 档位与 `selector_label` 已下线。
 
 - 系统默认报告端点 = `report_external.endpoints` 中按 `priority` 排在首位的端点。
 - 视觉 / 嵌入重排 / 报告模型按「每用户能力配置」（`user_capability_configs`）解析：用户在前端「模型接入设置」里填 `url + key + model`，留空时仅嵌入回退系统默认，视觉/报告必须由普通用户自行填写（管理员留空则用系统默认，便于测试）。
@@ -152,7 +152,7 @@ local_jsonl
 
 1. 如果更换 embedding 模型，必须重建 dense 索引文件。
 2. `fallback_mock_on_error` 适合本地调试，不适合严肃部署场景。
-3. `agentic.max_rounds` 越大，报告模型自主补检索的成本越高。
+3. `agentic.max_rounds` 越大，报告模型自主补检索的成本越高（服务器默认 3 轮、`max_total_snippets` 12；知识库较小时可下调）。
 
 ## 上传限制
 

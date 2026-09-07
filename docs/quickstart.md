@@ -113,7 +113,7 @@ kbase/data/dense_vectors.f16.npy
      provider: "local_jsonl"
    ```
 
-`local_jsonl` 只依赖上述三件套，不需要 `search_index.json`、Embedding 服务和 Dense 索引。验证基础检索通过后，再准备 Dense 索引并切回默认的 `hybrid_local`。
+`local_jsonl` 只依赖上述三件套，不需要 `search_index.json`、Embedding 服务和 Dense 索引。`search_index.json` 支持两种倒排表格式：完整版每条 posting 携带 `title` 与 `source_id`，精简版则为 `[id, tf]` 数组并配一张 `doc_meta` 映射；两者检索结果一致，精简版可把索引体积与常驻内存降到约五分之一，适合内存受限的部署机。验证基础检索通过后，再准备 Dense 索引并切回默认的 `hybrid_local`。
 
 ## 准备 YOLO 与视频依赖
 
@@ -144,7 +144,7 @@ ffprobe
 默认示例里：
 
 1. 专家模型走 OpenAI 兼容地址（如 LM Studio / vLLM 暴露的 `/v1`）
-2. 报告模型走兼容 OpenAI 的远端端点（单一端点，默认 `deepseek/deepseek-v4-pro`）
+2. 报告模型走兼容 OpenAI 的远端端点（单一端点，默认 `tencent/hy4-preview`）
 3. 视觉 / 嵌入端点同为 OpenAI 兼容
 4. 用户在前端只需把地址填到 `/v1`，系统自动补全 `/chat/completions`（报告/视觉）或 `/embeddings`（嵌入）
 

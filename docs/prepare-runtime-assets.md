@@ -73,8 +73,8 @@ models/yolo11n.pt
 默认值：
 
 ```text
-RETRIEVAL_EMBEDDING_MODEL=text-embedding-qwen3-embedding-0.6b
-RETRIEVAL_EMBEDDING_BASE_URL=http://127.0.0.1:1234/v1
+RETRIEVAL_EMBEDDING_MODEL=qwen/qwen3-embedding-8b
+RETRIEVAL_EMBEDDING_BASE_URL=https://openrouter.ai/api/v1
 ```
 
 推荐模型来源：
@@ -146,7 +146,7 @@ POST /rerank
 
 | 默认端点名 | 默认模型 | 主要配置位置 |
 | --- | --- | --- |
-| `openrouter_deepseek_v4_pro` | `deepseek/deepseek-v4-pro` | `models.report_external.endpoints[openrouter_deepseek_v4_pro]` |
+| `openrouter_deepseek_v4_pro` | `tencent/hy4-preview` | `models.report_external.endpoints[openrouter_deepseek_v4_pro]` |
 
 程序约束：
 
@@ -265,8 +265,8 @@ python backend/app/tools/build_dense_index.py \
   --rules examples/kbase/minimal/liability_rules.jsonl \
   --output-dir C:\tmp\dense_build \
   --embedding-base-url https://<MODEL_API_HOST>/v1 \
-  --embedding-model text-embedding-qwen3-embedding-0.6b \
-  --api-key-env QIANYAN_API_KEY
+  --embedding-model qwen/qwen3-embedding-8b \
+  --api-key-env OPENROUTER_API_KEY
 ```
 
 说明：
