@@ -59,6 +59,7 @@ class LocalJsonlRetriever(BaseRetriever):
         self._synonym_map: dict[str, set[str]] = {}
         self._chunk_inverted_index: dict[str, list[dict[str, Any]]] = {}
         self._rule_inverted_index: dict[str, list[dict[str, Any]]] = {}
+        self._doc_meta: dict[str, dict[str, Any]] = {}
         self._topic_entries: list[dict[str, Any]] = []
         self._case_to_rules: dict[str, list[str]] = {}
         self._chunk_rust_payload_by_id: dict[str, dict[str, Any]] = {}
@@ -174,6 +175,7 @@ class LocalJsonlRetriever(BaseRetriever):
             "synonym_map": self._synonym_map,
             "chunk_inverted_index": self._chunk_inverted_index,
             "rule_inverted_index": self._rule_inverted_index,
+            "doc_meta": self._doc_meta,
             "topic_entries": self._topic_entries,
             "case_to_rules": self._case_to_rules,
             "chunk_rust_payload_by_id": self._chunk_rust_payload_by_id,
@@ -202,6 +204,7 @@ class LocalJsonlRetriever(BaseRetriever):
         self._synonym_map = cached_payload["synonym_map"]
         self._chunk_inverted_index = cached_payload["chunk_inverted_index"]
         self._rule_inverted_index = cached_payload["rule_inverted_index"]
+        self._doc_meta = cached_payload.get("doc_meta", {})
         self._topic_entries = cached_payload["topic_entries"]
         self._case_to_rules = cached_payload["case_to_rules"]
         self._chunk_rust_payload_by_id = cached_payload["chunk_rust_payload_by_id"]
@@ -265,6 +268,7 @@ class LocalJsonlRetriever(BaseRetriever):
         self._synonym_map = {}
         self._chunk_inverted_index = {}
         self._rule_inverted_index = {}
+        self._doc_meta = {}
         self._topic_entries = []
         self._case_to_rules = {}
         self.metadata.pop("search_index_error", None)
@@ -290,6 +294,8 @@ class LocalJsonlRetriever(BaseRetriever):
         indexes = payload.get("indexes", {})
         self._chunk_inverted_index = indexes.get("chunk_inverted", {}) if isinstance(indexes, dict) else {}
         self._rule_inverted_index = indexes.get("rule_inverted", {}) if isinstance(indexes, dict) else {}
+        _dm = payload.get("doc_meta")
+        self._doc_meta = _dm if isinstance(_dm, dict) else {}
         self._synonym_map = self._build_synonym_map(payload.get("synonyms", {}))
         self._topic_entries = self._build_topic_entries(self._topic_index)
         case_to_rules = self._relation_index.get("case_to_rules", {})
@@ -528,13 +534,20 @@ class LocalJsonlRetriever(BaseRetriever):
 
         for token in query_tokens:
             for item in inverted.get(token, []):
-                record_id = str(item.get("id", ""))
+                if isinstance(item, (list, tuple)):
+                    record_id = str(item[0]) if item else ""
+                    tf_value = item[1] if len(item) > 1 else 1
+                    title_raw = self._doc_meta.get(record_id, {}).get("title", "")
+                else:
+                    record_id = str(item.get("id", ""))
+                    tf_value = item.get("tf", 1)
+                    title_raw = item.get("title") or self._doc_meta.get(record_id, {}).get("title", "")
                 if not record_id:
                     continue
                 state = states.setdefault(record_id, self._new_score_state())
                 state["match_tokens"].add(token)
-                state["tf_sum"] += math.log1p(float(item.get("tf", 1) or 1))
-                title = str(item.get("title", "")).lower()
+                state["tf_sum"] += math.log1p(float(tf_value or 1))
+                title = str(title_raw).lower()
                 if token in title:
                     state["title_hits"] += 1
 
