@@ -122,7 +122,7 @@ models:
     max_tokens: 128000
     # 视觉端点列表，当前通常配置一个即可。
     endpoints:
-      - name: "openrouter_qwen_vision"
+      - name: "openrouter_vision"
         priority: 10
         # 视觉模型接口地址，必须兼容 OpenAI Chat Completions 且支持图像输入。
         url: "https://openrouter.ai/api/v1/chat/completions"
