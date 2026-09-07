@@ -67,8 +67,7 @@ models:
           _type: "openrouter_channel_conn"
           url: "https://openrouter.ai"
         url: "https://openrouter.ai/api/v1/chat/completions"
-        model: "deepseek/deepseek-v4-pro"
-        verbosity: "high"
+        model: "tencent/hy4-preview"
         timeout_seconds: 1800
         reasoning:
           effort: "high"
@@ -85,12 +84,10 @@ models:
       - name: "openrouter_qwen_vision"
         priority: 10
         url: "https://openrouter.ai/api/v1/chat/completions"
-        model: "qwen/qwen3.7-plus"
-        verbosity: "high"
+        model: "openai/gpt-5.6-luna"
         timeout_seconds: 1800
         reasoning:
-          enabled: true
-          max_tokens: 32768
+          effort: "max"
         api_key_env: "OPENROUTER_API_KEY"
 
     retry:
@@ -99,12 +96,12 @@ models:
 
   retrieval_embedding:
     provider: "openai_compatible"
-    model: "${RETRIEVAL_EMBEDDING_MODEL:-text-embedding-qwen3-embedding-0.6b}"
-    base_url: "${RETRIEVAL_EMBEDDING_BASE_URL:-http://host.docker.internal:1234/v1}"
-    api_key_env: "${RETRIEVAL_EMBEDDING_API_KEY_ENV:-}"
+    model: "${RETRIEVAL_EMBEDDING_MODEL:-qwen/qwen3-embedding-8b}"
+    base_url: "${RETRIEVAL_EMBEDDING_BASE_URL:-https://openrouter.ai/api/v1}"
+    api_key_env: "${RETRIEVAL_EMBEDDING_API_KEY_ENV:-OPENROUTER_API_KEY}"
     timeout_seconds: 120
     lmstudio_ttl_seconds: 1800
-    dimensions: 1024
+    dimensions: 4096
     query_instruction: "Given a Chinese traffic accident analysis query, retrieve statutory rules, liability rules, traffic-control passages, and scenario guidance that support factual analysis and responsibility determination."
     query_max_length: 512
     document_max_length: 2048
@@ -221,9 +218,9 @@ retrieval:
 
   agentic:
     enabled: true
-    max_rounds: 2
+    max_rounds: 3
     top_k_per_round: 3
-    max_total_snippets: 9
+    max_total_snippets: 12
     max_query_chars: 120
 
 workflow:
