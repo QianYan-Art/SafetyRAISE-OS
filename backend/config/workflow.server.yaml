@@ -60,7 +60,7 @@ models:
   report_external:
     provider: "raise"
     endpoints:
-      - name: "openrouter_deepseek_v4_pro"
+      - name: "openrouter_primary"
         priority: 10
         api_key_env: "OPENROUTER_API_KEY"
         connection:

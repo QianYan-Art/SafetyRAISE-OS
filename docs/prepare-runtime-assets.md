@@ -146,7 +146,7 @@ POST /rerank
 
 | 默认端点名 | 默认模型 | 主要配置位置 |
 | --- | --- | --- |
-| `openrouter_deepseek_v4_pro` | `tencent/hy4-preview` | `models.report_external.endpoints[openrouter_deepseek_v4_pro]` |
+| `openrouter_primary` | `tencent/hy4-preview` | `models.report_external.endpoints[openrouter_primary]` |
 
 程序约束：
 

@@ -58,7 +58,7 @@ base_url: "${RETRIEVAL_EMBEDDING_BASE_URL:-http://127.0.0.1:1234/v1}"
 
 ## 报告模型说明
 
-报告生成端点已收敛为**单一端点**（默认端点名 `openrouter_deepseek_v4_pro`，当前模型 `tencent/hy4-preview`；端点名为历史保留，与具体模型无关）。`max/pro/lite` 档位与 `selector_label` 已下线。
+报告生成端点已收敛为**单一端点**（默认端点名 `openrouter_primary`，当前模型 `tencent/hy4-preview`）。`max/pro/lite` 档位与 `selector_label` 已下线。
 
 - 系统默认报告端点 = `report_external.endpoints` 中按 `priority` 排在首位的端点。
 - 视觉 / 嵌入重排 / 报告模型按「每用户能力配置」（`user_capability_configs`）解析：用户在前端「模型接入设置」里填 `url + key + model`，留空时仅嵌入回退系统默认，视觉/报告必须由普通用户自行填写（管理员留空则用系统默认，便于测试）。
@@ -91,7 +91,7 @@ base_url: "${RETRIEVAL_EMBEDDING_BASE_URL:-http://127.0.0.1:1234/v1}"
 
 说明：
 
-1. `OPENROUTER_API_KEY` 默认同时服务于单一报告端点（`openrouter_deepseek_v4_pro`）与视觉模型端点
+1. `OPENROUTER_API_KEY` 默认同时服务于单一报告端点（`openrouter_primary`）与视觉模型端点
 2. 报告端点已收敛为单一端点，旧的 `max / pro / lite` 档位及 `DUCKCODING_API_KEY` / `LITE_MODEL_*` 多档位变量均已移除
 3. 用户在前端自填 `url + key + model` 时只需填到 `/v1`，系统自动补全 `/chat/completions`（报告/视觉）或 `/embeddings`（嵌入）
 

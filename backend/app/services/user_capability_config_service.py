@@ -185,7 +185,7 @@ class UserCapabilityConfigService:
             conn.commit()
 
     def _build_report_seed(self) -> dict[str, Any] | None:
-        endpoint = self._find_deepseek_pro_endpoint()
+        endpoint = self._find_default_report_endpoint()
         if endpoint is None:
             return None
         report_external = self.settings.models.report_external
@@ -230,14 +230,12 @@ class UserCapabilityConfigService:
             "params": {},
         }
 
-    def _find_deepseek_pro_endpoint(self):
+    def _find_default_report_endpoint(self):
+        """取系统默认报告端点：按 priority 排序后的首个，与 ReportService 口径一致。"""
         try:
-            endpoints = self.settings.models.report_external.endpoints
+            endpoints = self.settings.models.report_external.iter_endpoints_by_priority()
         except AttributeError:
             return None
-        for endpoint in endpoints:
-            if str(endpoint.model or "").strip().lower() == "deepseek/deepseek-v4-pro":
-                return endpoint
         return endpoints[0] if endpoints else None
 
     # ---- 内部 ----

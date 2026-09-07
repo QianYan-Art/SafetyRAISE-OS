@@ -90,9 +90,9 @@ models:
     # 当前后端实际按 OpenAI Compatible 接口调用，这个字段主要用于配置语义，不建议随意改动。
     provider: "raise"
     # 报告模型端点列表。
-    # 当前仅保留唯一的 deepseek/deepseek-v4-pro 端点。
+    # 当前仅保留唯一端点，实际模型以下方 model 字段为准。
     endpoints:
-      - name: "openrouter_deepseek_v4_pro"
+      - name: "openrouter_primary"
         priority: 10
         connection:
           _type: "openrouter_channel_conn"
