@@ -108,6 +108,24 @@ const ArrowLeftIcon = () => (
   </svg>
 );
 
+const UsersTabIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M15 20v-1.6a3.8 3.8 0 0 0-3.8-3.8H6.8A3.8 3.8 0 0 0 3 18.4V20" />
+    <circle cx="9" cy="7.2" r="3.4" />
+    <path d="M21 20v-1.6a3.8 3.8 0 0 0-2.9-3.7" />
+    <path d="M15.6 4.2a3.4 3.4 0 0 1 0 6.1" />
+  </svg>
+);
+
+const SpacesTabIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <rect x="3" y="3.6" width="8" height="7.2" rx="2" />
+    <rect x="13" y="3.6" width="8" height="7.2" rx="2" />
+    <rect x="3" y="13.2" width="8" height="7.2" rx="2" />
+    <rect x="13" y="13.2" width="8" height="7.2" rx="2" />
+  </svg>
+);
+
 const DragHandleIcon = () => (
   <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
     <circle cx="5" cy="4" r="1.2" />
@@ -2017,24 +2035,31 @@ function WorkspaceApp({
           type="button"
           className="admin-header-back-btn"
           onClick={() => setAppView("workspace")}
+          title="返回主界面"
+          aria-label="返回主界面"
         >
           <ArrowLeftIcon />
-          <span>返回主界面</span>
         </button>
         <div className="admin-header-tabs" role="tablist" aria-label="管理控制台标签">
           <button
             type="button"
+            role="tab"
+            aria-selected={adminTab === "users"}
             className={`admin-header-tab ${adminTab === "users" ? "is-active" : ""}`}
             onClick={() => setAdminTab("users")}
           >
-            用户管理
+            <UsersTabIcon />
+            <span>用户管理</span>
           </button>
           <button
             type="button"
+            role="tab"
+            aria-selected={adminTab === "spaces"}
             className={`admin-header-tab ${adminTab === "spaces" ? "is-active" : ""}`}
             onClick={() => setAdminTab("spaces")}
           >
-            空间管理
+            <SpacesTabIcon />
+            <span>空间管理</span>
           </button>
         </div>
       </div>
