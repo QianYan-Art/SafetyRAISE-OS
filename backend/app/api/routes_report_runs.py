@@ -20,7 +20,7 @@ from app.report_harness.config import ReportHarnessSettings
 from app.report_harness.contracts import canonical_digest
 from app.report_harness.execution import ReportExecutionDependencies, production_dependencies
 from app.report_harness.store import RunStore
-from app.schemas.report_run import CreateRunRequest, ExecuteRunRequest
+from app.schemas.report_run import CreateRunRequest, ExecuteRunRequest, ResumeRunRequest
 from app.services.auth_service import AuthenticatedUser
 from app.services.report_run_service import ReportRunService
 
@@ -178,7 +178,22 @@ async def execute_run(run_id: UUID, payload: ExecuteRunRequest,
                       service: ReportRunService = Depends(get_report_run_service)):
     identifier = str(run_id)
     token = service.claim(user.id, identifier, payload.expected_version)
+    return _claimed_stream(identifier, user, service, token)
 
+
+@router.post("/{run_id}/resume/stream")
+async def resume_run(run_id: UUID, payload: ResumeRunRequest,
+                     user: AuthenticatedUser = Depends(get_current_user),
+                     service: ReportRunService = Depends(get_report_run_service)):
+    identifier = str(run_id)
+    token = service.resume_claim(
+        user.id, identifier, payload.expected_version,
+        retry_unknown_requests=payload.retry_unknown_requests,
+    )
+    return _claimed_stream(identifier, user, service, token)
+
+
+def _claimed_stream(identifier: str, user, service: ReportRunService, token: int):
     async def stream():
         task = asyncio.create_task(service.execute_claimed(user.id, identifier, token))
         seq = 0

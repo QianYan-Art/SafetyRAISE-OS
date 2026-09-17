@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4, uuid5
 
 from app.schemas.report_run import IssueResponse, ReviewResult
 
@@ -15,9 +15,11 @@ _IDENTITY_FIELDS = ("category", "severity", "target", "closure_condition")
 class IssueLedger:
     """维护审查问题的稳定程序 ID、生命周期和追加式历史。"""
 
-    def __init__(self) -> None:
+    def __init__(self, namespace: str | None = None) -> None:
         self._current: dict[str, dict[str, Any]] = {}
         self._history: list[dict[str, Any]] = []
+        self._namespace = UUID(namespace) if namespace else None
+        self._allocated = 0
 
     def apply(self, review: ReviewResult) -> ReviewResult:
         """校验并应用一次审查结果，返回带程序 ID 的严格副本。"""
@@ -199,7 +201,11 @@ class IssueLedger:
         return tuple(issue[field] for field in _IDENTITY_FIELDS)
 
     def _new_id(self, reserved: set[str]) -> str:
-        issue_id = str(uuid4())
+        self._allocated += 1
+        issue_id = str(
+            uuid5(self._namespace, f"review-issue:{self._allocated}")
+            if self._namespace else uuid4()
+        )
         if issue_id in self._current or issue_id in reserved:
             raise ValueError("程序生成的 issue_id 重复。")
         return issue_id

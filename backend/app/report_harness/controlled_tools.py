@@ -90,6 +90,51 @@ class ControlledTools:
             if binding["role"] != role
         }
 
+    def checkpoint_state(self) -> dict:
+        """仅供受控私有检查点使用，不接受来自模型或HTTP的状态。"""
+        return {
+            "snapshot_digest": self._snapshot_digest,
+            "knowledge_digest": canonical_digest(self._knowledge_chunks),
+            "registry": deepcopy(self._search_registry),
+            "cursors": deepcopy(self._issued_read_cursors),
+            "evidence": {role: sorted(ids) for role, ids in self._accessed_evidence.items()},
+            "knowledge": {role: sorted(ids) for role, ids in self._accessed_knowledge.items()},
+        }
+
+    def restore_checkpoint_state(self, state: dict) -> None:
+        try:
+            self._restore_checkpoint_state(state)
+        except HarnessError:
+            raise
+        except (KeyError, TypeError, ValueError, AttributeError) as exc:
+            raise HarnessError("checkpoint_invalid") from exc
+
+    def _restore_checkpoint_state(self, state: dict) -> None:
+        if (state.get("snapshot_digest") != self._snapshot_digest
+                or state.get("knowledge_digest") != canonical_digest(self._knowledge_chunks)):
+            raise HarnessError("checkpoint_snapshot_mismatch")
+        registry = deepcopy(state["registry"])
+        for identifier, item in registry.items():
+            approved = self._knowledge_by_id.get(identifier)
+            if approved is None or item != approved:
+                raise HarnessError("checkpoint_knowledge_mismatch")
+        evidence, knowledge = {}, {}
+        for role in ("generator", "reviewer"):
+            evidence[role] = set(state["evidence"][role])
+            knowledge[role] = set(state["knowledge"][role])
+            if (not evidence[role] <= self._evidence_by_id.keys()
+                    or not knowledge[role] <= self._knowledge_by_id.keys()):
+                raise HarnessError("checkpoint_source_mismatch")
+        cursors = deepcopy(state["cursors"])
+        for binding in cursors.values():
+            self._validate_role(binding["role"])
+            if binding["kind"] not in {"evidence", "knowledge"}:
+                raise HarnessError("checkpoint_cursor_mismatch")
+            binding["request_ids"] = tuple(binding["request_ids"])
+        self._search_registry = registry
+        self._issued_read_cursors = cursors
+        self._accessed_evidence, self._accessed_knowledge = evidence, knowledge
+
     def execute(self, role: str, name: str, args: dict) -> dict:
         """按固定工具名称执行一次受控读取或检索。"""
         self._validate_role(role)

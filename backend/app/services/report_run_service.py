@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from pydantic import ValidationError
+from psycopg.rows import dict_row
 
 from app.adapters.input.dict_input_adapter import DictInputAdapter
 from app.report_harness.contracts import canonical_digest, validate_publication, validate_review_structure
@@ -15,7 +16,9 @@ from app.report_harness.evidence import freeze_snapshot
 from app.report_harness.errors import HarnessError
 from app.report_harness.execution import ReportExecutionDependencies
 from app.report_harness.controlled_tools import ControlledTools
-from app.report_harness.role_loop import RoleLoop, role_context
+from app.report_harness.role_loop import RoleLoop, role_context, tool_schemas
+from app.report_harness.journal import ExecutionJournal, JOURNAL_VERSION
+from app.report_harness.recovery import RunRecovery
 from app.report_harness.review_ledger import IssueLedger
 from app.report_harness.prompts import load_role_prompts
 from app.report_harness.request_ledger import RequestLedger
@@ -54,6 +57,7 @@ class ReportRunService:
             "knowledge_source": list(deepcopy(self.dependencies.knowledge_chunks)),
             "knowledge_source_digest": canonical_digest(self.dependencies.knowledge_chunks),
             "role_prompts": load_role_prompts(),
+            "execution_contract_digest": self._contract_digest(),
             "approval": None,
         }
         result = self.store.create(
@@ -74,7 +78,17 @@ class ReportRunService:
         return result
 
     def get(self, owner: str, run_id: str) -> dict:
-        return self._budget_view(owner, self.store.get(owner, run_id))
+        record = (RunRecovery(self.store).recover_expired(owner, run_id)
+                  if hasattr(self.store, "connection") else self.store.get(owner, run_id))
+        return self._budget_view(owner, record)
+
+    @staticmethod
+    def _contract_digest() -> str:
+        return canonical_digest({
+            "controller_version": 1, "journal_version": JOURNAL_VERSION,
+            "candidate": CandidateReport.model_json_schema(),
+            "review": ReviewResult.model_json_schema(), "tools": tool_schemas(),
+        })
 
     def _budget_view(self, owner: str, record: dict) -> dict:
         result = self.public_view(record)
@@ -137,6 +151,9 @@ class ReportRunService:
             raise HarnessError("version_conflict")
         if record["state"] != "queued":
             raise HarnessError("not_executable")
+        self._validate_profile(record)
+
+    def _validate_profile(self, record: dict) -> None:
         if record["execution_profile"] != "synthetic_test":
             # 授权和计费边界完成前，在线执行始终关闭，不能借工程标记外发。
             if record.get("approval"):
@@ -154,10 +171,55 @@ class ReportRunService:
             raise HarnessError("authorization_stale")
         if record.get("budget_policy") != self.dependencies.budget_policy.model_dump(mode="json"):
             raise HarnessError("authorization_stale")
+        if (record.get("execution_contract_digest") != self._contract_digest()
+                or canonical_digest(record["snapshot"]) != record["snapshot_digest"]):
+            raise HarnessError("checkpoint_version_mismatch")
 
     def claim(self, owner: str, run_id: str, expected_version: int) -> int:
         self.preflight(owner, run_id, expected_version)
         return self.store.acquire(owner, run_id, expected_version, uuid4())
+
+    def resume_claim(self, owner: str, run_id: str, expected_version: int, *,
+                     retry_unknown_requests: bool = False) -> int:
+        self.store.check_schema()
+        RunRecovery(self.store).recover_expired(owner, run_id)
+        record = self.store.get(owner, run_id)
+        self._validate_profile(record)
+        minimum_requests, minimum_tokens = self._resume_minimum(record)
+
+        def validate(document):
+            self._validate_profile(document)
+            limit = min(self.dependencies.max_active_seconds,
+                        self.dependencies.budget_policy.max_active_seconds)
+            if document.get("active_seconds", 0) >= limit:
+                raise HarnessError("budget_exhausted")
+
+        return RunRecovery(self.store).resume_claim(
+            owner, run_id, expected_version, uuid4(),
+            retry_unknown_requests=retry_unknown_requests, validate=validate,
+            minimum_requests=minimum_requests, minimum_tokens=minimum_tokens,
+        )
+
+    def _resume_minimum(self, record: dict) -> tuple[int, int]:
+        with self.store.connection() as conn:
+            conn.row_factory = dict_row
+            pending = conn.execute(
+                "SELECT role,reserved_tokens FROM report_run_requests WHERE run_id=%s "
+                "AND (status='completion_unknown' OR (status='committed' AND actual_tokens IS NULL)) "
+                "ORDER BY created_at DESC,request_id DESC LIMIT 1", (record["run_id"],),
+            ).fetchone()
+        if pending is None:
+            # 已有结果可先恢复本地计算；任何新HTTP仍在发送前做完整预留。
+            return 0, 0
+        profile = record.get("runtime_budget_profile")
+        if not isinstance(profile, dict):
+            raise HarnessError("checkpoint_version_mismatch")
+        role, amount = pending["role"], pending["reserved_tokens"]
+        if role == "reviewer":
+            return 1, max(amount, profile["review_reserve_tokens"])
+        if role == "generator":
+            return 2, max(amount, profile["generation_reserve_tokens"]) + profile["review_reserve_tokens"]
+        return 3, amount + profile["generation_reserve_tokens"] + profile["review_reserve_tokens"]
 
     async def execute(self, owner: str, run_id: str, expected_version: int) -> dict:
         return await self.execute_claimed(owner, run_id, self.claim(owner, run_id, expected_version))
@@ -199,6 +261,8 @@ class ReportRunService:
                 record = self.store.get(owner, run_id)
                 snapshot = deepcopy(record["snapshot"])
                 tools = ControlledTools(snapshot, deepcopy(record["knowledge_source"]))
+                journal = (ExecutionJournal(self.store, owner, run_id, token)
+                           if hasattr(self.store, "connection") else None)
                 tool_history = []
 
                 def checkpoint(public, private):
@@ -214,16 +278,27 @@ class ReportRunService:
                 loop = RoleLoop(
                     tools, checkpoint, max_tool_calls=policy.max_tool_calls,
                     before_call=lambda: self.store.assert_active(owner, run_id, token),
+                    journal=journal, replay_model=getattr(roles, "replay", None),
                 )
                 self.store.assert_active(owner, run_id, token)
-                prepared = await roles.prepare(deepcopy(snapshot))
+                if journal is None:
+                    prepared = await roles.prepare(deepcopy(snapshot))
+                else:
+                    replay_prepare = getattr(roles, "replay_prepare", None)
+                    prepared = await journal.invoke(
+                        "prepare", {"snapshot": snapshot, "contract": record["execution_contract_digest"]},
+                        lambda: roles.prepare(deepcopy(snapshot)), limit=24,
+                        replay_operation=(
+                            (lambda: replay_prepare(deepcopy(snapshot))) if replay_prepare else None
+                        ),
+                    )
                 if set(prepared) != {"guidance", "knowledge"} or prepared["knowledge"]:
                     raise HarnessError("untrusted_prepared_knowledge", 422)
                 self.store.transition(owner, run_id, token, "generating",
                                       {"prepared": prepared,
                                        "knowledge_registry": tools.registered_knowledge()},
                                       "checkpoint", {"step": "prepared"})
-                ledger = IssueLedger()
+                ledger = IssueLedger(namespace=run_id if journal is not None else None)
                 previous = None
                 feedback = None
                 max_version = min(2, policy.max_revision_rounds) + 1
@@ -259,8 +334,8 @@ class ReportRunService:
                     )
                 candidate_data = candidate.model_dump(mode="json")
                 review_data = review.model_dump(mode="json")
-                published = self.store.transition(
-                    owner, run_id, token, "published", {
+                published = self._publish(
+                    owner, run_id, token, {
                         "review_status": "passed",
                         "report": ReportResult(report_markdown=candidate.report_markdown).model_dump(),
                         "publication": {
@@ -268,7 +343,7 @@ class ReportRunService:
                             "review_digest": canonical_digest(review_data),
                             "snapshot_digest": record["snapshot_digest"],
                         },
-                    }, "final", {"state": "published"},
+                    },
                 )
                 return self._budget_view(owner, published)
         except asyncio.CancelledError:
@@ -280,7 +355,8 @@ class ReportRunService:
             self._stop_if_owned(owner, run_id, token, "needs_review", reason)
             return self.get(owner, run_id)
         except HarnessError as exc:
-            if exc.code in {"usage_unknown", "completion_unknown"}:
+            if exc.code in {"usage_unknown", "completion_unknown", "authorization_stale",
+                            "authorization_required", "token_bound_unverified"}:
                 self._stop_if_owned(owner, run_id, token, "suspended", exc.code)
                 return self.get(owner, run_id)
             if exc.code in {"role_response_too_large", "invalid_role_response",
@@ -333,10 +409,10 @@ class ReportRunService:
                 raise ValueError("生成者回应引用了未取得原文的来源。")
         ledger.record_responses(candidate.issue_responses)
         current = self.store.get(owner, run_id)
-        candidate_history = [*current.get("candidate_history", []), {
+        candidate_history = self._record_version(current.get("candidate_history", []), {
             "version": version, "digest": canonical_digest(candidate_data),
             "candidate": deepcopy(candidate_data),
-        }]
+        }, "version")
         self.store.transition(
             owner, run_id, token, "checking",
             {"candidate": candidate_data, "candidate_version": version,
@@ -371,10 +447,10 @@ class ReportRunService:
         validate_review_structure(candidate, review, *check_args,
                                   resolved_issue_ids=frozenset(ledger.resolved_ids()))
         current = self.store.get(owner, run_id)
-        review_history = [*current.get("review_history", []), {
+        review_history = self._record_version(current.get("review_history", []), {
             "candidate_version": version, "candidate_digest": review.candidate_digest,
             "review": review.model_dump(mode="json"),
-        }]
+        }, "candidate_version")
         self.store.transition(
             owner, run_id, token, "checking",
             {"review": review.model_dump(mode="json"), "issue_history": ledger.history(),
@@ -382,6 +458,38 @@ class ReportRunService:
             "checkpoint", {"step": "review_validated", "candidate_version": version},
         )
         return candidate, review, check_args
+
+    @staticmethod
+    def _record_version(history: list[dict], entry: dict, key: str) -> list[dict]:
+        existing = [item for item in history if item[key] == entry[key]]
+        if existing:
+            if existing != [entry]:
+                raise HarnessError("checkpoint_digest_mismatch")
+            return history
+        return [*history, entry]
+
+    def _publish(self, owner: str, run_id: str, token: int, patch: dict) -> dict:
+        if not hasattr(self.store, "connection"):
+            return self.store.transition(owner, run_id, token, "published", patch,
+                                         "final", {"state": "published"})
+        with self.store.locked(owner, run_id, fencing_token=token) as (conn, row):
+            policy = RequestLedger._load_policy(row, reject_money=True)
+            summary = RequestLedger._aggregate(
+                conn, row["run_id"], max_total_tokens=policy.max_total_tokens,
+            )
+            RequestLedger._reject_blocked(summary)
+            if (summary["remaining"] < 0 or RunStore._active_seconds(row) >= min(
+                    policy.max_active_seconds, self.dependencies.max_active_seconds)):
+                raise HarnessError("budget_exhausted")
+            publication_budget = {
+                **summary, "active_seconds": RunStore._active_seconds(row),
+            }
+            return self.store.save(
+                conn, row, "published", {
+                    **row["document"], **patch, "publication_budget": publication_budget,
+                },
+                "final", {"state": "published", "budget": publication_budget},
+            )
 
     def _stop_if_owned(self, owner: str, run_id: str, token: int,
                        state: str, reason: str) -> None:

@@ -69,6 +69,10 @@ class HTTPAttemptClient:
     async def close(self):
         await self._client.aclose()
 
+    @property
+    def registered_roles(self) -> tuple[str, ...]:
+        return tuple(sorted(self._endpoints))
+
 
 def reported_tokens(response: dict) -> int | None:
     """没有可核对的 usage 就保持未知，不把空值或布尔值解释为零。"""
@@ -101,6 +105,14 @@ class BudgetedTransport:
         self.generation_reserve_tokens = generation_reserve_tokens
         self.authorize, self.remaining_seconds = authorize, remaining_seconds
         self.bound_provider, self.verified_proofs = bound_provider, frozenset(verified_proofs)
+        ledger.bind_runtime_profile(owner, run_id, token, {
+            "generation_reserve_tokens": generation_reserve_tokens,
+            "review_reserve_tokens": review_reserve_tokens,
+            "output_limit": self.output_limit,
+            "endpoint_digest": endpoint_digest,
+            "proofs": sorted(self.verified_proofs),
+            "roles": list(client.registered_roles),
+        })
 
     def preflight_initial(self) -> None:
         self.authorize()
@@ -109,9 +121,7 @@ class BudgetedTransport:
             tokens=self.generation_reserve_tokens + self.review_reserve_tokens,
         )
 
-    async def request(self, role: str, payload: dict, *,
-                      output_limit_field: str | None = None) -> dict:
-        payload = deepcopy(payload)
+    def _bound(self, role: str, payload: dict, output_limit_field: str | None) -> RequestBound:
         bound = self.bound_provider(role, deepcopy(payload))
         if not isinstance(bound, RequestBound) or bound.proof_digest not in self.verified_proofs:
             raise HarnessError("token_bound_unverified")
@@ -127,6 +137,27 @@ class BudgetedTransport:
         ceiling = {"generator": self.generation_reserve_tokens, "reviewer": self.review_reserve_tokens}
         if role in ceiling and bound.total_tokens > ceiling[role]:
             raise HarnessError("token_bound_unverified")
+        return bound
+
+    @staticmethod
+    def _request_digest(role: str, payload: dict, bound: RequestBound) -> str:
+        return canonical_digest({
+            "role": role, "payload": payload, "bound_proof": bound.proof_digest,
+            "reserved_tokens": bound.total_tokens, "output_tokens": bound.output_tokens,
+        })
+
+    async def replay(self, role: str, payload: dict, *,
+                     output_limit_field: str | None = None) -> dict | None:
+        bound = self._bound(role, payload, output_limit_field)
+        self.authorize()
+        return self.ledger.committed_result(
+            self.owner, self.run_id, self.token, self._request_digest(role, payload, bound),
+        )
+
+    async def request(self, role: str, payload: dict, *,
+                      output_limit_field: str | None = None) -> dict:
+        payload = deepcopy(payload)
+        bound = self._bound(role, payload, output_limit_field)
         self.authorize()
         timeout = self.remaining_seconds()
         if timeout <= 0:
@@ -134,10 +165,7 @@ class BudgetedTransport:
         request = self.ledger.reserve(
             self.owner, self.run_id, self.token, role=role,
             endpoint_digest=self.endpoint_digest,
-            request_digest=canonical_digest({
-                "payload": payload, "bound_proof": bound.proof_digest,
-                "reserved_tokens": bound.total_tokens, "output_tokens": bound.output_tokens,
-            }),
+            request_digest=self._request_digest(role, payload, bound),
             reserved_tokens=bound.total_tokens,
             review_reserve_tokens=self.review_reserve_tokens,
             generation_reserve_tokens=self.generation_reserve_tokens,

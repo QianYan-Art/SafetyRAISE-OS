@@ -23,8 +23,10 @@ from app.core.request_context import reset_trace_id, set_trace_id
 from app.core.settings import load_settings
 from app.services.readiness_service import ReadinessService
 from app.services.report_service import ReportService
+from app.report_harness.lifecycle import report_harness_lifespan
 
-app = FastAPI(title="交通事故分析报告后端", version="0.1.0")
+app = FastAPI(title="交通事故分析报告后端", version="0.1.0",
+              lifespan=report_harness_lifespan)
 app.add_middleware(ReportRunBodyLimit)
 app.add_middleware(
     CORSMiddleware,

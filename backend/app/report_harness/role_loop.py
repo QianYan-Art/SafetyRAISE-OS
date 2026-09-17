@@ -51,20 +51,34 @@ class RoleLoop:
     """有界的角色/工具交互；逻辑轮次计数不是物理请求计费账本。"""
 
     def __init__(self, tools, checkpoint: Callable[[dict, dict], None], *,
-                 before_call: Callable[[], None], max_model_turns=24, max_tool_calls=24):
+                 before_call: Callable[[], None], max_model_turns=24, max_tool_calls=24,
+                 journal=None, replay_model=None):
         self.tools, self.checkpoint, self.before_call = tools, checkpoint, before_call
+        self.journal = journal
+        self.replay_model = replay_model
         self.max_model_turns, self.max_tool_calls = max_model_turns, max_tool_calls
         self.model_turns = 0
         self.tool_calls = 0
 
     async def run(self, role: str, invoke: Callable[[dict], Awaitable[dict]], context: dict) -> dict:
         results = []
-        while self.model_turns < self.max_model_turns:
+        while self.journal is not None or self.model_turns < self.max_model_turns:
             self.before_call()
-            self.model_turns += 1
             current = {**deepcopy(context), "tool_results": deepcopy(results),
                        "tools": tool_schemas()}
-            response = await invoke(current)
+            if self.journal is None:
+                self.model_turns += 1
+                response = await invoke(current)
+            else:
+                response = await self.journal.invoke(
+                    "model", {"role": role, "context": current},
+                    lambda: invoke(deepcopy(current)), limit=self.max_model_turns,
+                    replay_operation=(
+                        (lambda: self.replay_model(role, deepcopy(current)))
+                        if self.replay_model is not None else None
+                    ),
+                )
+                self.model_turns = self.journal.attempts("model")
             if not isinstance(response, dict):
                 raise HarnessError("invalid_role_response")
             try:
@@ -78,6 +92,25 @@ class RoleLoop:
             turn = ToolTurn.model_validate(response)
             for call in turn.tool_calls:
                 self.before_call()
+                if self.journal is not None:
+                    async def execute_tool():
+                        result = await asyncio.to_thread(
+                            self.tools.execute, role, call.name, call.arguments,
+                        )
+                        return {"result": result, "tool_state": self.tools.checkpoint_state()}
+
+                    saved = await self.journal.invoke(
+                        "tool", {"role": role, "context_digest": canonical_digest(current),
+                                 "call_id": call.call_id, "name": call.name,
+                                 "arguments": deepcopy(call.arguments)},
+                        execute_tool, limit=self.max_tool_calls,
+                    )
+                    self.tools.restore_checkpoint_state(saved["tool_state"])
+                    self.tool_calls = self.journal.attempts("tool")
+                    results.append({
+                        "call_id": call.call_id, "name": call.name, "result": saved["result"],
+                    })
+                    continue
                 if self.tool_calls >= self.max_tool_calls:
                     raise HarnessError("tool_budget_exhausted")
                 self.tool_calls += 1

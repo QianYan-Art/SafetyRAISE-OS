@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from copy import deepcopy
+from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -459,6 +460,34 @@ class RequestLedger:
         with self.store.locked(owner, run_id, fencing_token=token) as (_, row):
             return self._load_policy(row, reject_money=True)
 
+    def bind_runtime_profile(self, owner: str, run_id: str, token: int, profile: dict) -> None:
+        with self.store.locked(owner, run_id, fencing_token=token) as (conn, row):
+            previous = row["document"].get("runtime_budget_profile")
+            if previous is not None:
+                if previous != profile:
+                    raise HarnessError("authorization_stale")
+                return
+            self.store.save(
+                conn, row, row["state"], {**row["document"], "runtime_budget_profile": profile},
+                "checkpoint", {"step": "runtime_budget_profile", "digest": canonical_digest(profile)},
+            )
+
+    def committed_result(self, owner: str, run_id: str, token: int, request_digest: str) -> dict | None:
+        with self.store.locked(owner, run_id, fencing_token=token) as (conn, row):
+            if row["document"].get("recovery_token") != token:
+                return None
+            policy = self._load_policy(row, reject_money=True)
+            self._reject_blocked(self._aggregate(
+                conn, row["run_id"], max_total_tokens=policy.max_total_tokens,
+            ))
+            receipt = conn.execute(
+                "SELECT result FROM report_run_requests WHERE run_id=%s AND request_digest=%s "
+                "AND status='committed' AND actual_tokens IS NOT NULL "
+                "ORDER BY created_at DESC,request_id DESC LIMIT 1",
+                (run_id, request_digest),
+            ).fetchone()
+            return deepcopy(receipt["result"]) if receipt else None
+
     def view(self, owner: str, run_id: str) -> dict:
         with self.store.locked(owner, run_id) as (conn, row):
             policy = self._load_policy(row, reject_money=False)
@@ -536,7 +565,7 @@ class RequestLedger:
 
     @staticmethod
     def _reject_blocked(summary: dict[str, Any]) -> None:
-        if summary["unknown_requests"]:
+        if summary.get("unapproved_unknown_requests", summary["unknown_requests"]):
             raise HarnessError("usage_unknown", 409)
         if summary["usage_exceeded"]:
             raise HarnessError("usage_exceeded", 409)
@@ -562,6 +591,11 @@ class RequestLedger:
             "AND actual_tokens IS NULL), 0) AS inflight_reserved, "
             "COUNT(*) FILTER (WHERE status='completion_unknown' "
             "OR (status='committed' AND actual_tokens IS NULL)) AS unknown_requests, "
+            "COUNT(*) FILTER (WHERE (status='completion_unknown' OR "
+            "(status='committed' AND actual_tokens IS NULL)) AND NOT COALESCE("
+            "jsonb_typeof(r.document->'approved_unknown_request_ids')='array' AND "
+            "(r.document->'approved_unknown_request_ids') ? q.request_id::text, FALSE)) "
+            "AS unapproved_unknown_requests, "
             "COALESCE(BOOL_OR(status='committed' AND actual_tokens > reserved_tokens), FALSE) "
             "AS usage_exceeded, "
             "COUNT(*) FILTER (WHERE role='embedding' AND status IN "
@@ -569,10 +603,12 @@ class RequestLedger:
             "COUNT(*) FILTER (WHERE role='embedding' AND status IN "
             "('intent','dispatched','committed','completion_unknown')) "
             "AS capacity_retrieval_requests "
-            "FROM report_run_requests WHERE run_id=%s",
+            "FROM report_run_requests q JOIN report_runs r ON r.run_id=q.run_id WHERE q.run_id=%s",
             (run_id,),
         ).fetchone()
-        result = {key: row[key] for key in row}
+        # PostgreSQL SUM(bigint) 返回 numeric；计数均来自整数列，转换不损失精度。
+        result = {key: int(value) if isinstance(value, Decimal) else value
+                  for key, value in row.items()}
         result["remaining"] = (
             max_total_tokens
             - result["known_used"]

@@ -202,7 +202,7 @@ class RunStore:
                 expiry = row["lease_expires_at"]
                 if (row["fencing_token"] != fencing_token or expiry is None
                         or expiry <= row["db_now"]
-                        or row["state"] in TERMINAL_STATES):
+                        or row["state"] in TERMINAL_STATES or row["state"] == "suspended"):
                     raise HarnessError("lease_lost")
             yield conn, row
 
@@ -242,6 +242,7 @@ class RunStore:
         seq = row["last_event_seq"] + 1
         version = row["state_version"] + 1
         terminal = state in TERMINAL_STATES
+        release_lease = terminal or state == "suspended"
         if terminal or state == "suspended":
             document = {
                 **document, "active_seconds": RunStore._active_seconds(row),
@@ -252,7 +253,7 @@ class RunStore:
             "lease_owner=CASE WHEN %s THEN NULL ELSE lease_owner END,"
             "lease_expires_at=CASE WHEN %s THEN NULL ELSE lease_expires_at END "
             "WHERE run_id=%s AND state_version=%s RETURNING *",
-            (state, version, Jsonb(document), seq, terminal, terminal,
+            (state, version, Jsonb(document), seq, release_lease, release_lease,
              row["run_id"], row["state_version"]),
         ).fetchone()
         if updated is None:

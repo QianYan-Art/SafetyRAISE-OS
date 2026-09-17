@@ -141,6 +141,11 @@ class ExecuteRunRequest(StrictModel):
     expected_version: int = Field(ge=0)
 
 
+class ResumeRunRequest(StrictModel):
+    expected_version: int = Field(ge=0, strict=True)
+    retry_unknown_requests: bool = Field(default=False, strict=True)
+
+
 class BudgetPolicy(StrictModel):
     max_physical_requests: int = Field(default=24, ge=0)
     max_tool_calls: int = Field(default=24, ge=0)
