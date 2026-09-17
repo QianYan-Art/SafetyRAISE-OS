@@ -80,6 +80,16 @@ class ControlledTools:
             for evidence_id, item in self._evidence_by_id.items()
         }
 
+    def reset_access(self, role: str) -> None:
+        """新候选轮次用新上下文复查，不沿用上一轮未传入的原文访问记录。"""
+        self._validate_role(role)
+        self._accessed_evidence[role].clear()
+        self._accessed_knowledge[role].clear()
+        self._issued_read_cursors = {
+            cursor: binding for cursor, binding in self._issued_read_cursors.items()
+            if binding["role"] != role
+        }
+
     def execute(self, role: str, name: str, args: dict) -> dict:
         """按固定工具名称执行一次受控读取或检索。"""
         self._validate_role(role)

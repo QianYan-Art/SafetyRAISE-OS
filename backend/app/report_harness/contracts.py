@@ -89,13 +89,16 @@ def _validate_mixed_refs(
             raise ValueError(f"{location} 包含越界来源引用：{ref}。")
 
 
-def validate_publication(
+def _validate_report_contract(
     candidate: CandidateReport,
     review: ReviewResult,
     snapshot_digest: str,
     obligation_ids: Iterable[object],
     evidence_ids: Iterable[object],
     knowledge_ids: Iterable[object],
+    *,
+    require_passed: bool,
+    resolved_issue_ids: frozenset[str],
 ) -> None:
     """执行发布前的确定性检查；任何失败均以 ValueError 拒绝发布。"""
     if not isinstance(candidate, CandidateReport):
@@ -163,7 +166,7 @@ def validate_publication(
         if check.obligation_id not in required_obligations:
             raise ValueError(f"coverage 检查包含未声明义务：{check.obligation_id}。")
         seen_coverage_obligations.add(check.obligation_id)
-        if not check.passed:
+        if require_passed and not check.passed:
             raise ValueError(f"义务 {check.obligation_id} 的 coverage 检查未通过。")
         if not check.conclusion.strip():
             raise ValueError(f"义务 {check.obligation_id} 的 coverage 检查缺少结论。")
@@ -194,7 +197,7 @@ def validate_publication(
         if check.category in seen_categories:
             raise ValueError(f"审查重复完成检查类别：{check.category}。")
         seen_categories.add(check.category)
-        if not check.passed:
+        if require_passed and not check.passed:
             raise ValueError(f"审查检查未通过：{check.category}。")
         if not check.conclusion.strip():
             raise ValueError(f"审查检查缺少具体结论：{check.category}。")
@@ -234,9 +237,34 @@ def validate_publication(
             "style", "formatting", "wording",
         }:
             raise ValueError("只有明确的排版或措辞问题可以标记为 minor。")
-        if issue.status == "resolved":
+        if issue.status == "resolved" and issue.issue_id not in resolved_issue_ids:
             raise ValueError("当前契约没有历史问题闭合上下文，不接受模型首次声明 resolved。")
-        if issue.severity in _UNRESOLVED_SEVERITIES and issue.status in _UNRESOLVED_STATUSES:
+        if (require_passed and issue.severity in _UNRESOLVED_SEVERITIES
+                and issue.status in _UNRESOLVED_STATUSES):
             raise ValueError(
                 f"仍有未关闭的 {issue.severity} 问题：{issue.issue_id}。"
             )
+
+
+def validate_publication(
+    candidate: CandidateReport, review: ReviewResult, snapshot_digest: str,
+    obligation_ids: Iterable[object], evidence_ids: Iterable[object],
+    knowledge_ids: Iterable[object], *, resolved_issue_ids: frozenset[str] = frozenset(),
+) -> None:
+    """发布必须通过所有检查；闭合问题只能来自控制器的历史台账。"""
+    _validate_report_contract(
+        candidate, review, snapshot_digest, obligation_ids, evidence_ids, knowledge_ids,
+        require_passed=True, resolved_issue_ids=resolved_issue_ids,
+    )
+
+
+def validate_review_structure(
+    candidate: CandidateReport, review: ReviewResult, snapshot_digest: str,
+    obligation_ids: Iterable[object], evidence_ids: Iterable[object],
+    knowledge_ids: Iterable[object], *, resolved_issue_ids: frozenset[str] = frozenset(),
+) -> None:
+    """允许有依据的负面审查进入修订，不放宽摘要、引用或五类检查契约。"""
+    _validate_report_contract(
+        candidate, review, snapshot_digest, obligation_ids, evidence_ids, knowledge_ids,
+        require_passed=False, resolved_issue_ids=resolved_issue_ids,
+    )

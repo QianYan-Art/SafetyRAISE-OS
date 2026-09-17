@@ -53,6 +53,21 @@ def assert_output_size(payload):
     assert len(json.dumps(payload, ensure_ascii=False, separators=(",", ":"))) <= 32000
 
 
+def test_new_candidate_round_resets_only_its_roles_access_and_cursors():
+    tools, _ = make_tools(chunks=[chunk(text="合成原文" * 12000)])
+    args = {"chunk_ids": ["chunk-1"]}
+    generator = tools.execute("generator", "read_knowledge", args)
+    reviewer = tools.execute("reviewer", "read_knowledge", args)
+    assert generator["next_cursor"] and reviewer["next_cursor"]
+    tools.execute("generator", "read_evidence", {"evidence_ids": ["accident:/事故经过"]})
+    assert tools.accessed_evidence("generator")
+    tools.reset_access("generator")
+    assert not tools.accessed_evidence("generator")
+    with pytest.raises(HarnessError):
+        tools.execute("generator", "read_knowledge", {**args, "cursor": generator["next_cursor"]})
+    tools.execute("reviewer", "read_knowledge", {**args, "cursor": reviewer["next_cursor"]})
+
+
 def test_evidence_ids_and_provenance_are_frozen_and_readable():
     record = evidence(verification_status="human_confirmed", verification_note="人工核对原始记录")
     tools, snapshot = make_tools(records=[record])

@@ -272,11 +272,32 @@ class Issue(StrictModel):
         return normalized
 
 
+class IssueResponse(StrictModel):
+    issue_id: str = Field(min_length=1)
+    action: Literal["revised", "contested"]
+    explanation: str = Field(min_length=1)
+    source_refs: list[str] = Field(min_length=1)
+
+    @field_validator("issue_id", "explanation", mode="before")
+    @classmethod
+    def _strip_fields(cls, value: object) -> object:
+        return _strip_text(value)
+
+    @field_validator("source_refs")
+    @classmethod
+    def _validate_refs(cls, values: list[str]) -> list[str]:
+        result = [value.strip() for value in values]
+        if any(not value for value in result) or len(set(result)) != len(result):
+            raise ValueError("回应来源必须非空且不重复。")
+        return result
+
+
 class CandidateReport(StrictModel):
     version: int = Field(ge=0)
     report_markdown: str = Field(min_length=1)
     claims: list[Claim] = Field(default_factory=list)
     obligation_resolutions: list[ObligationResolution] = Field(default_factory=list)
+    issue_responses: list[IssueResponse] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _validate_size(self) -> "CandidateReport":
