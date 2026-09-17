@@ -14,6 +14,8 @@ from app.report_harness.authorization import AuthorizationRequest
 from app.report_harness.evidence import freeze_snapshot
 from app.report_harness.errors import HarnessError
 from app.report_harness.execution import ReportExecutionDependencies
+from app.report_harness.controlled_tools import ControlledTools
+from app.report_harness.role_loop import RoleLoop, role_context
 from app.report_harness.store import RunStore
 from app.schemas.report import ReportResult
 from app.schemas.report_run import CandidateReport, CreateRunRequest, ReviewResult
@@ -43,6 +45,8 @@ class ReportRunService:
             "execution_profile": self.dependencies.execution_profile,
             "endpoint_profile_digest": self.dependencies.endpoint_profile_digest,
             "policy_digest": self.dependencies.policy_digest,
+            "knowledge_source": list(deepcopy(self.dependencies.knowledge_chunks)),
+            "knowledge_source_digest": canonical_digest(self.dependencies.knowledge_chunks),
             "approval": None,
         }
         result = self.store.create(
@@ -126,7 +130,9 @@ class ReportRunService:
                 or record["endpoint_profile_digest"] != self.dependencies.endpoint_profile_digest
                 or record["policy_digest"] != self.dependencies.policy_digest
                 or record["snapshot"]["knowledge_manifest_digest"]
-                != self.dependencies.knowledge_manifest_digest):
+                != self.dependencies.knowledge_manifest_digest
+                or record.get("knowledge_source_digest")
+                != canonical_digest(self.dependencies.knowledge_chunks)):
             raise HarnessError("authorization_stale")
 
     def claim(self, owner: str, run_id: str, expected_version: int) -> int:
@@ -159,15 +165,33 @@ class ReportRunService:
             async with asyncio.timeout(self.dependencies.max_active_seconds):
                 record = self.store.get(owner, run_id)
                 snapshot = deepcopy(record["snapshot"])
+                tools = ControlledTools(snapshot, deepcopy(record["knowledge_source"]))
+                context_snapshot, inline_evidence = role_context(snapshot)
+                tool_history = []
+
+                def checkpoint(public, private):
+                    tool_history.append({**deepcopy(public), "private": deepcopy(private)})
+                    current = self.store.get(owner, run_id)
+                    self.store.transition(
+                        owner, run_id, token, current["state"],
+                        {"tool_history": deepcopy(tool_history),
+                         "knowledge_registry": tools.registered_knowledge()},
+                        "tool", public,
+                    )
+
+                loop = RoleLoop(tools, checkpoint, before_call=lambda:
+                                self.store.assert_active(owner, run_id, token))
                 self.store.assert_active(owner, run_id, token)
                 prepared = await roles.prepare(deepcopy(snapshot))
                 if set(prepared) != {"guidance", "knowledge"} or prepared["knowledge"]:
-                    raise HarnessError("knowledge_tools_unavailable", 503)
+                    raise HarnessError("untrusted_prepared_knowledge", 422)
                 self.store.transition(owner, run_id, token, "generating",
-                                      {"prepared": prepared}, "checkpoint", {"step": "prepared"})
+                                      {"prepared": prepared,
+                                       "knowledge_registry": tools.registered_knowledge()},
+                                      "checkpoint", {"step": "prepared"})
                 self.store.assert_active(owner, run_id, token)
-                candidate = CandidateReport.model_validate(await roles.generate({
-                    "snapshot": deepcopy(snapshot), "prepared": deepcopy(prepared),
+                candidate = CandidateReport.model_validate(await loop.run("generator", roles.generate, {
+                    "snapshot": deepcopy(context_snapshot), "prepared": deepcopy(prepared),
                     "candidate_version": 1,
                 }))
                 if candidate.version != 1:
@@ -180,8 +204,8 @@ class ReportRunService:
                 )
                 # 审查上下文重新构造，不传生成者私有历史或自评。
                 self.store.assert_active(owner, run_id, token)
-                review = ReviewResult.model_validate(await roles.review({
-                    "snapshot": deepcopy(snapshot),
+                review = ReviewResult.model_validate(await loop.run("reviewer", roles.review, {
+                    "snapshot": deepcopy(context_snapshot),
                     "snapshot_digest": record["snapshot_digest"],
                     "candidate": deepcopy(candidate_data),
                     "candidate_digest": canonical_digest(candidate_data),
@@ -191,11 +215,22 @@ class ReportRunService:
                 self.store.transition(owner, run_id, token, "checking", {"review": review_data},
                                       "review", {"candidate_version": 1})
                 obligations = snapshot["fact_obligations"]
+                generator_evidence = inline_evidence | tools.accessed_evidence("generator")
+                reviewer_evidence = inline_evidence | tools.accessed_evidence("reviewer")
+                generator_knowledge = tools.accessed_knowledge("generator")
+                reviewer_knowledge = tools.accessed_knowledge("reviewer")
+                for claim in candidate.claims:
+                    if (not set(claim.evidence_refs) <= generator_evidence
+                            or not set(claim.knowledge_refs) <= generator_knowledge):
+                        raise ValueError("生成者引用了未取得原文的来源。")
+                required_sources = {ref for item in obligations for ref in item["source_refs"]}
+                if not required_sources <= reviewer_evidence:
+                    raise ValueError("审查者尚未取得全部必要事实原文。")
                 validate_publication(
                     candidate, review, record["snapshot_digest"],
                     {item["obligation_id"] for item in obligations},
-                    {ref for item in obligations for ref in item["source_refs"]},
-                    set(),
+                    reviewer_evidence,
+                    reviewer_knowledge,
                 )
                 published = self.store.transition(
                     owner, run_id, token, "published", {
@@ -218,6 +253,10 @@ class ReportRunService:
             self._stop_if_owned(owner, run_id, token, "needs_review", reason)
             return self.get(owner, run_id)
         except HarnessError as exc:
+            if exc.code in {"role_response_too_large", "invalid_role_response",
+                            "model_turn_budget_exhausted", "tool_budget_exhausted"}:
+                self._stop_if_owned(owner, run_id, token, "needs_review", exc.code)
+                return self.get(owner, run_id)
             if exc.code != "lease_lost":
                 self._stop_if_owned(owner, run_id, token, "failed", exc.code)
             raise

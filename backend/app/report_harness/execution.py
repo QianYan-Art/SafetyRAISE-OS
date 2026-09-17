@@ -27,6 +27,7 @@ class ReportExecutionDependencies:
     knowledge_manifest_digest: str
     max_active_seconds: float = 600
     authorization_catalog: AuthorizationCatalog | None = None
+    knowledge_chunks: tuple[dict, ...] = ()
 
     def __post_init__(self):
         if self.max_active_seconds <= 0:

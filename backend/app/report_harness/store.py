@@ -17,9 +17,9 @@ TERMINAL_STATES = frozenset({"published", "needs_review", "cancelled", "failed"}
 NEXT_STATES = {
     "queued": {"queued", "preparing", "cancelled", "failed"},
     "preparing": {"generating", "suspended", "needs_review", "cancelled", "failed"},
-    "generating": {"checking", "suspended", "needs_review", "cancelled", "failed"},
+    "generating": {"generating", "checking", "suspended", "needs_review", "cancelled", "failed"},
     "checking": {"checking", "revising", "published", "suspended", "needs_review", "cancelled", "failed"},
-    "revising": {"checking", "suspended", "needs_review", "cancelled", "failed"},
+    "revising": {"revising", "checking", "suspended", "needs_review", "cancelled", "failed"},
     "suspended": {"suspended", "preparing", "cancelled", "failed"},
 }
 
