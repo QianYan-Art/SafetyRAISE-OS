@@ -3,12 +3,28 @@
 ## 当前边界
 
 本模块是报告证据与独立审查运行控制的开发实现，旧报告链路保持默认。
-生产工厂关闭新执行器，不能通过客户端字段选用合成角色或测试批准表。
+生产工厂默认关闭新模式，不能通过客户端字段选用合成角色或测试批准表。
+服务端显式设置 `report_harness.enabled=true` 后可使用证据/运行数据接口，
+但 `online_enabled` 仍必须为 false，实际模型执行保持关闭。旧配置缺少此配置组时行为不变。
 合成角色只用于控制流测试，不能证明真实报告质量。
 
-当前首条切片只开放无补证、无知识检索的合成成功路径；其他能力未完成前明确拒绝。
+当前开发路径支持人工文字补证及冻结快照，知识查询和在线 transport 尚未接入；
+未完成的能力明确拒绝，不假装已执行。
 候选、审查与发布正文存入专用 PostgreSQL 表，不写旧报告输出目录。
 真实质量验收、模型外发、生产迁移和部署均不是运行测试的附带操作。
+
+## 证据与授权
+
+- 会话证据使用独立 GET/PUT `/api/v1/chat-sessions/{session_id}/report-evidence`，
+  全量保存带 `expected_revision`；来源、核实状态、冲突和服务端审计字段共同保留。
+- 创建 run 时在数据库事务内检查 revision 并冻结文本；之后的证据或草稿修改不会改变旧 run。
+  草稿字段未就绪时保存返回警告，创建 run 时无效 JSON Pointer 必须拒绝。
+- 所有者可读取 `/api/v1/report-runs/{run_id}/authorization-preview`；
+  缺少完整的服务端端点描述或获批知识清单时明确不可批准，不返回密钥或自动探测端点。
+- authorize 必须确认快照、端点配置和知识清单三个服务端摘要。
+  授权与事实核实状态互相独立，不能由模型写入 approved，也不会增加预算。
+- 当前即使授权成功，outbound 仍返回 `outbound_transport_unavailable`，
+  待后续物理请求预算和取消发送屏障完成才可启用。测试批准仅使用合成端点。
 
 ## 独立数据库
 
@@ -27,6 +43,7 @@
 $env:PYTHONPATH = 'backend'
 .\.venv\Scripts\python.exe -m pytest backend/tests/unit -q -p no:cacheprovider
 .\.venv\Scripts\python.exe -m pytest backend/tests/test_report_run_store.py -q -p no:cacheprovider
+.\.venv\Scripts\python.exe -m pytest backend/tests/test_evidence_contract.py backend/tests/test_outbound_approval.py -q -p no:cacheprovider
 ```
 
 第一条验证纯逻辑，第二条必须连接真实独立 PostgreSQL。

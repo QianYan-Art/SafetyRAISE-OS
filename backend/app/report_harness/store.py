@@ -10,15 +10,17 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from app.report_harness.errors import HarnessError
+from app.report_harness.contracts import canonical_digest
+from app.report_harness.evidence import EvidenceBindingError, freeze_snapshot
 
 TERMINAL_STATES = frozenset({"published", "needs_review", "cancelled", "failed"})
 NEXT_STATES = {
-    "queued": {"preparing", "cancelled", "failed"},
+    "queued": {"queued", "preparing", "cancelled", "failed"},
     "preparing": {"generating", "suspended", "needs_review", "cancelled", "failed"},
     "generating": {"checking", "suspended", "needs_review", "cancelled", "failed"},
     "checking": {"checking", "revising", "published", "suspended", "needs_review", "cancelled", "failed"},
     "revising": {"checking", "suspended", "needs_review", "cancelled", "failed"},
-    "suspended": {"preparing", "cancelled", "failed"},
+    "suspended": {"suspended", "preparing", "cancelled", "failed"},
 }
 
 
@@ -80,9 +82,18 @@ class RunStore:
                 revision = evidence["revision"] if evidence else 0
                 if document["evidence_revision"] != revision:
                     raise HarnessError("evidence_revision_conflict")
-                # 首条仅放行无补证路径，后续切片再开放快照冻结。
-                if evidence and evidence["records"]:
-                    raise HarnessError("supplemental_evidence_unavailable", 503)
+                if "snapshot" in document:
+                    try:
+                        snapshot = freeze_snapshot(
+                            document["snapshot"]["accident_data"],
+                            evidence["records"] if evidence else [], revision,
+                            document["snapshot"]["knowledge_manifest_digest"],
+                        )
+                    except EvidenceBindingError as exc:
+                        raise HarnessError("invalid_field_bindings", 422,
+                                           {"field_errors": exc.warnings}) from exc
+                    document = {**document, "snapshot": snapshot,
+                                "snapshot_digest": canonical_digest(snapshot)}
                 parent = document.get("parent_run_id")
                 if parent:
                     if not conn.execute(

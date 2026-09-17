@@ -16,6 +16,7 @@ from app.api.routes_chat_sessions import router as chat_session_router
 from app.api.routes_input import router as input_router
 from app.api.routes_report import router as report_router
 from app.api.routes_report_runs import ReportRunBodyLimit, router as report_run_router
+from app.api.routes_report_evidence import router as report_evidence_router
 from app.api.routes_user_model_configs import router as user_model_config_router
 from app.core.logger import setup_logging
 from app.core.request_context import reset_trace_id, set_trace_id
@@ -37,6 +38,7 @@ app.include_router(admin_router)
 app.include_router(auth_router)
 app.include_router(report_router)
 app.include_router(report_run_router)
+app.include_router(report_evidence_router)
 app.include_router(input_router)
 app.include_router(chat_session_router)
 app.include_router(user_model_config_router)

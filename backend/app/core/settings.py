@@ -7,6 +7,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.core.exceptions import ConfigurationError
+from app.report_harness.config import ReportHarnessSettings
 
 
 class RetrySettings(BaseModel):
@@ -348,6 +349,7 @@ class Settings(BaseModel):
     input_generation: InputGenerationSettings
     retrieval: RetrievalSettings
     workflow: WorkflowSettings
+    report_harness: ReportHarnessSettings = Field(default_factory=ReportHarnessSettings)
 
     @property
     def project_root(self) -> Path:

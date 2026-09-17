@@ -10,9 +10,15 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 from fastapi.routing import APIRoute
 
-from app.api.deps import get_current_user
+from app.api import deps
+from app.api.deps import get_current_user, get_database_service
 from app.api.error_handling import build_error_response
 from app.report_harness.errors import HarnessError
+from app.report_harness.authorization import AuthorizationCatalog, AuthorizationRequest
+from app.report_harness.config import ReportHarnessSettings
+from app.report_harness.contracts import canonical_digest
+from app.report_harness.execution import ReportExecutionDependencies, production_dependencies
+from app.report_harness.store import RunStore
 from app.schemas.report_run import CreateRunRequest, ExecuteRunRequest
 from app.services.auth_service import AuthenticatedUser
 from app.services.report_run_service import ReportRunService
@@ -25,7 +31,12 @@ class ReportRunBodyLimit:
         self.app, self.max_bytes = app, max_bytes
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or not scope["path"].startswith("/api/v1/report-runs"):
+        protected = scope["type"] == "http" and (
+            scope["path"].startswith("/api/v1/report-runs")
+            or (scope["path"].startswith("/api/v1/chat-sessions/")
+                and scope["path"].endswith("/report-evidence"))
+        )
+        if not protected:
             return await self.app(scope, receive, send)
         body = bytearray()
         while True:
@@ -62,7 +73,7 @@ class HarnessRoute(APIRoute):
             except HarnessError as exc:
                 return build_error_response(
                     request=request, status_code=exc.status_code, code=exc.code,
-                    message=exc.code, retryable=False,
+                    message=exc.code, retryable=False, details=exc.details,
                 )
             except RequestValidationError as exc:
                 return build_error_response(
@@ -77,9 +88,37 @@ class HarnessRoute(APIRoute):
         return handle
 
 
-def get_report_run_service() -> ReportRunService:
-    # 仅隔离测试应用覆盖此依赖；生产启用需后续 transport/预算验收。
-    raise HarnessError("feature_unavailable", 503)
+def get_report_run_service(database=Depends(get_database_service)) -> ReportRunService:
+    config = getattr(deps.get_settings(), "report_harness", ReportHarnessSettings())
+    config = ReportHarnessSettings.model_validate(config)
+    if not config.enabled:
+        raise HarnessError("feature_unavailable", 503)
+    if config.online_enabled:
+        raise HarnessError("outbound_transport_unavailable", 503)
+    production_dependencies(config.model_dump(mode="json"))
+    store = RunStore(database.connection)
+    store.check_schema()
+    catalog = None
+    if config.endpoints:
+        catalog = AuthorizationCatalog(
+            config.endpoints, config.knowledge_collections,
+            frozenset(config.approved_knowledge_manifests),
+        )
+
+    def unavailable_roles():
+        raise HarnessError("outbound_transport_unavailable", 503)
+
+    dependencies = ReportExecutionDependencies(
+        roles_factory=unavailable_roles, execution_profile="outbound",
+        endpoint_profile_digest=(catalog.endpoint_digest if catalog else
+                                 canonical_digest({"endpoints": "unconfigured"})),
+        policy_digest=canonical_digest({"version": config.policy_version,
+                                        "budget": config.budget.model_dump(mode="json")}),
+        knowledge_manifest_digest=(catalog.knowledge_digest if catalog else
+                                   canonical_digest([])),
+        authorization_catalog=catalog,
+    )
+    return ReportRunService(store, dependencies)
 
 
 router = APIRouter(prefix="/api/v1/report-runs", tags=["report-runs"], route_class=HarnessRoute)
@@ -102,6 +141,19 @@ def get_run(run_id: UUID, user: AuthenticatedUser = Depends(get_current_user),
 def get_candidate(run_id: UUID, user: AuthenticatedUser = Depends(get_current_user),
                   service: ReportRunService = Depends(get_report_run_service)):
     return service.candidate(user.id, str(run_id))
+
+
+@router.get("/{run_id}/authorization-preview")
+def authorization_preview(run_id: UUID, user: AuthenticatedUser = Depends(get_current_user),
+                          service: ReportRunService = Depends(get_report_run_service)):
+    return service.authorization_preview(user.id, str(run_id))
+
+
+@router.post("/{run_id}/authorize")
+def authorize_run(run_id: UUID, payload: AuthorizationRequest,
+                  user: AuthenticatedUser = Depends(get_current_user),
+                  service: ReportRunService = Depends(get_report_run_service)):
+    return service.authorize(user.id, str(run_id), payload)
 
 
 @router.get("/{run_id}/events")

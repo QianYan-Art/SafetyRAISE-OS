@@ -97,9 +97,16 @@ def test_http_rejects_client_profile_and_oversized_body():
         assert roles.calls == []
 
 
-def test_production_dependency_stays_disabled():
+def test_production_dependency_stays_disabled(monkeypatch):
+    from types import SimpleNamespace
+    from app.api import deps
+    from app.report_harness.config import ReportHarnessSettings
+
     app, _, _ = http_app()
     app.dependency_overrides.pop(get_report_run_service)
+    app.dependency_overrides[deps.get_database_service] = lambda: object()
+    monkeypatch.setattr(deps, "get_settings",
+                        lambda: SimpleNamespace(report_harness=ReportHarnessSettings()))
     with TestClient(app) as client:
         response = client.post("/api/v1/report-runs", json=payload(),
                                headers={"Authorization": "Bearer owner"})

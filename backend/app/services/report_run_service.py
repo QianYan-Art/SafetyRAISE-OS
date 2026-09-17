@@ -3,12 +3,15 @@ from __future__ import annotations
 import asyncio
 import logging
 from copy import deepcopy
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from pydantic import ValidationError
 
 from app.adapters.input.dict_input_adapter import DictInputAdapter
 from app.report_harness.contracts import canonical_digest, validate_publication
+from app.report_harness.authorization import AuthorizationRequest
+from app.report_harness.evidence import freeze_snapshot
 from app.report_harness.errors import HarnessError
 from app.report_harness.execution import ReportExecutionDependencies
 from app.report_harness.store import RunStore
@@ -16,24 +19,6 @@ from app.schemas.report import ReportResult
 from app.schemas.report_run import CandidateReport, CreateRunRequest, ReviewResult
 
 logger = logging.getLogger(__name__)
-
-def _fact_obligations(value: object, path: str = "") -> list[dict]:
-    if isinstance(value, dict) and value:
-        return [
-            item for key, child in value.items()
-            for item in _fact_obligations(child, path + "/" + str(key).replace("~", "~0").replace("/", "~1"))
-        ]
-    if isinstance(value, list) and value:
-        return [
-            item for index, child in enumerate(value)
-            for item in _fact_obligations(child, path + "/" + str(index))
-        ]
-    return [{
-        "obligation_id": "fact:" + path,
-        "source_refs": ["accident:" + path],
-        "required_treatment": "正文覆盖、说明不确定或给出不相关理由",
-    }]
-
 
 class ReportRunService:
     def __init__(self, store: RunStore, dependencies: ReportExecutionDependencies):
@@ -43,14 +28,8 @@ class ReportRunService:
     def create(self, owner: str, request: CreateRunRequest) -> dict:
         self.store.check_schema()
         data = deepcopy(DictInputAdapter(request.accident_data).load())
-        snapshot = {
-            "canonicalization_version": 1,
-            "accident_data": data,
-            "supplemental_records": [],
-            "revision": request.evidence_revision,
-            "knowledge_manifest_digest": self.dependencies.knowledge_manifest_digest,
-            "fact_obligations": _fact_obligations(data),
-        }
+        snapshot = freeze_snapshot(data, [], request.evidence_revision,
+                                   self.dependencies.knowledge_manifest_digest)
         document = {
             "run_id": str(uuid4()), "session_id": request.session_id,
             "parent_run_id": str(request.parent_run_id) if request.parent_run_id else None,
@@ -98,6 +77,39 @@ class ReportRunService:
             "display_status": "candidate",
         }
 
+    def authorization_preview(self, owner: str, run_id: str) -> dict:
+        record = self.store.get(owner, run_id)
+        catalog = self.dependencies.authorization_catalog
+        if catalog is None:
+            return {
+                "available": False, "reason": "authorization_profile_unavailable",
+                "snapshot_digest": record["snapshot_digest"],
+                "endpoint_profile_digest": record["endpoint_profile_digest"],
+                "approved_knowledge_manifest_digest": record["snapshot"]["knowledge_manifest_digest"],
+                "snapshot": deepcopy(record["snapshot"]), "endpoints": [],
+                "knowledge_collections": [],
+            }
+        return catalog.preview(record)
+
+    def authorize(self, owner: str, run_id: str, request: AuthorizationRequest) -> dict:
+        with self.store.locked(owner, run_id) as (conn, row):
+            if row["state"] not in {"queued", "suspended"}:
+                raise HarnessError("authorization_state_conflict")
+            catalog = self.dependencies.authorization_catalog
+            if catalog is None:
+                raise HarnessError("authorization_profile_unavailable")
+            approval = catalog.validate(row["document"], request)
+            approval.update(policy_digest=row["document"]["policy_digest"], owner_user_id=owner)
+            previous = row["document"].get("approval")
+            if previous and all(previous.get(key) == value for key, value in approval.items()):
+                return self.public_view(self.store._view(row))
+            approval["approved_at"] = datetime.now(timezone.utc).isoformat()
+            updated = self.store.save(
+                conn, row, row["state"], {**row["document"], "approval": approval},
+                "checkpoint", {"step": "authorization", "snapshot_digest": request.snapshot_digest},
+            )
+            return self.public_view(updated)
+
     def preflight(self, owner: str, run_id: str, expected_version: int) -> None:
         record = self.store.get(owner, run_id)
         if record["state_version"] != expected_version:
@@ -106,6 +118,8 @@ class ReportRunService:
             raise HarnessError("not_executable")
         if record["execution_profile"] != "synthetic_test":
             # 授权和计费边界完成前，在线执行始终关闭，不能借工程标记外发。
+            if record.get("approval"):
+                raise HarnessError("outbound_transport_unavailable", 503)
             raise HarnessError("authorization_required")
         if (self.dependencies.execution_profile != "synthetic_test"
                 or record["quality_gate"] != "engineering_only"

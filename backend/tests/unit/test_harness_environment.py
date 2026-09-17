@@ -30,7 +30,6 @@ def test_database_address_cannot_be_overridden_by_environment(monkeypatch):
 @pytest.mark.parametrize("config", [
     {"execution_profile": "synthetic_test"},
     {"test_release_bindings": [{"approved": True}]},
-    {"enabled": True},
     {"online_enabled": True},
 ])
 def test_production_cannot_enable_unvalidated_execution(config):
@@ -40,3 +39,7 @@ def test_production_cannot_enable_unvalidated_execution(config):
 
 def test_production_defaults_to_disabled():
     assert production_dependencies({}) is None
+
+
+def test_data_only_configuration_does_not_enable_outbound():
+    assert production_dependencies({"enabled": True, "online_enabled": False}) is None
