@@ -1,4 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
+from threading import Event
+from time import monotonic, sleep
 from uuid import uuid4
 
 import pytest
@@ -127,3 +129,65 @@ def test_concurrent_request_key_across_sessions_has_precise_conflict(pg_store):
         with store.connection() as conn:
             conn.execute("DELETE FROM report_runs WHERE session_id=%s", (second_session,))
             conn.execute("DELETE FROM chat_sessions WHERE id=%s", (second_session,))
+
+
+def test_lease_expiring_while_waiting_for_row_lock_is_rejected(pg_store):
+    store, owner, _, session = pg_store
+    run = store.create(owner, uuid4(), "lock-expiry", document(session))
+    run_id = run["run_id"]
+    token = store.acquire(owner, run_id, 0, uuid4())
+    with store.connection() as conn:
+        conn.execute(
+            "UPDATE report_runs SET lease_expires_at=clock_timestamp()+interval '1 second' "
+            "WHERE run_id=%s", (run_id,),
+        )
+    started = Event()
+    waiter_pid = []
+
+    # 确认第二个连接确实进入锁等待，再让租约过期；不能只凭线程启动推定发生竞争。
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with store.connection() as holder:
+            holder.execute("SELECT run_id FROM report_runs WHERE run_id=%s FOR UPDATE", (run_id,))
+            def read_locked():
+                with store.connection() as conn:
+                    waiter_pid.append(conn.execute("SELECT pg_backend_pid()").fetchone()["pg_backend_pid"])
+                    started.set()
+                    return store._read(conn, owner, run_id, lock=True)
+            future = pool.submit(read_locked)
+            assert started.wait(5)
+            deadline = monotonic() + 5
+            while True:
+                with store.connection() as observer:
+                    waiting = observer.execute(
+                        "SELECT wait_event_type FROM pg_stat_activity WHERE pid=%s",
+                        (waiter_pid[0],),
+                    ).fetchone()
+                if waiting and waiting["wait_event_type"] == "Lock":
+                    break
+                assert monotonic() < deadline, "未观察到真实行锁竞争"
+                sleep(0.01)
+            holder.execute("SELECT pg_sleep(1.1)")
+        row = future.result(timeout=5)
+    assert row["db_now"] >= row["lease_expires_at"]
+    with pytest.raises(HarnessError, match="lease_lost"):
+        store.assert_active(owner, run_id, token)
+
+
+def test_suspension_freezes_accumulated_active_time(pg_store):
+    store, owner, _, session = pg_store
+    run = store.create(owner, uuid4(), "active-time", document(session))
+    run_id = run["run_id"]
+    token = store.acquire(owner, run_id, 0, uuid4())
+    with store.connection() as conn:
+        conn.execute(
+            "UPDATE report_runs SET document=jsonb_set(document,'{active_started_at}',"
+            "to_jsonb((clock_timestamp()-interval '2 seconds')::text)) WHERE run_id=%s",
+            (run_id,),
+        )
+    before = store.get(owner, run_id)
+    assert before["active_seconds"] >= 2
+    paused = store.transition(owner, run_id, token, "suspended", before)
+    assert paused["active_seconds"] >= before["active_seconds"]
+    with store.connection() as conn:
+        conn.execute("SELECT pg_sleep(0.05)")
+    assert store.get(owner, run_id)["active_seconds"] == paused["active_seconds"]

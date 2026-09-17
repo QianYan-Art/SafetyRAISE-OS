@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Literal, Protocol
 
 from app.report_harness.authorization import AuthorizationCatalog
+from app.schemas.report_run import BudgetPolicy
 
 
 class ReportRoles(Protocol):
@@ -28,6 +29,8 @@ class ReportExecutionDependencies:
     max_active_seconds: float = 600
     authorization_catalog: AuthorizationCatalog | None = None
     knowledge_chunks: tuple[dict, ...] = ()
+    budget_policy: BudgetPolicy = field(default_factory=BudgetPolicy)
+    runtime_roles_factory: Callable[..., ReportRoles] | None = None
 
     def __post_init__(self):
         if self.max_active_seconds <= 0:

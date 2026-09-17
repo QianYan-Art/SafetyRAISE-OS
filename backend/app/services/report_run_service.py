@@ -18,6 +18,7 @@ from app.report_harness.controlled_tools import ControlledTools
 from app.report_harness.role_loop import RoleLoop, role_context
 from app.report_harness.review_ledger import IssueLedger
 from app.report_harness.prompts import load_role_prompts
+from app.report_harness.request_ledger import RequestLedger
 from app.report_harness.store import RunStore
 from app.schemas.report import ReportResult
 from app.schemas.report_run import CandidateReport, CreateRunRequest, ReviewResult
@@ -43,7 +44,10 @@ class ReportRunService:
             "terminal_reason": None, "quality_gate": "engineering_only",
             "formal_export_eligible": False, "release_binding_status": "unapproved",
             "budget": {"physical_requests": 0, "known_used": 0, "unknown_reserved": 0,
-                       "inflight_reserved": 0, "remaining": 120000},
+                       "inflight_reserved": 0,
+                       "remaining": self.dependencies.budget_policy.max_total_tokens},
+            "budget_policy": self.dependencies.budget_policy.model_dump(mode="json"),
+            "active_seconds": 0,
             "execution_profile": self.dependencies.execution_profile,
             "endpoint_profile_digest": self.dependencies.endpoint_profile_digest,
             "policy_digest": self.dependencies.policy_digest,
@@ -55,7 +59,7 @@ class ReportRunService:
         result = self.store.create(
             owner, request.request_id, canonical_digest(request.model_dump(mode="json")), document
         )
-        return self.public_view(result)
+        return self._budget_view(owner, result)
 
     @staticmethod
     def public_view(document: dict) -> dict:
@@ -70,7 +74,16 @@ class ReportRunService:
         return result
 
     def get(self, owner: str, run_id: str) -> dict:
-        return self.public_view(self.store.get(owner, run_id))
+        return self._budget_view(owner, self.store.get(owner, run_id))
+
+    def _budget_view(self, owner: str, record: dict) -> dict:
+        result = self.public_view(record)
+        if "budget_policy" in record and hasattr(self.store, "connection"):
+            result["budget"] = {
+                **RequestLedger(self.store).view(owner, record["run_id"]),
+                "active_seconds": record.get("active_seconds", 0),
+            }
+        return result
 
     def candidate(self, owner: str, run_id: str) -> dict:
         record = self.store.get(owner, run_id)
@@ -109,13 +122,14 @@ class ReportRunService:
             approval.update(policy_digest=row["document"]["policy_digest"], owner_user_id=owner)
             previous = row["document"].get("approval")
             if previous and all(previous.get(key) == value for key, value in approval.items()):
-                return self.public_view(self.store._view(row))
-            approval["approved_at"] = datetime.now(timezone.utc).isoformat()
-            updated = self.store.save(
-                conn, row, row["state"], {**row["document"], "approval": approval},
-                "checkpoint", {"step": "authorization", "snapshot_digest": request.snapshot_digest},
-            )
-            return self.public_view(updated)
+                updated = self.store._view(row)
+            else:
+                approval["approved_at"] = datetime.now(timezone.utc).isoformat()
+                updated = self.store.save(
+                    conn, row, row["state"], {**row["document"], "approval": approval},
+                    "checkpoint", {"step": "authorization", "snapshot_digest": request.snapshot_digest},
+                )
+        return self._budget_view(owner, updated)
 
     def preflight(self, owner: str, run_id: str, expected_version: int) -> None:
         record = self.store.get(owner, run_id)
@@ -137,6 +151,8 @@ class ReportRunService:
                 or record.get("knowledge_source_digest")
                 != canonical_digest(self.dependencies.knowledge_chunks)
                 or record.get("role_prompts") != load_role_prompts()):
+            raise HarnessError("authorization_stale")
+        if record.get("budget_policy") != self.dependencies.budget_policy.model_dump(mode="json"):
             raise HarnessError("authorization_stale")
 
     def claim(self, owner: str, run_id: str, expected_version: int) -> int:
@@ -165,8 +181,16 @@ class ReportRunService:
         pulse = asyncio.create_task(heartbeat())
         try:
             self.store.assert_active(owner, run_id, token)
-            roles = self.dependencies.roles_factory()
-            async with asyncio.timeout(self.dependencies.max_active_seconds):
+            if self.dependencies.runtime_roles_factory is None:
+                roles = self.dependencies.roles_factory()
+            else:
+                roles = self.dependencies.runtime_roles_factory(self.store, owner, run_id, token)
+            policy = self.dependencies.budget_policy
+            active_used = self.store.get(owner, run_id).get("active_seconds", 0)
+            timeout = min(self.dependencies.max_active_seconds, policy.max_active_seconds) - active_used
+            if timeout <= 0:
+                raise HarnessError("budget_exhausted")
+            async with asyncio.timeout(timeout):
                 record = self.store.get(owner, run_id)
                 snapshot = deepcopy(record["snapshot"])
                 tools = ControlledTools(snapshot, deepcopy(record["knowledge_source"]))
@@ -182,8 +206,10 @@ class ReportRunService:
                         "tool", public,
                     )
 
-                loop = RoleLoop(tools, checkpoint, before_call=lambda:
-                                self.store.assert_active(owner, run_id, token))
+                loop = RoleLoop(
+                    tools, checkpoint, max_tool_calls=policy.max_tool_calls,
+                    before_call=lambda: self.store.assert_active(owner, run_id, token),
+                )
                 self.store.assert_active(owner, run_id, token)
                 prepared = await roles.prepare(deepcopy(snapshot))
                 if set(prepared) != {"guidance", "knowledge"} or prepared["knowledge"]:
@@ -195,7 +221,8 @@ class ReportRunService:
                 ledger = IssueLedger()
                 previous = None
                 feedback = None
-                for version in range(1, 4):
+                max_version = min(2, policy.max_revision_rounds) + 1
+                for version in range(1, max_version + 1):
                     candidate, review, check_args = await self._candidate_round(
                         owner, run_id, token, record=record, prepared=prepared, roles=roles,
                         tools=tools, loop=loop, ledger=ledger, version=version, previous=previous,
@@ -214,7 +241,7 @@ class ReportRunService:
                             resolved_issue_ids=frozenset(ledger.resolved_ids()),
                         )
                         break
-                    if version == 3:
+                    if version == max_version:
                         self._stop_if_owned(owner, run_id, token, "needs_review",
                                             "revision_rounds_exhausted")
                         return self.get(owner, run_id)
@@ -238,7 +265,7 @@ class ReportRunService:
                         },
                     }, "final", {"state": "published"},
                 )
-                return self.public_view(published)
+                return self._budget_view(owner, published)
         except asyncio.CancelledError:
             if not heartbeat_failed:
                 self.cancel_claimed(owner, run_id, token)
@@ -248,9 +275,15 @@ class ReportRunService:
             self._stop_if_owned(owner, run_id, token, "needs_review", reason)
             return self.get(owner, run_id)
         except HarnessError as exc:
+            if exc.code in {"usage_unknown", "completion_unknown"}:
+                self._stop_if_owned(owner, run_id, token, "suspended", exc.code)
+                return self.get(owner, run_id)
             if exc.code in {"role_response_too_large", "invalid_role_response",
-                            "model_turn_budget_exhausted", "tool_budget_exhausted"}:
-                self._stop_if_owned(owner, run_id, token, "needs_review", exc.code)
+                            "model_turn_budget_exhausted", "tool_budget_exhausted",
+                            "budget_exhausted", "usage_exceeded", "physical_request_budget_exhausted",
+                            "retrieval_request_budget_exhausted", "token_budget_exhausted"}:
+                reason = "budget_exhausted" if exc.code.endswith("budget_exhausted") else exc.code
+                self._stop_if_owned(owner, run_id, token, "needs_review", reason)
                 return self.get(owner, run_id)
             if exc.code != "lease_lost":
                 self._stop_if_owned(owner, run_id, token, "failed", exc.code)
@@ -354,7 +387,7 @@ class ReportRunService:
                 raise
 
     def cancel(self, owner: str, run_id: str) -> dict:
-        return self.public_view(self.store.cancel(owner, run_id))
+        return self._budget_view(owner, self.store.cancel(owner, run_id))
 
     def cancel_claimed(self, owner: str, run_id: str, token: int) -> dict:
-        return self.public_view(self.store.cancel(owner, run_id, expected_token=token))
+        return self._budget_view(owner, self.store.cancel(owner, run_id, expected_token=token))

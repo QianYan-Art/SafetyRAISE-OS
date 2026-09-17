@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from datetime import datetime
 from typing import Callable, Iterator
 from uuid import UUID
 
@@ -16,7 +17,7 @@ from app.report_harness.evidence import EvidenceBindingError, freeze_snapshot
 TERMINAL_STATES = frozenset({"published", "needs_review", "cancelled", "failed"})
 NEXT_STATES = {
     "queued": {"queued", "preparing", "cancelled", "failed"},
-    "preparing": {"generating", "suspended", "needs_review", "cancelled", "failed"},
+    "preparing": {"preparing", "generating", "suspended", "needs_review", "cancelled", "failed"},
     "generating": {"generating", "checking", "suspended", "needs_review", "cancelled", "failed"},
     "checking": {"checking", "revising", "published", "suspended", "needs_review", "cancelled", "failed"},
     "revising": {"revising", "checking", "suspended", "needs_review", "cancelled", "failed"},
@@ -131,11 +132,21 @@ class RunStore:
     def _view(row: dict) -> dict:
         return {
             **row["document"],
+            "active_seconds": RunStore._active_seconds(row),
             "run_id": str(row["run_id"]),
             "state": row["state"],
             "state_version": row["state_version"],
             "last_event_seq": row["last_event_seq"],
         }
+
+    @staticmethod
+    def _active_seconds(row: dict) -> float:
+        document = row["document"]
+        total = float(document.get("active_seconds", 0))
+        started = document.get("active_started_at")
+        if started and row.get("db_now") is not None:
+            total += max(0, (row["db_now"] - datetime.fromisoformat(started)).total_seconds())
+        return total
 
     @staticmethod
     def _read(conn: Connection, owner: str, run_id: str, *, lock=False) -> dict:
@@ -150,6 +161,9 @@ class RunStore:
         ).fetchone()
         if row is None:
             raise HarnessError("not_found", 404)
+        if lock:
+            # 等待行锁后重新取时钟，不能拿等待前的时间判断租约仍有效。
+            row["db_now"] = conn.execute("SELECT clock_timestamp() AS db_now").fetchone()["db_now"]
         return row
 
     def get(self, owner: str, run_id: str) -> dict:
@@ -185,7 +199,9 @@ class RunStore:
                 "lease_expires_at=clock_timestamp()+interval '30 seconds' WHERE run_id=%s",
                 (token, worker, run_id),
             )
-            self.save(conn, row, "preparing", row["document"], "stage", {"stage": "preparing"})
+            self.save(conn, row, "preparing", {
+                **row["document"], "active_started_at": row["db_now"].isoformat(),
+            }, "stage", {"stage": "preparing"})
             return token
 
     def heartbeat(self, owner: str, run_id: str, token: int) -> None:
@@ -209,6 +225,11 @@ class RunStore:
         seq = row["last_event_seq"] + 1
         version = row["state_version"] + 1
         terminal = state in TERMINAL_STATES
+        if terminal or state == "suspended":
+            document = {
+                **document, "active_seconds": RunStore._active_seconds(row),
+                "active_started_at": None,
+            }
         updated = conn.execute(
             "UPDATE report_runs SET state=%s,state_version=%s,document=%s,last_event_seq=%s,"
             "lease_owner=CASE WHEN %s THEN NULL ELSE lease_owner END,"
@@ -224,7 +245,7 @@ class RunStore:
             "VALUES (%s,%s,%s,%s,%s)",
             (row["run_id"], seq, event_type, version, Jsonb(data)),
         )
-        return RunStore._view(updated)
+        return RunStore._view({**updated, "db_now": row["db_now"]})
 
     def transition(self, owner: str, run_id: str, token: int,
                    state: str, patch: dict, event_type="stage", data=None) -> dict:

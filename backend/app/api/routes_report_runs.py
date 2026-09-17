@@ -117,6 +117,7 @@ def get_report_run_service(database=Depends(get_database_service)) -> ReportRunS
         knowledge_manifest_digest=(catalog.knowledge_digest if catalog else
                                    canonical_digest([])),
         authorization_catalog=catalog,
+        budget_policy=config.budget,
     )
     return ReportRunService(store, dependencies)
 
