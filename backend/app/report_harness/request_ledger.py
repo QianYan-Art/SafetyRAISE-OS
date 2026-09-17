@@ -275,7 +275,7 @@ class RequestLedger:
         # 不带当前 fencing_token 锁 run，才能让已登记的旧 attempt 在终态迟到结算。
         settlement_conflict = False
         settled_view: dict | None = None
-        with self.store.locked(owner, run_id) as (conn, row):
+        with self.store.locked_settlement(owner, run_id) as (conn, row):
             request_row = self._lock_request(
                 conn, row["run_id"], request_uuid, attempt_uuid, token,
             )
@@ -402,10 +402,12 @@ class RequestLedger:
         self._validate_token(token)
         request_uuid = self._request_uuid(request_id, "request_id")
         attempt_uuid = self._request_uuid(attempt_id, "attempt_id")
-        with self.store.locked(owner, run_id) as (conn, row):
+        with self.store.locked_settlement(owner, run_id) as (conn, row):
             request_row = self._lock_request(
                 conn, row["run_id"], request_uuid, attempt_uuid, token,
             )
+            if request_row["status"] == "completion_unknown":
+                return
             if request_row["status"] != "dispatched":
                 raise HarnessError(
                     "request_state_conflict",
@@ -432,10 +434,12 @@ class RequestLedger:
         self._validate_token(token)
         request_uuid = self._request_uuid(request_id, "request_id")
         attempt_uuid = self._request_uuid(attempt_id, "attempt_id")
-        with self.store.locked(owner, run_id) as (conn, row):
+        with self.store.locked_settlement(owner, run_id) as (conn, row):
             request_row = self._lock_request(
                 conn, row["run_id"], request_uuid, attempt_uuid, token,
             )
+            if request_row["status"] == "rejected":
+                return
             if request_row["status"] != "intent":
                 raise HarnessError(
                     "request_state_conflict",

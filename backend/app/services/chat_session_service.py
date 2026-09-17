@@ -2,6 +2,7 @@ import hashlib
 import json
 import logging
 import mimetypes
+import os
 import shutil
 from json import JSONDecodeError
 from pathlib import Path
@@ -14,6 +15,14 @@ from psycopg.types.json import Jsonb
 
 from app.core.exceptions import SessionNotFoundError
 from app.core.settings import Settings
+from app.report_harness.session_deletion import (
+    assert_session_identity_available,
+    assert_session_not_deleted,
+    delete_session as delete_session_records,
+    guarded_session_file_write,
+    lock_session_identity,
+    relation_exists,
+)
 from app.providers.retrieval.factory import build_retriever
 from app.providers.retrieval.mock_retriever import MockRetriever
 from app.services.auth_service import AuthenticatedUser
@@ -42,6 +51,12 @@ REPORT_PROGRESS_BADGE = "报告生成"
 REPORT_PROGRESS_DONE_TEXT = "报告文件已写入输出目录。"
 KNOWLEDGE_MESSAGE_PREFIX = "### 首轮知识库片段（节选）"
 AGENTIC_MESSAGE_PREFIX = "### Agentic RAG 新增片段（节选）"
+_WINDOWS_INVALID_SESSION_ID_CHARS = frozenset('<>:"/\\|?*')
+_WINDOWS_RESERVED_DEVICE_NAMES = frozenset(
+    {"con", "prn", "aux", "nul"}
+    | {f"com{index}" for index in range(1, 10)}
+    | {f"lpt{index}" for index in range(1, 10)}
+)
 logger = logging.getLogger(__name__)
 _SESSION_LOCKS: dict[str, RLock] = {}
 _SESSION_LOCKS_GUARD = Lock()
@@ -74,6 +89,12 @@ class ChatSessionService:
         self._migrate_legacy_file_sessions()
         sessions: list[ChatSessionRecord] = []
         with self.database_service.connection() as conn:
+            barrier_filter = ""
+            if relation_exists(conn, "session_deletion_barriers"):
+                barrier_filter = (
+                    " AND NOT EXISTS (SELECT 1 FROM session_deletion_barriers b "
+                    "WHERE b.session_id=chat_sessions.id)"
+                )
             with conn.cursor() as cur:
                 if self.current_user is None:
                     cur.execute(
@@ -82,7 +103,8 @@ class ChatSessionService:
                                created_at, updated_at, sort_order, source_type, source_name,
                                messages, draft_json, draft_meta, report_result, session_state
                         from chat_sessions
-                        """
+                        where 1=1
+                        """ + barrier_filter
                     )
                 else:
                     cur.execute(
@@ -91,9 +113,9 @@ class ChatSessionService:
                                created_at, updated_at, sort_order, source_type, source_name,
                                messages, draft_json, draft_meta, report_result, session_state
                         from chat_sessions
-                        where owner_user_id = %s
-                           or (owner_user_id is null and owner_username = %s)
-                        """,
+                        where (owner_user_id = %s
+                           or (owner_user_id is null and owner_username = %s))
+                        """ + barrier_filter,
                         (self.current_user.id, self.current_user.username),
                     )
                 rows = list(cur.fetchall())
@@ -172,29 +194,30 @@ class ChatSessionService:
 
     def delete_session(self, session_id: str) -> None:
         with _get_session_lock(session_id):
+            session_dir = self._session_dir(session_id)
             record = self.get_session(session_id)
+            delete_session_records(
+                self.database_service.connection,
+                session_id,
+                owner_user_id=getattr(self.current_user, "id", None),
+                owner_username=getattr(self.current_user, "username", None),
+            )
             seen: set[Path] = set()
             for linked_file in record.linked_files:
-                raw_path = Path(linked_file.path).resolve()
+                raw_path = self._resolve_session_owned_path(linked_file.path, session_dir)
+                if raw_path is None:
+                    # 元数据不能证明外部路径属于当前会话时保留，避免误删其他会话或根目录。
+                    continue
                 if raw_path in seen:
                     continue
                 seen.add(raw_path)
-                if self._is_shared_input_path(raw_path):
-                    continue
-                if not self._is_safe_data_path(raw_path):
-                    continue
                 if raw_path.is_dir():
                     shutil.rmtree(raw_path, ignore_errors=True)
                 elif raw_path.exists():
                     raw_path.unlink(missing_ok=True)
 
-            session_dir = self._session_dir(session_id)
             if session_dir.exists():
                 shutil.rmtree(session_dir, ignore_errors=True)
-            with self.database_service.connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute("delete from chat_sessions where id = %s", (session_id,))
-                conn.commit()
 
     def list_linked_artifacts(self, session_id: str) -> list[ChatSessionLinkedArtifact]:
         return list(self.get_session(session_id, include_linked_files=False).linked_artifacts)
@@ -1188,7 +1211,10 @@ class ChatSessionService:
 
     def _write_session(self, record: ChatSessionRecord) -> None:
         payload = record.model_dump()
-        with self.database_service.connection() as conn:
+        with self.database_service.connection() as conn, conn.transaction():
+            lock_session_identity(conn, record.id)
+            assert_session_not_deleted(conn, record.id)
+            assert_session_identity_available(conn, record.id)
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -1234,7 +1260,6 @@ class ChatSessionService:
                         record.session_state,
                     ),
                 )
-            conn.commit()
 
     def _load_session_row(
         self,
@@ -1277,7 +1302,9 @@ class ChatSessionService:
         include_linked_files: bool = True,
         include_linked_artifacts: bool = True,
     ) -> ChatSessionRecord:
-        with self.database_service.connection() as conn:
+        with self.database_service.connection() as conn, conn.transaction():
+            lock_session_identity(conn, session_id)
+            assert_session_not_deleted(conn, session_id)
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -1358,9 +1385,14 @@ class ChatSessionService:
                 continue
             try:
                 with _get_session_lock(session_dir.name):
+                    with self.database_service.connection() as conn, conn.transaction():
+                        lock_session_identity(conn, session_dir.name)
+                        assert_session_not_deleted(conn, session_dir.name)
                     record = self._load_session_file(session_file)
                     self._write_session(record)
                     migrated_any = True
+            except SessionNotFoundError:
+                continue
             except (JSONDecodeError, OSError, UnicodeDecodeError, ValidationError) as exc:
                 logger.warning("迁移旧会话文件失败：%s；错误：%s", session_file, exc)
         if migrated_any:
@@ -1877,15 +1909,29 @@ class ChatSessionService:
 
         input_path = str(draft_meta.get("input_path") or "").strip()
         if input_path:
-            resolved = Path(input_path).resolve()
-            # 会话草稿只允许回写会话私有运行产物，不能覆盖共享默认输入文件。
-            if self._is_shared_input_path(resolved):
-                pass
-            elif self._is_safe_data_path(resolved):
-                resolved.parent.mkdir(parents=True, exist_ok=True)
-                resolved.write_text(
-                    json.dumps(draft_payload, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
+            try:
+                resolved = Path(input_path).resolve()
+                session_dir = self._session_dir(record.id)
+                chat_sessions_root = Path(self.settings.chat_sessions_dir_path).resolve()
+                target_in_session_root = resolved == chat_sessions_root or resolved.is_relative_to(
+                    chat_sessions_root
+                )
+            except (OSError, RuntimeError, TypeError, ValueError):
+                resolved = None
+                target_in_session_root = None
+
+            # 会话根内的路径必须属于当前会话；外部旧产物继续使用原安全路径规则。
+            if target_in_session_root is True:
+                allowed = self._is_strict_descendant(resolved, session_dir)
+            elif target_in_session_root is False:
+                allowed = not self._is_shared_input_path(resolved) and self._is_safe_data_path(resolved)
+            else:
+                allowed = False
+            if allowed:
+                guarded_session_file_write(
+                    self.database_service.connection,
+                    record.id,
+                    lambda: self._write_draft_artifact(resolved, draft_payload),
                 )
 
         if not updates:
@@ -1922,7 +1968,71 @@ class ChatSessionService:
         )
 
     def _session_dir(self, session_id: str) -> Path:
-        return self.settings.chat_sessions_dir_path / session_id
+        if not isinstance(session_id, str) or not session_id or session_id in {".", ".."}:
+            raise SessionNotFoundError("非法会话ID")
+        if "/" in session_id or "\\" in session_id or "\x00" in session_id:
+            raise SessionNotFoundError("非法会话ID")
+        if os.name == "nt":
+            if session_id.endswith((".", " ")) or any(
+                char in _WINDOWS_INVALID_SESSION_ID_CHARS or ord(char) < 32
+                for char in session_id
+            ):
+                raise SessionNotFoundError("非法会话ID")
+            device_name = session_id.split(".", 1)[0].rstrip(" .").casefold()
+            if device_name in _WINDOWS_RESERVED_DEVICE_NAMES:
+                raise SessionNotFoundError("非法会话ID")
+        session_path = Path(session_id)
+        if session_path.is_absolute() or session_path.drive:
+            raise SessionNotFoundError("非法会话ID")
+        try:
+            root = Path(self.settings.chat_sessions_dir_path).resolve()
+            lexical = root / session_id
+            if lexical.is_symlink():
+                raise SessionNotFoundError("非法会话目录")
+            resolved = lexical.resolve()
+            if os.name == "nt" and root.is_dir():
+                resolved_key = os.path.normcase(str(resolved))
+                for sibling in root.iterdir():
+                    if sibling.name == session_id:
+                        continue
+                    sibling_key = os.path.normcase(str(sibling.resolve()))
+                    if sibling_key == resolved_key:
+                        raise SessionNotFoundError("会话目录标识冲突")
+            is_child = resolved != root and resolved.is_relative_to(root)
+        except (OSError, RuntimeError, TypeError) as exc:
+            raise SessionNotFoundError("非法会话ID") from exc
+        except ValueError as exc:
+            raise SessionNotFoundError("非法会话目录") from exc
+        if not is_child:
+            raise SessionNotFoundError("非法会话目录")
+        return resolved
+
+    @staticmethod
+    def _write_draft_artifact(path: Path, payload: dict[str, Any]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    @staticmethod
+    def _resolve_session_owned_path(path_value: Any, session_dir: Path) -> Path | None:
+        if not path_value:
+            return None
+        try:
+            candidate = Path(str(path_value)).resolve()
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return None
+        if not ChatSessionService._is_strict_descendant(candidate, session_dir):
+            return None
+        return candidate
+
+    @staticmethod
+    def _is_strict_descendant(candidate: Path, parent: Path) -> bool:
+        try:
+            return candidate != parent and candidate.is_relative_to(parent)
+        except ValueError:
+            return False
 
     def _attach_latest_unlinked_report_to_recent_session(
         self,

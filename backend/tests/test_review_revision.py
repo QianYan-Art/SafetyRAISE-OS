@@ -91,14 +91,14 @@ def test_http_revision_is_independently_reviewed_before_publication(tool_client)
 ])
 def test_http_revision_cannot_erase_or_self_close_review_findings(tool_client, mode):
     record, _ = run_http(tool_client, RevisionRoles(mode))
-    assert record["state"] == "needs_review"
+    assert record["state"] == "needs_review", record
     assert "report" not in record
 
 
 def test_http_two_revision_rounds_exhausted_retains_candidate_and_issues(tool_client):
     roles = RevisionRoles("persistent")
     record, _ = run_http(tool_client, roles)
-    assert record["state"] == "needs_review"
+    assert record["state"] == "needs_review", record
     assert record["terminal_reason"] == "revision_rounds_exhausted"
     assert roles.versions == [1, 2, 3] and roles.reviewed == [1, 2, 3]
     assert record["candidate_version"] == 3

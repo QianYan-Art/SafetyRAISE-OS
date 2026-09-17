@@ -4,6 +4,7 @@ import asyncio
 import json
 from uuid import UUID
 
+import anyio
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.encoders import jsonable_encoder
@@ -197,16 +198,24 @@ async def execute_run(run_id: UUID, payload: ExecuteRunRequest,
                 await asyncio.sleep(0.05)
         except Exception:
             # 仅重放控制器已持久化的事件，不伪造缺少序号的流式终态。
-            page = service.store.events(user.id, identifier, seq)
+            try:
+                page = service.store.events(user.id, identifier, seq)
+            except HarnessError as exc:
+                if exc.code != "not_found":
+                    raise
+                return
             for event in page["events"]:
                 yield "data: " + json.dumps(jsonable_encoder(event), ensure_ascii=False) + "\n\n"
         finally:
-            try:
-                if not task.done():
-                    service.cancel_claimed(user.id, identifier, token)
-            finally:
-                task.cancel()
-                await asyncio.gather(task, return_exceptions=True)
+            # 断连的取消域不能再次打断持久取消及 transport 关闭。
+            with anyio.CancelScope(shield=True):
+                try:
+                    if not task.done():
+                        service.cancel_claimed(user.id, identifier, token)
+                finally:
+                    if not task.done() and not task.cancelling():
+                        task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
 
     return StreamingResponse(stream(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache"})

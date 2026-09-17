@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+import os
 from threading import Event
 from time import monotonic, sleep
 from uuid import uuid4
@@ -7,6 +8,7 @@ import pytest
 
 from app.report_harness.errors import HarnessError
 from app.report_harness.store import RunStore
+from app.report_harness.test_database import migrate_test_database
 
 
 def document(session):
@@ -29,6 +31,17 @@ def test_create_is_idempotent_and_owner_scoped(pg_store):
         store.get(other, first["run_id"])
     assert exc.value.status_code == 404
     assert RunStore(store.connection).get(owner, first["run_id"]) == first
+
+
+def test_applied_migrations_do_not_take_table_ddl_locks(pg_store):
+    store, _, _, _ = pg_store
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with store.connection() as holder:
+            holder.execute("LOCK TABLE report_runs IN ACCESS SHARE MODE")
+            migration = pool.submit(
+                migrate_test_database, os.environ["REPORT_HARNESS_TEST_DSN"],
+            )
+            migration.result(timeout=3)
 
 
 def test_session_active_uniqueness(pg_store):

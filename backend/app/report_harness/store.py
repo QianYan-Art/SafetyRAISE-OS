@@ -42,7 +42,7 @@ class RunStore:
             versions = conn.execute(
                 "SELECT version FROM report_run_schema_version ORDER BY version"
             ).fetchall()
-            if [v["version"] for v in versions] != [1]:
+            if [v["version"] for v in versions] != [1, 2]:
                 raise HarnessError("schema_version_mismatch", 503)
 
     @staticmethod
@@ -51,7 +51,9 @@ class RunStore:
             "SELECT id, draft_json FROM chat_sessions "
             "WHERE id = %s AND (owner_user_id = %s OR "
             "(owner_user_id IS NULL AND owner_username="
-            "(SELECT username FROM users WHERE id=%s))) FOR UPDATE",
+            "(SELECT username FROM users WHERE id=%s))) "
+            "AND NOT EXISTS (SELECT 1 FROM session_deletion_barriers b "
+            "WHERE b.session_id=chat_sessions.id) FOR UPDATE",
             (session_id, owner, owner),
         ).fetchone()
         if row is None:
@@ -156,7 +158,9 @@ class RunStore:
             "WHERE r.run_id=%s AND r.owner_user_id=%s AND "
             "(s.owner_user_id=%s OR (s.owner_user_id IS NULL AND s.owner_username="
             "(SELECT username FROM users WHERE id=%s))) "
-            "AND r.deleted_at IS NULL" + (" FOR UPDATE OF r" if lock else ""),
+            "AND r.deleted_at IS NULL AND NOT EXISTS "
+            "(SELECT 1 FROM session_deletion_barriers b WHERE b.session_id=r.session_id)"
+            + (" FOR UPDATE OF r" if lock else ""),
             (run_id, owner, owner, owner),
         ).fetchone()
         if row is None:
@@ -170,6 +174,19 @@ class RunStore:
         with self.connection() as conn:
             conn.row_factory = dict_row
             return self._view(self._read(conn, owner, run_id))
+
+    @contextmanager
+    def locked_settlement(self, owner: str, run_id: str) -> Iterator[tuple[Connection, dict]]:
+        """仅内部原 attempt 结算可越过会话删除屏障，不授予运行读写或发送权限。"""
+        with self.connection() as conn, conn.transaction():
+            conn.row_factory = dict_row
+            row = conn.execute(
+                "SELECT * FROM report_runs WHERE run_id=%s AND owner_user_id=%s FOR UPDATE",
+                (run_id, owner),
+            ).fetchone()
+            if row is None:
+                raise HarnessError("not_found", 404)
+            yield conn, row
 
     @contextmanager
     def locked(
@@ -261,6 +278,12 @@ class RunStore:
                 return self._view(row)
             conn.execute(
                 "UPDATE report_runs SET fencing_token=fencing_token+1 WHERE run_id=%s",
+                (run_id,),
+            )
+            conn.execute(
+                "UPDATE report_run_requests SET status=CASE WHEN status='intent' "
+                "THEN 'rejected' ELSE 'completion_unknown' END "
+                "WHERE run_id=%s AND status IN ('intent','dispatched')",
                 (run_id,),
             )
             return self.save(conn, row, "cancelled",

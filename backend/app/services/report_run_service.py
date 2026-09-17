@@ -169,10 +169,15 @@ class ReportRunService:
 
         async def heartbeat():
             nonlocal heartbeat_failed
+            next_heartbeat = asyncio.get_running_loop().time() + 5
             try:
                 while True:
-                    await asyncio.sleep(5)
-                    await asyncio.to_thread(self.store.heartbeat, owner, run_id, token)
+                    await asyncio.sleep(0.25)
+                    await asyncio.to_thread(self.store.assert_active, owner, run_id, token)
+                    now = asyncio.get_running_loop().time()
+                    if now >= next_heartbeat:
+                        await asyncio.to_thread(self.store.heartbeat, owner, run_id, token)
+                        next_heartbeat = now + 5
             except Exception:
                 heartbeat_failed = True
                 logger.warning("报告运行心跳失效，停止当前执行。", extra={"run_id": run_id})
@@ -288,7 +293,10 @@ class ReportRunService:
             if exc.code != "lease_lost":
                 self._stop_if_owned(owner, run_id, token, "failed", exc.code)
             raise
-        except Exception:
+        except Exception as exc:
+            logger.error("报告执行发生内部异常。", extra={
+                "run_id": run_id, "error_type": type(exc).__name__,
+            })
             self._stop_if_owned(owner, run_id, token, "failed", "execution_error")
             raise
         finally:
@@ -383,11 +391,16 @@ class ReportRunService:
                                   "error", {"reason": reason})
         except HarnessError as exc:
             # 取消或租约抢占已经建立更强屏障，不覆盖其终态。
-            if exc.code != "lease_lost":
+            if exc.code not in {"lease_lost", "not_found"}:
                 raise
 
     def cancel(self, owner: str, run_id: str) -> dict:
         return self._budget_view(owner, self.store.cancel(owner, run_id))
 
-    def cancel_claimed(self, owner: str, run_id: str, token: int) -> dict:
-        return self._budget_view(owner, self.store.cancel(owner, run_id, expected_token=token))
+    def cancel_claimed(self, owner: str, run_id: str, token: int) -> dict | None:
+        try:
+            return self._budget_view(owner, self.store.cancel(owner, run_id, expected_token=token))
+        except HarnessError as exc:
+            if exc.code != "not_found":
+                raise
+            return None

@@ -70,4 +70,5 @@ def pg_store():
                 conn.execute("DELETE FROM report_runs WHERE run_id=%s", (run_id,))
             conn.execute("DELETE FROM report_session_evidence WHERE session_id=%s", (session,))
             conn.execute("DELETE FROM chat_sessions WHERE id=%s", (session,))
+            conn.execute("DELETE FROM session_deletion_barriers WHERE session_id=%s", (session,))
             conn.execute("DELETE FROM users WHERE id IN (%s,%s)", (owner, other))
