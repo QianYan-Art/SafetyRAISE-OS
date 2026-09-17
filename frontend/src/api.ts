@@ -15,7 +15,18 @@ import type {
   PdfExportOptions,
   CapabilityConfigState,
   PublicAppConfig,
+  AuthorizeReportRunPayload,
+  CreateReportRunPayload,
+  ReportAuthorizationPreview,
+  ReportEvidenceRecord,
+  ReportEvidenceResponse,
+  ReportExportMode,
   ReportExportFormat,
+  ReportRunCandidate,
+  ReportRunEvent,
+  ReportRunEventsPage,
+  ReportRunPage,
+  ReportRunView,
   UpdateCapabilityConfigsPayload,
   UserSummary,
 } from "./types";
@@ -61,6 +72,10 @@ export class ApiError extends Error {
 export interface ReportStreamEvent {
   event: string;
   [key: string]: unknown;
+}
+
+export interface ReportRunStreamHandlers {
+  onEvent?: (event: ReportRunEvent) => void;
 }
 
 export interface DownloadReportExportResult {
@@ -420,6 +435,265 @@ export async function generateReportFromConfirmedInputStream(
     throw new Error("报告流提前结束，未收到最终结果。");
   }
   return finalPayload;
+}
+
+export async function fetchReportEvidence(sessionId: string): Promise<ReportEvidenceResponse> {
+  const response = await authFetch(
+    `${API_BASE}/api/v1/chat-sessions/${encodeURIComponent(sessionId)}/report-evidence`,
+    { method: "GET" },
+  );
+  return parseJsonResponse<ReportEvidenceResponse>(response);
+}
+
+export async function saveReportEvidence(
+  sessionId: string,
+  expectedRevision: number,
+  records: ReportEvidenceRecord[],
+): Promise<ReportEvidenceResponse> {
+  const response = await authFetch(
+    `${API_BASE}/api/v1/chat-sessions/${encodeURIComponent(sessionId)}/report-evidence`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        expected_revision: expectedRevision,
+        records: records.map(evidenceWriteRecord),
+      }),
+    },
+  );
+  return parseJsonResponse<ReportEvidenceResponse>(response);
+}
+
+export function evidenceWriteRecord(record: ReportEvidenceRecord): ReportEvidenceRecord {
+  return {
+    evidence_id: record.evidence_id,
+    text: record.text,
+    source_label: record.source_label,
+    source_locator: record.source_locator,
+    kind: record.kind,
+    verification_status: record.verification_status,
+    conflicts_with: record.conflicts_with,
+    verification_note: record.verification_note,
+    field_conflicts: record.field_conflicts,
+  };
+}
+
+export async function createReportRun(payload: CreateReportRunPayload): Promise<ReportRunView> {
+  const response = await authFetch(`${API_BASE}/api/v1/report-runs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonResponse<ReportRunView>(response);
+}
+
+export async function listReportRuns(
+  sessionId: string,
+  options: { limit?: number; cursor?: string | null } = {},
+): Promise<ReportRunPage> {
+  const query = new URLSearchParams();
+  query.set("session_id", sessionId);
+  if (options.limit !== undefined) {
+    query.set("limit", String(options.limit));
+  }
+  if (options.cursor) {
+    query.set("cursor", options.cursor);
+  }
+  const response = await authFetch(`${API_BASE}/api/v1/report-runs?${query.toString()}`, {
+    method: "GET",
+  });
+  return parseJsonResponse<ReportRunPage>(response);
+}
+
+export async function fetchReportRun(runId: string): Promise<ReportRunView> {
+  const response = await authFetch(`${API_BASE}/api/v1/report-runs/${encodeURIComponent(runId)}`, {
+    method: "GET",
+  });
+  return parseJsonResponse<ReportRunView>(response);
+}
+
+export async function fetchReportRunCandidate(runId: string): Promise<ReportRunCandidate> {
+  const response = await authFetch(
+    `${API_BASE}/api/v1/report-runs/${encodeURIComponent(runId)}/candidate`,
+    { method: "GET" },
+  );
+  return parseJsonResponse<ReportRunCandidate>(response);
+}
+
+export async function fetchAuthorizationPreview(runId: string): Promise<ReportAuthorizationPreview> {
+  const response = await authFetch(
+    `${API_BASE}/api/v1/report-runs/${encodeURIComponent(runId)}/authorization-preview`,
+    { method: "GET" },
+  );
+  return parseJsonResponse<ReportAuthorizationPreview>(response);
+}
+
+export async function authorizeReportRun(
+  runId: string,
+  payload: AuthorizeReportRunPayload,
+): Promise<ReportRunView> {
+  const response = await authFetch(
+    `${API_BASE}/api/v1/report-runs/${encodeURIComponent(runId)}/authorize`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+  return parseJsonResponse<ReportRunView>(response);
+}
+
+export async function fetchReportRunEvents(
+  runId: string,
+  options: { afterSeq?: number; limit?: number } = {},
+): Promise<ReportRunEventsPage> {
+  const query = new URLSearchParams();
+  if (options.afterSeq !== undefined) {
+    query.set("after_seq", String(options.afterSeq));
+  }
+  if (options.limit !== undefined) {
+    query.set("limit", String(options.limit));
+  }
+  const suffix = query.size ? `?${query.toString()}` : "";
+  const response = await authFetch(
+    `${API_BASE}/api/v1/report-runs/${encodeURIComponent(runId)}/events${suffix}`,
+    { method: "GET" },
+  );
+  return parseJsonResponse<ReportRunEventsPage>(response);
+}
+
+export async function cancelReportRun(runId: string): Promise<ReportRunView> {
+  const response = await authFetch(
+    `${API_BASE}/api/v1/report-runs/${encodeURIComponent(runId)}/cancel`,
+    { method: "POST" },
+  );
+  return parseJsonResponse<ReportRunView>(response);
+}
+
+async function streamReportRun(
+  runId: string,
+  action: "execute" | "resume",
+  expectedVersion: number,
+  handlers: ReportRunStreamHandlers,
+  signal?: AbortSignal,
+  retryUnknownRequests = false,
+): Promise<void> {
+  const endpoint = action === "execute" ? "execute/stream" : "resume/stream";
+  const body = action === "execute"
+    ? { expected_version: expectedVersion }
+    : { expected_version: expectedVersion, retry_unknown_requests: retryUnknownRequests };
+  const response = await authFetch(
+    `${API_BASE}/api/v1/report-runs/${encodeURIComponent(runId)}/${endpoint}`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "text/event-stream",
+      },
+      signal,
+      body: JSON.stringify(body),
+    },
+  );
+  if (!response.ok) {
+    throw await buildApiError(response);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error("报告运行流未返回可读取的数据流。");
+  }
+
+  const decoder = new TextDecoder("utf-8");
+  let buffer = "";
+  const emit = (chunk: string) => {
+    const parsed = parseSseChunk(chunk);
+    if (!parsed || typeof parsed.run_id !== "string" || typeof parsed.seq !== "number") {
+      return;
+    }
+    const candidate = parsed as ReportStreamEvent & Partial<ReportRunEvent>;
+    const data = candidate.data && typeof candidate.data === "object"
+      ? candidate.data as Record<string, unknown>
+      : {};
+    const runId = candidate.run_id as string;
+    const sequence = candidate.seq as number;
+    handlers.onEvent?.({
+      run_id: runId,
+      seq: sequence,
+      type: typeof candidate.type === "string" ? candidate.type : candidate.event || "message",
+      state_version: typeof candidate.state_version === "number" ? candidate.state_version : 0,
+      occurred_at: typeof candidate.occurred_at === "string" ? candidate.occurred_at : "",
+      data,
+    });
+  };
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      const chunks = buffer.split("\n\n");
+      buffer = chunks.pop() ?? "";
+      for (const chunk of chunks) {
+        emit(chunk);
+      }
+    }
+    buffer += decoder.decode();
+    if (buffer.trim()) {
+      emit(buffer);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+export function executeReportRunStream(
+  runId: string,
+  expectedVersion: number,
+  handlers: ReportRunStreamHandlers = {},
+  signal?: AbortSignal,
+): Promise<void> {
+  return streamReportRun(runId, "execute", expectedVersion, handlers, signal);
+}
+
+export function resumeReportRunStream(
+  runId: string,
+  expectedVersion: number,
+  retryUnknownRequests: boolean,
+  handlers: ReportRunStreamHandlers = {},
+  signal?: AbortSignal,
+): Promise<void> {
+  return streamReportRun(
+    runId,
+    "resume",
+    expectedVersion,
+    handlers,
+    signal,
+    retryUnknownRequests,
+  );
+}
+
+export async function downloadReportRunExport(
+  runId: string,
+  exportFormat: ReportExportFormat,
+  mode: ReportExportMode,
+): Promise<DownloadReportExportResult> {
+  const query = new URLSearchParams({ mode });
+  const response = await authFetch(
+    `${API_BASE}/api/v1/report-runs/${encodeURIComponent(runId)}/exports/${exportFormat}?${query.toString()}`,
+    { method: "GET" },
+  );
+  if (!response.ok) {
+    throw await buildApiError(response);
+  }
+  return {
+    blob: await response.blob(),
+    fileName: parseDownloadFileName(
+      response.headers.get("content-disposition"),
+      `report-run-${runId}-${mode}.${exportFormat}`,
+    ),
+  };
 }
 
 export async function downloadReportExport(

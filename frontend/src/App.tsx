@@ -59,6 +59,7 @@ import {
   validatePendingUploadSelection,
 } from "./uploadGroups";
 import { UserModelConfigDrawer } from "./UserModelConfigDrawer";
+import { ReportHarnessPanel } from "./ReportHarnessPanel";
 
 const SidebarIcon = ({ isOpen }: { isOpen?: boolean }) => (
   <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -285,6 +286,7 @@ type ArtifactPreviewState = {
 
 type AppView = "workspace" | "admin";
 type AdminTab = "users" | "spaces";
+type WorkspaceMode = "legacy" | "report-harness";
 
 const PDF_COVER_TITLE = "道路交通事故分析报告";
 const PDF_COVER_SUBTITLE = "事故事实梳理、责任分析与研判文书";
@@ -770,6 +772,7 @@ function WorkspaceApp({
   };
 
   const [appView, setAppView] = useState<AppView>("workspace");
+  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>("legacy");
   const [adminTab, setAdminTab] = useState<AdminTab>("users");
   const [publicAppConfig, setPublicAppConfig] = useState<PublicAppConfig>(DEFAULT_PUBLIC_APP_CONFIG);
   const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
@@ -2835,6 +2838,38 @@ function WorkspaceApp({
           <AdminConsole currentUser={currentUser} activeTab={adminTab} />
         ) : (
           <>
+            <div className="workspace-mode-switch" role="tablist" aria-label="报告模式">
+              <span className="workspace-mode-label">报告模式</span>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={workspaceMode === "legacy"}
+                className={`workspace-mode-tab ${workspaceMode === "legacy" ? "is-active" : ""}`}
+                onClick={() => setWorkspaceMode("legacy")}
+              >
+                旧报告
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={workspaceMode === "report-harness"}
+                className={`workspace-mode-tab ${workspaceMode === "report-harness" ? "is-active" : ""}`}
+                onClick={() => setWorkspaceMode("report-harness")}
+              >
+                证据报告
+              </button>
+            </div>
+
+            {workspaceMode === "report-harness" ? (
+              <div className="workspace report-harness-workspace">
+                <ReportHarnessPanel
+                  key={activeSession.id}
+                  sessionId={activeSession.id}
+                  initialDraftJson={activeSession.draftJson}
+                />
+              </div>
+            ) : (
+              <>
             <div className="mobile-tabs mobile-only">
               <button 
                 className={`mobile-tab-btn ${mobileTab === 'chat' ? 'active' : ''}`}
@@ -3204,6 +3239,8 @@ function WorkspaceApp({
                 </div>
               </section>
             </div>
+              </>
+            )}
           </>
         )}
       </main>

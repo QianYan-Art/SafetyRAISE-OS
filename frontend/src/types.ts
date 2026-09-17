@@ -406,3 +406,179 @@ export interface AdminCleanupSpacesResponse {
   status: string;
   deleted_count: number;
 }
+
+export type ReportEvidenceKind = "observation" | "statement" | "document_excerpt" | "other";
+export type ReportVerificationStatus = "unverified" | "human_confirmed" | "disputed";
+
+export interface ReportFieldConflict {
+  accident_field: string;
+  explanation: string;
+}
+
+export interface ReportEvidenceRecord {
+  evidence_id: string;
+  text: string;
+  source_label: string;
+  source_locator: string;
+  kind: ReportEvidenceKind;
+  verification_status: ReportVerificationStatus;
+  conflicts_with: string[];
+  verification_note?: string | null;
+  field_conflicts: ReportFieldConflict[];
+  recorded_by?: string | null;
+  updated_at?: string | null;
+}
+
+export interface ReportEvidenceWarning {
+  evidence_id?: string;
+  accident_field?: string;
+  code?: string;
+  suggestion?: string;
+  [key: string]: unknown;
+}
+
+export interface ReportEvidenceResponse {
+  revision: number;
+  records: ReportEvidenceRecord[];
+  warnings?: ReportEvidenceWarning[];
+}
+
+export interface ReportBudgetPolicy {
+  max_physical_requests: number;
+  max_tool_calls: number;
+  max_revision_rounds: number;
+  max_retrieval_requests: number;
+  max_active_seconds: number;
+  max_total_tokens: number;
+  max_output_tokens_per_request: number;
+  max_money?: number | string | null;
+}
+
+export interface ReportBudgetView {
+  physical_requests?: number;
+  known_used?: number;
+  unknown_reserved?: number;
+  inflight_reserved?: number;
+  remaining?: number;
+  active_seconds?: number;
+  [key: string]: unknown;
+}
+
+export interface ReportRunView {
+  run_id: string;
+  session_id: string;
+  state: string;
+  state_version: number;
+  snapshot_digest: string;
+  candidate_version: number;
+  review_status: string;
+  terminal_reason?: string | null;
+  budget: ReportBudgetView;
+  last_event_seq: number;
+  quality_gate: "engineering_only" | "quality_validated" | string;
+  formal_export_eligible: boolean;
+  release_binding_status: string;
+  execution_profile?: "outbound" | "synthetic_test" | string;
+  budget_policy?: ReportBudgetPolicy | null;
+  report?: GenerateReportResponse["report"] | null;
+  [key: string]: unknown;
+}
+
+export interface ReportRunPage {
+  runs: ReportRunView[];
+  next_cursor: string | null;
+}
+
+export interface ReportRunSnapshot {
+  canonicalization_version: number;
+  accident_data: Record<string, unknown>;
+  supplemental_records: ReportEvidenceRecord[];
+  revision: number;
+  knowledge_manifest_digest: string;
+  fact_obligations: Array<Record<string, unknown>>;
+  source_digests: Record<string, string>;
+}
+
+export interface ReportEndpointDescription {
+  role: "expert" | "generator" | "reviewer" | "embedding" | string;
+  label: string;
+  base_url: string;
+  model: string;
+  version: string;
+}
+
+export interface ReportKnowledgeCollection {
+  collection_id: string;
+  version: string;
+  content_digest: string;
+  label: string;
+}
+
+export interface ReportAuthorizationPreview {
+  available: boolean;
+  reason: string | null;
+  snapshot_digest: string;
+  endpoint_profile_digest: string;
+  approved_knowledge_manifest_digest: string;
+  snapshot: ReportRunSnapshot;
+  endpoints: ReportEndpointDescription[];
+  knowledge_collections: ReportKnowledgeCollection[];
+}
+
+export interface ReportRunCandidate {
+  candidate_version: number;
+  snapshot_digest: string;
+  candidate_report: {
+    version: number;
+    report_markdown: string;
+    claims?: Array<Record<string, unknown>>;
+    obligation_resolutions?: Array<Record<string, unknown>>;
+    issue_responses?: Array<Record<string, unknown>>;
+  };
+  review_result?: {
+    issues?: Array<{
+      issue_id: string;
+      category: string;
+      severity: "blocker" | "major" | "minor" | string;
+      target: string;
+      explanation: string;
+      source_refs: string[];
+      closure_condition: string;
+      status: "open" | "resolved" | "contested" | string;
+      [key: string]: unknown;
+    }>;
+    [key: string]: unknown;
+  } | null;
+  display_status: "candidate" | string;
+}
+
+export interface ReportRunEvent {
+  run_id: string;
+  seq: number;
+  type: "stage" | "tool" | "request" | "review" | "budget" | "checkpoint" | "final" | "error" | string;
+  state_version: number;
+  occurred_at: string;
+  data: Record<string, unknown>;
+}
+
+export interface ReportRunEventsPage {
+  events: ReportRunEvent[];
+  next_seq: number;
+}
+
+export interface CreateReportRunPayload {
+  request_id: string;
+  session_id: string;
+  accident_data: Record<string, unknown>;
+  evidence_revision: number;
+  parent_run_id?: string;
+}
+
+export interface AuthorizeReportRunPayload {
+  snapshot_digest: string;
+  endpoint_profile_digest: string;
+  approved_knowledge_manifest_digest: string;
+  confirmed: true;
+}
+
+export type ReportExportMode = "formal" | "engineering";

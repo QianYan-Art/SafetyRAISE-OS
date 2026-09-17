@@ -7,6 +7,7 @@ interface JsonTableEditorProps {
   disabled?: boolean;
   isGeneratingReport?: boolean;
   onCancelGenerate?: () => void;
+  confirmLabel?: string;
 }
 
 function parseJsonToStringMap(initialJson: string): Record<string, string> {
@@ -51,6 +52,7 @@ export function JsonTableEditor({
   disabled,
   isGeneratingReport = false,
   onCancelGenerate,
+  confirmLabel = "确认事故信息并生成报告",
 }: JsonTableEditorProps) {
   const [data, setData] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
@@ -176,7 +178,7 @@ export function JsonTableEditor({
               <span className="spinner" />
               正在生成报告
             </>
-          ) : "确认事故信息并生成报告"}
+          ) : confirmLabel}
         </button>
       </div>
     </div>

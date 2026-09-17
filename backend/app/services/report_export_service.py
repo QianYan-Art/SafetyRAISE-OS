@@ -152,7 +152,8 @@ class ResolvedPdfCoverConfig:
 
 
 class _StyledPdfDocTemplate(BaseDocTemplate):
-    def __init__(self, filename: str, title: str, author: str, subject: str):
+    def __init__(self, filename: str, title: str, author: str, subject: str,
+                 verification_marker: str | None = None):
         super().__init__(
             filename,
             pagesize=A4,
@@ -166,6 +167,7 @@ class _StyledPdfDocTemplate(BaseDocTemplate):
         )
         self.report_title = title
         self.report_author = author
+        self.verification_marker = verification_marker
         self._outline_counter = 0
 
         frame = Frame(self.leftMargin, self.bottomMargin, self.width, self.height, id="content")
@@ -211,6 +213,7 @@ class _StyledPdfDocTemplate(BaseDocTemplate):
         canvas.setFillColor(colors.HexColor(PDF_COLOR_MUTED))
         canvas.drawString(doc.leftMargin, page_height - doc.topMargin - 0.45 * cm, "锐鉴安途事故分析文书")
         canvas.drawRightString(page_width - doc.rightMargin, doc.bottomMargin + 0.92 * cm, self.report_author)
+        self._draw_verification_marker(canvas, doc)
         canvas.restoreState()
 
     def _draw_body_page(self, canvas, doc) -> None:  # noqa: ANN001
@@ -231,7 +234,15 @@ class _StyledPdfDocTemplate(BaseDocTemplate):
         canvas.setFillColor(colors.HexColor(PDF_COLOR_MUTED))
         canvas.drawString(doc.leftMargin, 0.72 * cm, "交通事故责任分析报告")
         canvas.drawRightString(page_width - doc.rightMargin, 0.72 * cm, f"第 {display_page} 页")
+        self._draw_verification_marker(canvas, doc)
         canvas.restoreState()
+
+    def _draw_verification_marker(self, canvas, doc) -> None:
+        if self.verification_marker:
+            canvas.setFont("STSong-Light", 9)
+            canvas.setFillColor(colors.HexColor("#991b1b"))
+            canvas.drawCentredString(doc.pagesize[0] / 2, doc.pagesize[1] - 0.5 * cm,
+                                     self.verification_marker)
 
     def afterFlowable(self, flowable) -> None:  # noqa: ANN001
         toc_level = getattr(flowable, "_toc_level", None)
@@ -471,6 +482,7 @@ class ReportExportService:
         blocks: list[MarkdownBlock],
         report_markdown: str,
         trace_id: str,
+        verification_marker: str | None = None,
     ) -> None:
         self._ensure_docx_dependencies()
         document = Document()
@@ -481,6 +493,11 @@ class ReportExportService:
         section.right_margin = Cm(2.4)
 
         self._configure_docx_base_style(document)
+        if verification_marker:
+            header = section.header.paragraphs[0]
+            run = header.add_run(verification_marker)
+            self._set_docx_run_font(run)
+            run.bold = True
         document.core_properties.title = "交通事故分析报告"
         document.core_properties.subject = trace_id
 
@@ -627,6 +644,7 @@ class ReportExportService:
         blocks: list[MarkdownBlock],
         trace_id: str,
         cover_config: ResolvedPdfCoverConfig,
+        verification_marker: str | None = None,
     ) -> None:
         self._ensure_pdf_dependencies()
         self._ensure_pdf_font_registered()
@@ -636,6 +654,7 @@ class ReportExportService:
             title=cover_config.title,
             author=cover_config.compiled_by,
             subject=trace_id,
+            verification_marker=verification_marker,
         )
         styles = self._build_pdf_styles()
         body_blocks = self._strip_pdf_cover_title_block(blocks)

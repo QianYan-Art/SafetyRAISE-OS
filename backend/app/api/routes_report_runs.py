@@ -20,6 +20,9 @@ from app.report_harness.config import ReportHarnessSettings
 from app.report_harness.contracts import canonical_digest
 from app.report_harness.execution import ReportExecutionDependencies, production_dependencies
 from app.report_harness.store import RunStore
+from app.report_harness.release_registry import FileReleaseRegistry, verified_code_digest
+from app.report_harness.prompts import load_role_prompts
+from app.report_harness.role_loop import tool_schemas
 from app.schemas.report_run import CreateRunRequest, ExecuteRunRequest, ResumeRunRequest
 from app.services.auth_service import AuthenticatedUser
 from app.services.report_run_service import ReportRunService
@@ -99,6 +102,8 @@ def get_report_run_service(database=Depends(get_database_service)) -> ReportRunS
     production_dependencies(config.model_dump(mode="json"))
     store = RunStore(database.connection)
     store.check_schema()
+    registry = FileReleaseRegistry()
+    registry.validate()
     catalog = None
     if config.endpoints:
         catalog = AuthorizationCatalog(
@@ -114,11 +119,16 @@ def get_report_run_service(database=Depends(get_database_service)) -> ReportRunS
         endpoint_profile_digest=(catalog.endpoint_digest if catalog else
                                  canonical_digest({"endpoints": "unconfigured"})),
         policy_digest=canonical_digest({"version": config.policy_version,
-                                        "budget": config.budget.model_dump(mode="json")}),
+                                        "budget": config.budget.model_dump(mode="json"),
+                                        "prompts": load_role_prompts(),
+                                        "tools": tool_schemas(),
+                                        "context_policy": "bounded-source-reading-v1"}),
         knowledge_manifest_digest=(catalog.knowledge_digest if catalog else
                                    canonical_digest([])),
         authorization_catalog=catalog,
         budget_policy=config.budget,
+        release_registry=registry,
+        code_digest=verified_code_digest(),
     )
     return ReportRunService(store, dependencies)
 

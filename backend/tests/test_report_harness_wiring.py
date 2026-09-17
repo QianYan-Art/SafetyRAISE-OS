@@ -30,6 +30,11 @@ def test_real_main_factory_enables_data_paths_but_blocks_outbound(pg_store, monk
         approved_knowledge_manifests=[canonical_digest([])],
     )
     monkeypatch.setattr(deps, "get_settings", lambda: settings)
+    # 此用例仅测工厂接线；真实批准表ACL由独立测试验证，不更改生产文件权限。
+    monkeypatch.setattr(
+        "app.api.routes_report_runs.FileReleaseRegistry",
+        lambda: SimpleNamespace(validate=lambda: None, status=lambda _binding: "unapproved"),
+    )
     app.dependency_overrides[deps.get_database_service] = lambda: SimpleNamespace(connection=store.connection)
     token = create_access_token(auth_settings=settings.auth, user_id=owner, username=owner, role="user")
     headers = {"Authorization": f"Bearer {token}"}

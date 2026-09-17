@@ -22,6 +22,7 @@ from app.report_harness.recovery import RunRecovery
 from app.report_harness.review_ledger import IssueLedger
 from app.report_harness.prompts import load_role_prompts
 from app.report_harness.request_ledger import RequestLedger
+from app.report_harness.release_registry import export_eligibility
 from app.report_harness.store import RunStore
 from app.schemas.report import ReportResult
 from app.schemas.report_run import CandidateReport, CreateRunRequest, ReviewResult
@@ -60,6 +61,18 @@ class ReportRunService:
             "execution_contract_digest": self._contract_digest(),
             "approval": None,
         }
+        registry = self.dependencies.release_registry
+        if (self.dependencies.execution_profile == "outbound"
+                and self.dependencies.code_digest and registry is not None):
+            binding = registry.binding_for({
+                "code_digest": self.dependencies.code_digest,
+                "policy_digest": self.dependencies.policy_digest,
+                "model_endpoint_digest": self.dependencies.endpoint_profile_digest,
+                "knowledge_manifest_digest": self.dependencies.knowledge_manifest_digest,
+            })
+            if binding:
+                document["release_binding"] = binding
+                document["quality_gate"] = "quality_validated"
         result = self.store.create(
             owner, request.request_id, canonical_digest(request.model_dump(mode="json")), document
         )
@@ -73,6 +86,8 @@ class ReportRunService:
             "last_event_seq", "quality_gate", "formal_export_eligible", "release_binding_status",
         )
         result = {key: document[key] for key in keys}
+        result["execution_profile"] = document.get("execution_profile", "outbound")
+        result["budget_policy"] = document.get("budget_policy", {})
         if document["state"] == "published":
             result["report"] = document["report"]
         return result
@@ -92,6 +107,9 @@ class ReportRunService:
 
     def _budget_view(self, owner: str, record: dict) -> dict:
         result = self.public_view(record)
+        eligible, status = export_eligibility(record, self.dependencies.release_registry)
+        result["formal_export_eligible"] = eligible
+        result["release_binding_status"] = status
         if "budget_policy" in record and hasattr(self.store, "connection"):
             result["budget"] = {
                 **RequestLedger(self.store).view(owner, record["run_id"]),
