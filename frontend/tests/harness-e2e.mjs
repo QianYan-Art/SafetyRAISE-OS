@@ -6,6 +6,7 @@ import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { cleanupSucceeded, stopChild, trackChild } from "./process-cleanup.mjs";
 
 const frontend = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const root = path.dirname(frontend);
@@ -57,7 +58,7 @@ function start(command, args, env) {
   });
   child.stdout.on("data", (chunk) => logs.push(chunk.toString("utf8")));
   child.stderr.on("data", (chunk) => logs.push(chunk.toString("utf8")));
-  children.push(child);
+  children.push(trackChild(child));
   return child;
 }
 
@@ -297,19 +298,23 @@ try {
       method: "POST", headers: { "Content-Type": "application/json",
         "X-Harness-Control": bootstrap.control_token },
       body: JSON.stringify({ control_token: bootstrap.control_token }),
+      signal: AbortSignal.timeout(5000),
     }).catch(() => {});
   }
-  for (const child of children) {
-    if (child.exitCode === null) {
-      if (child === children[0]) {
-        await Promise.race([
-          new Promise((resolve) => child.once("exit", resolve)),
-          new Promise((resolve) => setTimeout(resolve, 5000)),
-        ]);
+  const cleanupErrors = [];
+  for (const tracked of children) {
+    try {
+      const status = await stopChild(tracked, tracked === children[0] ? 5000 : 0);
+      if (tracked === children[0] && bootstrap && !cleanupSucceeded(status)) {
+        cleanupErrors.push("隔离后端未正常退出，不能确认资源清理");
       }
-      if (child.exitCode === null) child.kill();
-      await new Promise((resolve) => child.exitCode !== null ? resolve() : child.once("exit", resolve));
+      if (tracked !== children[0] && !cleanupSucceeded(status, true)) {
+        cleanupErrors.push("前端服务异常退出，不能确认浏览器验收");
+      }
+    } catch (error) {
+      cleanupErrors.push(error.message);
     }
   }
   await fs.writeFile(path.join(output, "service.log"), logs.join(""));
+  assert.deepEqual(cleanupErrors, []);
 }

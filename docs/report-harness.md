@@ -174,3 +174,27 @@ API默认端口18081，若被Windows保留则显式设置`HARNESS_TEST_API_PORT=
 `REPORT_HARNESS_E2E_OUTPUT`指定本次截图、公开事件和结果目录。
 runner退出会关闭自己启动的服务并清理自己创建的数据库行。
 真实质量门尚未获得模型、预算及材料授权；浏览器通过不等于完整E门或Q门通过。
+
+## 离线工程门
+
+在`D:/MCP_Server/TS_analysis_report`执行，DSN仅可指向回环专用测试库：
+
+```powershell
+$env:REPORT_HARNESS_TEST_DSN = 'host=127.0.0.1 port=15432 dbname=safetyraise_harness_test user=postgres'
+$env:HARNESS_TEST_API_PORT = '18281'
+$env:PYTHONPATH = 'backend'
+.\.venv\Scripts\python.exe -m evals.report_harness.run --output-dir C:/tmp/internal/think/.mission/20260916_23-14-07-safetyraise-report-evidence/verification/e-next
+```
+
+输出目录必须不存在，不能覆盖历史失败证据。runner串行运行完整后端suite、
+前端测试、真实子进程清理回归、TypeScript、构建和浏览器；
+任何失败、skip或缺少必需浏览器场景都拒绝关闭E。
+`manifest.json`列出故障矩阵与旧标签基线；`result.json`保存提交、工作区状态、
+命令/退出码/耗时、源码/策略/迁移/构建配置及产物SHA-256。
+验证过程中源码变化、旧标签变化或真实批准表变化也判失败。
+公开事件通过纯本地`replay_events`重放，不导入服务或网络执行器。
+`engineering_gate=passed`仅证明该指纹版本的工程门，`quality_gate`仍为`not_run`，
+不写生产批准、不打最终标签、不推送或部署。
+测试服务从初始化阶段注册独立清理回调，关闭连接池失败也会尝试删除自身测试行；
+浏览器runner从启动时观察进程退出，信号退出不重复等待，强制清理有界。
+隔离API需正常退出，否则工程门失败。

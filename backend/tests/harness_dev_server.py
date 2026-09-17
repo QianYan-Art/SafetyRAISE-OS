@@ -7,6 +7,7 @@ import os
 import secrets
 import socket
 import time
+from contextlib import ExitStack
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -123,6 +124,11 @@ def cleanup(dsn: str, owner: str, session: str):
         conn.execute("DELETE FROM users WHERE id=%s", (owner,))
 
 
+def close_database(database):
+    if database._pool is not None:
+        database._pool.close()
+
+
 def main():
     dsn = validate_test_dsn(os.environ.get("REPORT_HARNESS_TEST_DSN", ""))
     port = int(os.environ.get("HARNESS_TEST_API_PORT", "18081"))
@@ -137,11 +143,14 @@ def main():
             raise RuntimeError("浏览器工程入口禁止非回环外联")
         return original_connect(sock, address)
 
-    socket.socket.connect = local_connect
-    with TemporaryDirectory(prefix="safetyraise-browser-") as temporary:
+    with ExitStack() as resources, TemporaryDirectory(prefix="safetyraise-browser-") as temporary:
+        resources.callback(setattr, socket.socket, "connect", original_connect)
+        socket.socket.connect = local_connect
         settings = make_settings(dsn, Path(temporary), username)
         prepare_tables(dsn)
+        resources.callback(cleanup, dsn, owner, session)
         database = DatabaseService(settings)
+        resources.callback(close_database, database)
         store = RunStore(database.connection)
         registry = HistoricalRegistry()
         run_dependencies = replace(
@@ -243,11 +252,7 @@ def main():
                 return {"run_id": run_id, "fixture_scope": "只读历史批准fixture，下载仍带工程标记"}
             raise HTTPException(404)
 
-        try:
-            server.run()
-        finally:
-            cleanup(dsn, owner, session)
-            socket.socket.connect = original_connect
+        server.run()
 
 
 if __name__ == "__main__":

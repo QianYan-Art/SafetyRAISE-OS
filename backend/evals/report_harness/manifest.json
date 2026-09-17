@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "quality_gate": "engineering_only",
+  "model_scope": "合成角色及回环HTTP；不代表真实模型语义或实际计费",
+  "frozen_tags": {
+    "geenew1": "3232015b1779a53522f3b1aecb0594a7582d9a60",
+    "opensource": "dc591f0659ab74d6649ba437f01930edd220ee81",
+    "previsualization": "8c3a99cf5d8bfbcb386335dd38f0d2f6d8a7fd74",
+    "serverdeploy": "20f9f7dc4fb37051af2f26505fe54483d8430cb3"
+  },
+  "required_browser_cases": [
+    "证据保存与刷新保持",
+    "证据CAS冲突不静默覆盖",
+    "独立审查后发布与工程样本下载，正式导出禁用",
+    "真实控制流显式取消，刷新不复活终态",
+    "刷新只读，待执行运行零请求",
+    "未知请求默认拒绝与显式恢复",
+    "历史批准撤销阻断正式下载",
+    "移动端证据编辑与操作",
+    "1440×900与390×844布局、无页面脚本异常"
+  ],
+  "cases": [
+    {"area": "旧兼容", "evidence": ["backend/tests/unit/test_legacy_report_schema.py", "backend/tests/test_run_cancellation.py"]},
+    {"area": "证据与授权", "evidence": ["backend/tests/test_evidence_contract.py", "backend/tests/test_outbound_approval.py", "backend/tests/test_report_run_auth.py"]},
+    {"area": "上下文及独立审查", "evidence": ["backend/tests/test_report_tool_policy.py", "backend/tests/test_review_revision.py"]},
+    {"area": "物理预算", "evidence": ["backend/tests/test_request_ledger.py", "backend/tests/test_budgeted_transport.py", "backend/tests/test_metered_report_flow.py"]},
+    {"area": "取消与删除", "evidence": ["backend/tests/test_run_cancellation.py", "backend/tests/test_session_deletion.py"]},
+    {"area": "进程崩溃恢复", "evidence": ["backend/tests/test_run_recovery.py", "backend/tests/test_recovery_store.py", "backend/tests/test_run_journal.py"]},
+    {"area": "导出与批准隔离", "evidence": ["backend/tests/test_run_exports.py", "backend/tests/test_release_registry.py"]},
+    {"area": "浏览器", "evidence": ["frontend/tests/harness-e2e.mjs"]}
+  ]
+}
