@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import date, datetime, timezone
 from decimal import Decimal
 import hashlib
 import json
 import os
 from pathlib import Path
+import subprocess
+import sqlite3
 import time
 from uuid import uuid4
 import xml.etree.ElementTree as ET
@@ -24,16 +26,18 @@ from app.report_harness.authorization import (
 )
 from app.report_harness.contracts import canonical_digest
 from app.report_harness.execution import ReportExecutionDependencies
+from app.report_harness.errors import HarnessError
 from app.report_harness.request_ledger import RequestLedger
 from app.report_harness.store import RunStore
 from app.report_harness.test_database import validate_test_dsn
 from app.report_harness.transport import BudgetedTransport, RequestBound
-from app.report_harness.transport_roles import RoleModel, TransportRoles
+from app.report_harness.transport_roles import RoleModel
+from evals.report_harness.quoted_roles import QuotedTransportRoles
 from app.schemas.report_run import BudgetPolicy, CreateRunRequest
 from app.services.report_run_service import ReportRunService
 from evals.report_harness.development_provider import (
     DevelopmentClient, ENDPOINT, MODEL, OUTPUT_LIMIT, TOKEN_BOUND,
-    REQUEST_CNY_UPPER, USD_TO_CNY_UPPER, validate_metadata,
+    REQUEST_CNY_UPPER, USD_TO_CNY_UPPER, GENERATION_SETTINGS, validate_metadata,
 )
 
 
@@ -99,6 +103,22 @@ def execution_proof(version: str) -> dict:
     }
 
 
+def check_unknown_costs(experiment: Path, acknowledged: list[int]) -> None:
+    if any(type(item) is not int or item < 1 for item in acknowledged):
+        raise ValueError("未知请求确认编号无效。")
+    ledger = experiment / "money.sqlite3"
+    if not ledger.exists():
+        return
+    with closing(sqlite3.connect(ledger.as_uri() + "?mode=ro", uri=True)) as connection:
+        pending = {row[0] for row in connection.execute(
+            "SELECT attempt_id FROM money_guard_attempts "
+            "WHERE experiment_id=? AND state IN ('reserved','unknown')",
+            ("report-evidence-v1-Q-CNY100",),
+        )}
+    if pending - set(acknowledged):
+        raise HarnessError("unknown_cost_ack_required")
+
+
 async def run(args):
     if not args.confirm_outbound:
         raise ValueError("必须显式确认本次开发外发。")
@@ -106,6 +126,7 @@ async def run(args):
     repo = Path(__file__).resolve().parents[3]
     if experiment == repo or repo in experiment.parents:
         raise ValueError("私有试验产物不能进入源码仓。")
+    check_unknown_costs(experiment, args.acknowledge_unknown_attempts)
     data = load_input(Path(args.input), args.input_sha256)
     dsn = validate_test_dsn(os.environ.get("REPORT_HARNESS_TEST_DSN", ""))
     key = os.environ.get("OPENROUTER_API_KEY", "")
@@ -117,6 +138,24 @@ async def run(args):
     attempt_dir.mkdir()
     write_json(attempt_dir / "preflight.json", preflight)
     write_json(attempt_dir / "input.json", data)
+    source_paths = sorted({
+        *repo.glob("backend/app/report_harness/**/*.py"),
+        *repo.glob("backend/evals/report_harness/*.py"),
+        *repo.glob("backend/config/report_harness/*.md"),
+        repo / "backend/app/services/report_run_service.py",
+        repo / "backend/app/schemas/report_run.py",
+    })
+    write_json(attempt_dir / "source.json", {
+        "commit": subprocess.check_output(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True,
+        ).strip(),
+        "working_tree": subprocess.check_output(
+            ["git", "-C", str(repo), "status", "--porcelain"], text=True,
+        ).splitlines(),
+        "sha256": {str(path.relative_to(repo)): hashlib.sha256(path.read_bytes()).hexdigest()
+                   for path in source_paths},
+        "generation_settings": GENERATION_SETTINGS,
+    })
 
     @contextmanager
     def connection():
@@ -164,6 +203,7 @@ async def run(args):
         started = time.monotonic()
 
         def authorize():
+            check_unknown_costs(experiment, args.acknowledge_unknown_attempts)
             active_store.assert_active(active_owner, run_id, token)
             service._validate_profile(active_store.get(active_owner, run_id), active_owner)
 
@@ -175,14 +215,18 @@ async def run(args):
             bound_provider=lambda role, payload: RequestBound(TOKEN_BOUND, OUTPUT_LIMIT, proof_digest),
             verified_proofs=frozenset({proof_digest}),
         )
-        return TransportRoles(transport, {
+        return QuotedTransportRoles(transport, {
             role: RoleModel(MODEL, json_object_mode=True) for role in ("generator", "reviewer")
         })
 
     dependencies = ReportExecutionDependencies(
         roles_factory=lambda: None, runtime_roles_factory=roles_factory,
         execution_profile="outbound", endpoint_profile_digest=catalog.endpoint_digest,
-        policy_digest=canonical_digest({"budget": policy.model_dump(mode="json"), "proof": proof}),
+        policy_digest=canonical_digest({
+            "budget": policy.model_dump(mode="json"), "proof": proof,
+            "generation_settings": GENERATION_SETTINGS,
+            "wire_protocol": "unique-quote-spans-v1",
+        }),
         knowledge_manifest_digest=knowledge_digest, authorization_catalog=catalog,
         budget_policy=policy, max_active_seconds=900, force_engineering_exports=True,
         development_outbound_enabled=True,
@@ -196,6 +240,9 @@ async def run(args):
         "owner": owner, "session": session, "run_id": run_id, "input_sha256": args.input_sha256,
         "scope": "开发样本，不是完整Q验收；无外部知识，不作法律责任判定",
         "proof": proof, "proof_digest": proof_digest,
+        "generation_settings": GENERATION_SETTINGS,
+        "wire_protocol": "unique-quote-spans-v1",
+        "acknowledged_unknown_attempts": args.acknowledge_unknown_attempts,
     })
     service.authorize(owner, run_id, AuthorizationRequest(
         snapshot_digest=record["snapshot_digest"], endpoint_profile_digest=catalog.endpoint_digest,
@@ -215,11 +262,12 @@ async def run(args):
     write_json(attempt_dir / "result.json", {
         "failure_type": failure, "record": record,
         "last_http_statuses": [client.last_http_status for client in clients],
+        "transport_error_types": [client.last_error_type for client in clients],
     })
     write_json(attempt_dir / "events.json", store.events(owner, run_id, 0, 500))
     candidate = record.get("candidate")
     if candidate:
-        marker = "开发报告，待老师独立验收；不是正式责任认定，也不代表Q通过。"
+        marker = "工程验证样本（真实模型开发报告），待老师独立验收；不是正式责任认定，也不代表Q通过。"
         if record["state"] != "published":
             marker += "\n\n系统检查未通过，不可按最终报告使用。"
         (attempt_dir / "report.md").write_text(
@@ -239,10 +287,14 @@ def main():
     parser.add_argument("--input-sha256", required=True)
     parser.add_argument("--experiment-dir", required=True)
     parser.add_argument("--confirm-outbound", action="store_true")
+    parser.add_argument("--acknowledge-unknown-attempts", nargs="+", type=int, default=[])
     try:
         status = asyncio.run(run(parser.parse_args()))
     except Exception as exc:
-        print(json.dumps({"status": "failed_before_delivery", "error_type": type(exc).__name__}))
+        print(json.dumps({
+            "status": "failed_before_delivery", "error_type": type(exc).__name__,
+            "error_code": exc.code if isinstance(exc, HarnessError) else None,
+        }))
         raise SystemExit(1) from None
     raise SystemExit(status)
 

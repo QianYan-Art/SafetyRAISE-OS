@@ -16,6 +16,7 @@ OUTPUT_LIMIT = 16384
 TOKEN_BOUND = CONTEXT_LIMIT + MODEL_OUTPUT_LIMIT
 USD_TO_CNY_UPPER = Decimal("10")
 REQUEST_CNY_UPPER = Decimal("24")
+GENERATION_SETTINGS = {"reasoning": {"effort": "low", "exclude": True}}
 
 
 def validate_metadata(data: dict) -> dict:
@@ -64,6 +65,7 @@ class DevelopmentClient(HTTPAttemptClient):
             {role: {"Authorization": f"Bearer {key}"} for role in roles},
         )
         self.last_http_status = None
+        self.last_error_type = None
 
     async def attempt(self, role, payload, timeout):
         if (role not in self.registered_roles or payload.get("model") != MODEL
@@ -78,13 +80,17 @@ class DevelopmentClient(HTTPAttemptClient):
                 "require_parameters": True, "data_collection": "deny",
                 "max_price": {"prompt": 1, "completion": 3, "request": 0, "image": 0},
             },
-            "reasoning": {"effort": "high", "exclude": True},
+            **deepcopy(GENERATION_SETTINGS),
             "stream": False,
         })
         try:
             response = await super().attempt(role, outbound, timeout)
         except httpx.HTTPStatusError as exc:
             self.last_http_status = exc.response.status_code
+            self.last_error_type = type(exc).__name__
+            raise
+        except Exception as exc:
+            self.last_error_type = type(exc).__name__
             raise
         self.last_http_status = 200
         if response.get("model") != MODEL or response.get("provider") != "Tencent":

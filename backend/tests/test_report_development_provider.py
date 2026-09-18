@@ -1,6 +1,7 @@
 from copy import deepcopy
 from decimal import Decimal
 import asyncio
+import httpx
 
 import pytest
 
@@ -70,12 +71,34 @@ def test_fixed_routing_and_reasoning_redaction(monkeypatch):
             assert sent[0]["provider"]["only"] == ["tencent/fp8"]
             assert sent[0]["provider"]["max_price"]["request"] == 0
             assert sent[0]["reasoning"]["exclude"] is True
+            assert sent[0]["reasoning"]["effort"] == "low"
             with pytest.raises(HarnessError):
                 await client.attempt("generator", {
                     "model": MODEL, "max_tokens": OUTPUT_LIMIT, "messages": [],
                     "plugins": [{"id": "web"}],
                 }, 1)
             assert len(sent) == 1
+        finally:
+            await client.close()
+
+    asyncio.run(check())
+
+
+def test_transport_failure_records_type_not_sensitive_message(monkeypatch):
+    async def attempt(self, role, payload, timeout):
+        raise httpx.ReadError("合成敏感异常正文，不得输出")
+
+    monkeypatch.setattr(HTTPAttemptClient, "attempt", attempt)
+
+    async def check():
+        client = DevelopmentClient("synthetic-key")
+        try:
+            with pytest.raises(httpx.ReadError):
+                await client.attempt("generator", {
+                    "model": MODEL, "max_tokens": OUTPUT_LIMIT, "messages": [],
+                }, 1)
+            assert client.last_error_type == "ReadError"
+            assert client.last_http_status is None
         finally:
             await client.close()
 
