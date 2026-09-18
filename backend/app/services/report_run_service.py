@@ -169,16 +169,19 @@ class ReportRunService:
             raise HarnessError("version_conflict")
         if record["state"] != "queued":
             raise HarnessError("not_executable")
-        self._validate_profile(record)
+        self._validate_profile(record, owner)
 
-    def _validate_profile(self, record: dict) -> None:
-        if record["execution_profile"] != "synthetic_test":
+    def _validate_profile(self, record: dict, owner: str | None = None) -> None:
+        profile = record.get("execution_profile")
+        if profile == "outbound" and not self.dependencies.development_outbound_enabled:
             # 授权和计费边界完成前，在线执行始终关闭，不能借工程标记外发。
             if record.get("approval"):
                 raise HarnessError("outbound_transport_unavailable", 503)
             raise HarnessError("authorization_required")
-        if (self.dependencies.execution_profile != "synthetic_test"
-                or record["quality_gate"] != "engineering_only"
+        if profile not in {"synthetic_test", "outbound"}:
+            raise HarnessError("authorization_stale")
+        if (self.dependencies.execution_profile != profile
+                or record.get("quality_gate") != "engineering_only"
                 or record["endpoint_profile_digest"] != self.dependencies.endpoint_profile_digest
                 or record["policy_digest"] != self.dependencies.policy_digest
                 or record["snapshot"]["knowledge_manifest_digest"]
@@ -192,6 +195,29 @@ class ReportRunService:
         if (record.get("execution_contract_digest") != self._contract_digest()
                 or canonical_digest(record["snapshot"]) != record["snapshot_digest"]):
             raise HarnessError("checkpoint_version_mismatch")
+        if profile == "outbound":
+            self._validate_development_outbound(record, owner)
+
+    def _validate_development_outbound(self, record: dict, owner: str | None) -> None:
+        if record.get("release_binding") is not None or record.get("formal_export_eligible", False):
+            raise HarnessError("authorization_stale")
+        catalog = self.dependencies.authorization_catalog
+        if catalog is None or not catalog.preview(record)["available"]:
+            raise HarnessError("authorization_stale")
+        approval = record.get("approval")
+        if (not isinstance(approval, dict)
+                or not isinstance(approval.get("approved_at"), str)
+                or not approval["approved_at"].strip()):
+            raise HarnessError("authorization_required")
+        expected = {
+            "snapshot_digest": record["snapshot_digest"],
+            "endpoint_profile_digest": record["endpoint_profile_digest"],
+            "approved_knowledge_manifest_digest": record["snapshot"]["knowledge_manifest_digest"],
+            "policy_digest": record["policy_digest"],
+            "owner_user_id": owner,
+        }
+        if any(approval.get(key) != value for key, value in expected.items()):
+            raise HarnessError("authorization_stale")
 
     def claim(self, owner: str, run_id: str, expected_version: int) -> int:
         self.preflight(owner, run_id, expected_version)
@@ -202,11 +228,11 @@ class ReportRunService:
         self.store.check_schema()
         RunRecovery(self.store).recover_expired(owner, run_id)
         record = self.store.get(owner, run_id)
-        self._validate_profile(record)
+        self._validate_profile(record, owner)
         minimum_requests, minimum_tokens = self._resume_minimum(record)
 
         def validate(document):
-            self._validate_profile(document)
+            self._validate_profile(document, owner)
             limit = min(self.dependencies.max_active_seconds,
                         self.dependencies.budget_policy.max_active_seconds)
             if document.get("active_seconds", 0) >= limit:
