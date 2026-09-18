@@ -27,6 +27,9 @@ from app.report_harness.authorization import (
 from app.report_harness.contracts import canonical_digest
 from app.report_harness.execution import ReportExecutionDependencies
 from app.report_harness.errors import HarnessError
+from app.report_harness.money_guard import (
+    RoleBillingContract, VersionedMoneyGuardHTTPAttemptClient, read_billing_contract,
+)
 from app.report_harness.request_ledger import RequestLedger
 from app.report_harness.store import RunStore
 from app.report_harness.test_database import validate_test_dsn
@@ -44,6 +47,25 @@ from evals.report_harness.development_provider import (
 def write_json(path: Path, data: dict):
     with path.open("x", encoding="utf-8") as stream:
         json.dump(data, stream, ensure_ascii=False, indent=2, allow_nan=False, default=str)
+
+
+def development_billing_contracts(proof: dict) -> dict[str, RoleBillingContract]:
+    return {
+        role: RoleBillingContract(
+            role=role, model=MODEL, endpoint_digest=canonical_digest(proof),
+            quote_cny=REQUEST_CNY_UPPER, billing_mode="remote_actual", usage_source="cost_usd",
+        )
+        for role in ("generator", "reviewer")
+    }
+
+
+def development_billing_state(path: Path, proof: dict) -> dict:
+    """试跑只读取已登记合同，旧参数迁移必须由独立维护步骤显式追加。"""
+    state = read_billing_contract(path, "report-evidence-v1-Q-CNY100")
+    if (state["contracts"] != development_billing_contracts(proof)
+            or state["usd_to_cny_upper"] != USD_TO_CNY_UPPER):
+        raise HarnessError("money_guard_contract_configuration_changed")
+    return state
 
 
 def public_preflight() -> dict:
@@ -134,6 +156,10 @@ async def run(args):
     if not key:
         raise ValueError("缺少指定API密钥，不回退其他提供者。")
     preflight = public_preflight()
+    version = preflight["endpoint"]["name"]
+    proof = execution_proof(version)
+    proof_digest = canonical_digest(proof)
+    billing = development_billing_state(experiment / "money.sqlite3", proof)
     experiment.mkdir(parents=True, exist_ok=True)
     attempt_dir = experiment / ("attempt-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S") + "-" + uuid4().hex[:8])
     attempt_dir.mkdir()
@@ -171,14 +197,11 @@ async def run(args):
         conn.execute("INSERT INTO users(id,username) VALUES (%s,%s)", (owner, session))
         conn.execute("INSERT INTO chat_sessions(id,owner_user_id) VALUES (%s,%s)", (session, owner))
     knowledge_digest = canonical_digest([])
-    version = preflight["endpoint"]["name"]
     catalog = AuthorizationCatalog([
         EndpointDescription(role=role, label="获准开发试跑", base_url=ENDPOINT,
                             model=MODEL, version=version)
         for role in ("generator", "reviewer")
     ], [], frozenset({knowledge_digest}))
-    proof = execution_proof(version)
-    proof_digest = canonical_digest(proof)
     policy = BudgetPolicy(
         max_physical_requests=8, max_tool_calls=12, max_revision_rounds=2,
         max_retrieval_requests=0, max_active_seconds=900,
@@ -190,16 +213,14 @@ async def run(args):
     clients = []
 
     def roles_factory(active_store, active_owner, run_id, token):
-        # 延迟导入只供该显式入口使用，生产依赖不会加载试验预算器。
-        from evals.report_harness.money_guard import MoneyGuard
-
         client = DevelopmentClient(key)
         clients.append(client)
-        guarded = MoneyGuard(
+        guarded = VersionedMoneyGuardHTTPAttemptClient(
             client=client, path=experiment / "money.sqlite3",
             experiment_id="report-evidence-v1-Q-CNY100",
-            profile=proof, cost_upper_cny=REQUEST_CNY_UPPER,
+            contracts=development_billing_contracts(proof),
             usd_to_cny_upper=USD_TO_CNY_UPPER,
+            acknowledged_unknown_attempts=args.acknowledge_unknown_attempts,
         )
         started = time.monotonic()
 
@@ -227,6 +248,7 @@ async def run(args):
             "budget": policy.model_dump(mode="json"), "proof": proof,
             "generation_settings": GENERATION_SETTINGS,
             "wire_protocol": "unique-quote-spans-v1",
+            "billing_contract_digest": billing["billing_contract_digest"],
         }),
         knowledge_manifest_digest=knowledge_digest, authorization_catalog=catalog,
         budget_policy=policy, max_active_seconds=900, force_engineering_exports=True,
@@ -243,6 +265,7 @@ async def run(args):
         "proof": proof, "proof_digest": proof_digest,
         "generation_settings": GENERATION_SETTINGS,
         "wire_protocol": "unique-quote-spans-v1",
+        "billing_contract_digest": billing["billing_contract_digest"],
         "acknowledged_unknown_attempts": args.acknowledge_unknown_attempts,
     })
     service.authorize(owner, run_id, AuthorizationRequest(
