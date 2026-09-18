@@ -412,7 +412,8 @@ class HybridRetriever(BaseRetriever):
                     metadata[key] = sparse_metadata[key]
         return metadata
 
-    def _build_initial_query(self, accident_data: dict[str, Any]) -> str:
+    @staticmethod
+    def _build_initial_query(accident_data: dict[str, Any]) -> str:
         preferred_keys = [
             "事故标题",
             "事故类型与形态",
@@ -428,7 +429,7 @@ class HybridRetriever(BaseRetriever):
         for key in preferred_keys:
             raw_value = accident_data.get(key)
             if isinstance(raw_value, str):
-                normalized = self._normalize_query(raw_value)
+                normalized = HybridRetriever._normalize_query(raw_value)
                 if normalized and normalized not in seen:
                     values.append(normalized)
                     seen.add(normalized)
@@ -436,7 +437,7 @@ class HybridRetriever(BaseRetriever):
         if not values:
             for value in accident_data.values():
                 if isinstance(value, str):
-                    normalized = self._normalize_query(value)
+                    normalized = HybridRetriever._normalize_query(value)
                     if normalized and normalized not in seen:
                         values.append(normalized)
                         seen.add(normalized)

@@ -55,6 +55,17 @@ class AuthorizationCatalog:
         self.knowledge_digest = canonical_digest(self._knowledge)
         self.allowed_manifests = frozenset(allowed_manifests)
 
+    def validate_runtime(self, endpoints: dict, capacities: dict) -> None:
+        """核对真正发包的角色、地址、模型与容量版本，不信任单独展示的说明。"""
+        described = {item["role"]: item for item in self._endpoints}
+        if set(described) != set(endpoints) or set(described) != set(capacities):
+            raise HarnessError("authorization_profile_unavailable")
+        for role, item in described.items():
+            address = str(AnyHttpUrl(endpoints[role]))
+            if (item["base_url"] != address or item["model"] != capacities[role].model
+                    or item["version"] != capacities[role].proof_digest):
+                raise HarnessError("authorization_profile_unavailable")
+
     def preview(self, record: dict) -> dict:
         available = (
             record["endpoint_profile_digest"] == self.endpoint_digest

@@ -39,6 +39,9 @@ class ControlledTools:
         snapshot: dict,
         knowledge_chunks: list[dict],
         search: Callable[[str, int], list[dict]] | None = None,
+        retrieval_policy: dict | None = None,
+        compact_registry: bool = False,
+        initial_search: Callable[[str, int], list[dict]] | None = None,
     ) -> None:
         self._snapshot = self._validate_snapshot(snapshot)
         self._revision = self._snapshot["revision"]
@@ -63,6 +66,11 @@ class ControlledTools:
                 {"reason": "search 必须是显式注入的可调用对象。"},
             )
         self._search = search
+        self._initial_search = initial_search
+        self._compact_registry = compact_registry
+        self._retrieval_policy = deepcopy(retrieval_policy)
+        self._retrieval_counts = {"generator": 0, "reviewer": 0}
+        self._retrieved_ids = {"generator": set(), "reviewer": set()}
         self._search_registry: dict[str, dict] = {}
         self._issued_read_cursors: dict[str, dict] = {}
         self._accessed_evidence: dict[str, set[str]] = {
@@ -99,6 +107,8 @@ class ControlledTools:
             "cursors": deepcopy(self._issued_read_cursors),
             "evidence": {role: sorted(ids) for role, ids in self._accessed_evidence.items()},
             "knowledge": {role: sorted(ids) for role, ids in self._accessed_knowledge.items()},
+            "retrieval_counts": dict(self._retrieval_counts),
+            "retrieved_ids": {role: sorted(ids) for role, ids in self._retrieved_ids.items()},
         }
 
     def restore_checkpoint_state(self, state: dict) -> None:
@@ -134,6 +144,28 @@ class ControlledTools:
         self._search_registry = registry
         self._issued_read_cursors = cursors
         self._accessed_evidence, self._accessed_knowledge = evidence, knowledge
+        counts = state.get("retrieval_counts", {"generator": 0, "reviewer": 0})
+        retrieved = state.get("retrieved_ids", {"generator": [], "reviewer": []})
+        for role in ("generator", "reviewer"):
+            if type(counts[role]) is not int or counts[role] < 0:
+                raise HarnessError("checkpoint_invalid")
+            if not set(retrieved[role]) <= self._knowledge_by_id.keys():
+                raise HarnessError("checkpoint_source_mismatch")
+        self._retrieval_counts = dict(counts)
+        self._retrieved_ids = {role: set(retrieved[role]) for role in retrieved}
+
+    def include_knowledge(self, role: str, items: list[dict]) -> None:
+        """仅控制器调用：把本轮实际内联的完整原文计入访问，不信任模型自报。"""
+        self._validate_role(role)
+        for item in items:
+            if item != self._knowledge_by_id.get(item.get("id")):
+                raise HarnessError("checkpoint_knowledge_mismatch")
+            self._accessed_knowledge[role].add(item["id"])
+
+    def initial_retrieval(self, query: str, top_k: int) -> dict:
+        return self._search_knowledge(
+            "generator", {"query": query, "top_k": top_k}, initial=True,
+        )
 
     def execute(self, role: str, name: str, args: dict) -> dict:
         """按固定工具名称执行一次受控读取或检索。"""
@@ -166,6 +198,10 @@ class ControlledTools:
 
     def registered_knowledge(self) -> list[dict]:
         """返回当前快照批准的知识原文副本，不暴露内部可变对象。"""
+        if self._compact_registry:
+            accessed = set().union(*self._accessed_knowledge.values())
+            identifiers = accessed | self._search_registry.keys()
+            return [deepcopy(self._knowledge_by_id[key]) for key in sorted(identifiers)]
         return deepcopy(self._knowledge_chunks)
 
     def accessed_evidence(self, role: str) -> set[str]:
@@ -778,7 +814,7 @@ class ControlledTools:
             cursor=cursor,
         )
 
-    def _search_knowledge(self, role: str, args: dict) -> dict:
+    def _search_knowledge(self, role: str, args: dict, *, initial: bool = False) -> dict:
         tool = "search_knowledge"
         self._validate_exact_keys(args, tool=tool, required={"query", "top_k"})
         query = args["query"]
@@ -796,13 +832,33 @@ class ControlledTools:
                 field="top_k",
             )
         normalized_query = " ".join(query.split())
+        policy = self._retrieval_policy
+        if policy is not None:
+            count = self._retrieval_counts[role]
+            allowed_calls = policy["additional_rounds"] + (1 if role == "generator" else 0)
+            if count >= allowed_calls:
+                raise HarnessError("retrieval_request_budget_exhausted")
+            if initial:
+                if role != "generator" or count != 0 or top_k != policy["initial_top_k"]:
+                    raise HarnessError("initial_retrieval_contract_mismatch")
+            elif (top_k > policy["additional_top_k"]
+                  or len(normalized_query) > policy["max_query_chars"]):
+                raise HarnessError("retrieval_policy_exceeded")
+            remaining = policy["max_total_snippets"] - len(self._retrieved_ids[role])
+            if remaining <= 0:
+                raise HarnessError("retrieval_request_budget_exhausted")
+            top_k = min(top_k, remaining)
+            self._retrieval_counts[role] += 1
 
-        if self._search is None:
+        search = self._initial_search if initial and self._initial_search is not None else self._search
+        if search is None:
             candidates = self._local_search(normalized_query, top_k)
             mode = "registered_local"
         else:
             try:
-                candidates = self._search(normalized_query, top_k)
+                candidates = search(normalized_query, top_k)
+            except HarnessError:
+                raise
             except Exception as exc:  # noqa: BLE001
                 raise HarnessError(
                     "knowledge_search_failed",
@@ -824,6 +880,7 @@ class ControlledTools:
                 {"reason": "知识检索回调返回结果超过 top_k。", "top_k": top_k},
             )
         validated = self._validate_search_candidates(candidates)
+        self._retrieved_ids[role].update(item["id"] for item in validated)
         for item in validated:
             self._search_registry[item["id"]] = deepcopy(item)
         full_payload = {"items": validated, "search_mode": mode}

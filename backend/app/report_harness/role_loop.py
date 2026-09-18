@@ -60,6 +60,35 @@ class RoleLoop:
         self.model_turns = 0
         self.tool_calls = 0
 
+    async def initial_retrieval(self, query: str, top_k: int) -> dict:
+        """首检是程序步骤，不依赖模型选择；恢复复用原文和工具状态。"""
+        self.before_call()
+
+        async def invoke():
+            result = await asyncio.to_thread(self.tools.initial_retrieval, query, top_k)
+            return {"result": result, "tool_state": self.tools.checkpoint_state()}
+
+        request = {
+            "step": "initial_retrieval", "role": "generator", "name": "search_knowledge",
+            "call_id": "controller-initial-retrieval",
+            "arguments": {"query": query, "top_k": top_k},
+        }
+        if self.journal is not None:
+            saved = await self.journal.invoke("tool", request, invoke, limit=self.max_tool_calls)
+            self.tool_calls = self.journal.attempts("tool")
+        else:
+            if self.tool_calls >= self.max_tool_calls:
+                raise HarnessError("tool_budget_exhausted")
+            self.tool_calls += 1
+            self.checkpoint({"name": "search_knowledge", "status": "intent",
+                             "step": "initial_retrieval"}, request)
+            saved = await invoke()
+            self.checkpoint({"name": "search_knowledge", "status": "completed",
+                             "step": "initial_retrieval",
+                             "result_digest": canonical_digest(saved["result"])}, saved)
+        self.tools.restore_checkpoint_state(saved["tool_state"])
+        return saved["result"]
+
     async def run(self, role: str, invoke: Callable[[dict], Awaitable[dict]], context: dict) -> dict:
         results = []
         while self.journal is not None or self.model_turns < self.max_model_turns:

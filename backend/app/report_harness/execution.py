@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Literal, Protocol
 
 from app.report_harness.authorization import AuthorizationCatalog
+from app.report_harness.business_workflow import BusinessWorkflow
 from app.report_harness.release_registry import ReleaseRegistry
 from app.schemas.report_run import BudgetPolicy
 
@@ -36,8 +37,18 @@ class ReportExecutionDependencies:
     force_engineering_exports: bool = False
     code_digest: str | None = None
     development_outbound_enabled: bool = False
+    business_workflow: BusinessWorkflow | None = None
+    external_knowledge_source: bool = False
+    max_active_runs: int | None = None
+    resource_check: Callable[[], None] | None = None
 
     def __post_init__(self):
+        if self.max_active_runs is not None and (
+            type(self.max_active_runs) is not int or self.max_active_runs < 1
+        ):
+            raise ValueError("活动运行容量必须为正整数。")
+        if self.resource_check is not None and not callable(self.resource_check):
+            raise TypeError("资源检查必须可调用。")
         if type(self.development_outbound_enabled) is not bool:
             raise TypeError("development_outbound_enabled 必须是严格布尔值。")
         if self.max_active_seconds <= 0:

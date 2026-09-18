@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -61,6 +62,14 @@ class ReportRunService:
             "execution_contract_digest": self._contract_digest(),
             "approval": None,
         }
+        business = self.dependencies.business_workflow
+        if self.dependencies.external_knowledge_source:
+            # 知识全集按摘要绑定只读共享资产，运行仅持久保存实际使用的原文。
+            document["knowledge_source"] = []
+            document["external_knowledge_source"] = True
+        if business is not None:
+            document["business_prompts"] = business.prompts()
+            document["business_retrieval_policy"] = business.retrieval_policy()
         registry = self.dependencies.release_registry
         if (self.dependencies.execution_profile == "outbound"
                 and self.dependencies.code_digest and registry is not None):
@@ -100,7 +109,7 @@ class ReportRunService:
     @staticmethod
     def _contract_digest() -> str:
         return canonical_digest({
-            "controller_version": 1, "journal_version": JOURNAL_VERSION,
+            "controller_version": 2, "journal_version": JOURNAL_VERSION,
             "candidate": CandidateReport.model_json_schema(),
             "review": ReviewResult.model_json_schema(), "tools": tool_schemas(),
         })
@@ -172,6 +181,13 @@ class ReportRunService:
         self._validate_profile(record, owner)
 
     def _validate_profile(self, record: dict, owner: str | None = None) -> None:
+        business = self.dependencies.business_workflow
+        if (record.get("business_prompts") != (business.prompts() if business else None)
+                or record.get("business_retrieval_policy")
+                != (business.retrieval_policy() if business else None)
+                or record.get("external_knowledge_source", False)
+                != self.dependencies.external_knowledge_source):
+            raise HarnessError("authorization_stale")
         profile = record.get("execution_profile")
         if profile == "outbound" and not self.dependencies.development_outbound_enabled:
             # 授权和计费边界完成前，在线执行始终关闭，不能借工程标记外发。
@@ -221,6 +237,13 @@ class ReportRunService:
 
     def claim(self, owner: str, run_id: str, expected_version: int) -> int:
         self.preflight(owner, run_id, expected_version)
+        if self.dependencies.resource_check is not None:
+            self.dependencies.resource_check()
+        if self.dependencies.max_active_runs is not None:
+            return self.store.acquire(
+                owner, run_id, expected_version, uuid4(),
+                max_active_runs=self.dependencies.max_active_runs,
+            )
         return self.store.acquire(owner, run_id, expected_version, uuid4())
 
     def resume_claim(self, owner: str, run_id: str, expected_version: int, *,
@@ -229,6 +252,8 @@ class ReportRunService:
         RunRecovery(self.store).recover_expired(owner, run_id)
         record = self.store.get(owner, run_id)
         self._validate_profile(record, owner)
+        if self.dependencies.resource_check is not None:
+            self.dependencies.resource_check()
         minimum_requests, minimum_tokens = self._resume_minimum(record)
 
         def validate(document):
@@ -242,6 +267,7 @@ class ReportRunService:
             owner, run_id, expected_version, uuid4(),
             retry_unknown_requests=retry_unknown_requests, validate=validate,
             minimum_requests=minimum_requests, minimum_tokens=minimum_tokens,
+            max_active_runs=self.dependencies.max_active_runs,
         )
 
     def _resume_minimum(self, record: dict) -> tuple[int, int]:
@@ -296,6 +322,8 @@ class ReportRunService:
                 roles = self.dependencies.roles_factory()
             else:
                 roles = self.dependencies.runtime_roles_factory(self.store, owner, run_id, token)
+                if inspect.isawaitable(roles):
+                    roles = await roles
             policy = self.dependencies.budget_policy
             active_used = self.store.get(owner, run_id).get("active_seconds", 0)
             timeout = min(self.dependencies.max_active_seconds, policy.max_active_seconds) - active_used
@@ -304,7 +332,14 @@ class ReportRunService:
             async with asyncio.timeout(timeout):
                 record = self.store.get(owner, run_id)
                 snapshot = deepcopy(record["snapshot"])
-                tools = ControlledTools(snapshot, deepcopy(record["knowledge_source"]))
+                tools = ControlledTools(
+                    snapshot, list(self.dependencies.knowledge_chunks)
+                    if record.get("external_knowledge_source") else deepcopy(record["knowledge_source"]),
+                    search=getattr(roles, "search_knowledge", None),
+                    initial_search=getattr(roles, "retrieve_initial_knowledge", None),
+                    retrieval_policy=record.get("business_retrieval_policy"),
+                    compact_registry=record.get("external_knowledge_source", False),
+                )
                 journal = (ExecutionJournal(self.store, owner, run_id, token)
                            if hasattr(self.store, "connection") else None)
                 tool_history = []
@@ -338,8 +373,18 @@ class ReportRunService:
                     )
                 if set(prepared) != {"guidance", "knowledge"} or prepared["knowledge"]:
                     raise HarnessError("untrusted_prepared_knowledge", 422)
+                initial_snippets = []
+                if self.dependencies.business_workflow is not None:
+                    initial = await loop.initial_retrieval(
+                        self.dependencies.business_workflow.initial_query(snapshot["accident_data"]),
+                        record["business_retrieval_policy"]["initial_top_k"],
+                    )
+                    if initial.get("truncated"):
+                        raise HarnessError("initial_knowledge_incomplete", 422)
+                    initial_snippets = initial["items"]
                 self.store.transition(owner, run_id, token, "generating",
                                       {"prepared": prepared,
+                                       "initial_knowledge_snippets": initial_snippets,
                                        "knowledge_registry": tools.registered_knowledge()},
                                       "checkpoint", {"step": "prepared"})
                 ledger = IssueLedger(namespace=run_id if journal is not None else None)
@@ -351,6 +396,7 @@ class ReportRunService:
                         owner, run_id, token, record=record, prepared=prepared, roles=roles,
                         tools=tools, loop=loop, ledger=ledger, version=version, previous=previous,
                         feedback=feedback,
+                        initial_snippets=initial_snippets,
                     )
                     blocking = any(
                         item.severity in {"major", "blocker"} and item.status != "resolved"
@@ -400,7 +446,8 @@ class ReportRunService:
             return self.get(owner, run_id)
         except HarnessError as exc:
             if exc.code in {"usage_unknown", "completion_unknown", "authorization_stale",
-                            "authorization_required", "token_bound_unverified"}:
+                            "authorization_required", "token_bound_unverified",
+                            "resource_pressure", "resource_probe_failed"}:
                 self._stop_if_owned(owner, run_id, token, "suspended", exc.code)
                 return self.get(owner, run_id)
             if exc.code in {"role_response_too_large", "invalid_role_response",
@@ -431,10 +478,13 @@ class ReportRunService:
                     })
 
     async def _candidate_round(self, owner, run_id, token, *, record, prepared, roles,
-                               tools, loop, ledger, version, previous, feedback):
+                               tools, loop, ledger, version, previous, feedback,
+                               initial_snippets=None):
         snapshot = record["snapshot"]
         context_snapshot, inline_evidence = role_context(snapshot)
         tools.reset_access("generator")
+        initial_snippets = initial_snippets or []
+        tools.include_knowledge("generator", initial_snippets)
         candidate = CandidateReport.model_validate(await loop.run("generator", roles.generate, {
             "instructions": record["role_prompts"]["generator"],
             "response_schema": CandidateReport.model_json_schema(),
@@ -442,6 +492,7 @@ class ReportRunService:
             "candidate_version": version, "previous_candidate": deepcopy(previous),
             "unresolved_issues": ledger.unresolved(),
             "review_feedback": deepcopy(feedback),
+            "initial_knowledge_snippets": deepcopy(initial_snippets),
         }))
         if candidate.version != version:
             raise ValueError("候选版本不匹配。")

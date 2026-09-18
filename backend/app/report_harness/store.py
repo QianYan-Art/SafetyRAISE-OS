@@ -11,6 +11,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from app.report_harness.errors import HarnessError
+from app.report_harness.resources import assert_run_capacity
 from app.report_harness.contracts import canonical_digest
 from app.report_harness.evidence import EvidenceBindingError, freeze_snapshot
 
@@ -206,10 +207,12 @@ class RunStore:
                     raise HarnessError("lease_lost")
             yield conn, row
 
-    def acquire(self, owner: str, run_id: str, expected_version: int, worker: UUID) -> int:
+    def acquire(self, owner: str, run_id: str, expected_version: int, worker: UUID,
+                *, max_active_runs: int | None = None) -> int:
         with self.locked(owner, run_id, expected_version) as (conn, row):
             if row["state"] != "queued":
                 raise HarnessError("not_executable")
+            assert_run_capacity(conn, max_active_runs)
             token = row["fencing_token"] + 1
             conn.execute(
                 "UPDATE report_runs SET fencing_token=%s,lease_owner=%s,"

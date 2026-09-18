@@ -8,6 +8,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from app.report_harness.errors import HarnessError
+from app.report_harness.resources import assert_run_capacity
 from app.report_harness.request_ledger import RequestLedger
 from app.report_harness.store import RunStore
 
@@ -139,6 +140,7 @@ class RunRecovery:
         validate: Callable[[dict], None],
         minimum_requests: int,
         minimum_tokens: int,
+        max_active_runs: int | None = None,
     ) -> int:
         if type(expected_version) is not int or expected_version < 0:
             raise HarnessError("invalid_expected_version", 422)
@@ -160,6 +162,7 @@ class RunRecovery:
             if not isinstance(document, dict):
                 raise HarnessError("document_invalid", 422)
             validate(deepcopy(document))
+            assert_run_capacity(conn, max_active_runs)
 
             unknown_rows = conn.execute(
                 "SELECT request_id FROM report_run_requests WHERE run_id=%s "

@@ -1,6 +1,5 @@
 import json
 import logging
-import re
 import shutil
 import time
 from datetime import datetime, timezone
@@ -16,21 +15,22 @@ from app.core.settings import Settings
 from app.providers.llm.base import BaseLLMProvider, LLMGenerateResult, LLMToolCall
 from app.providers.retrieval.base import BaseRetriever
 from app.services.database_service import DatabaseService
+from app.workflow.prompt_rendering import (
+    GUIDANCE_ACCIDENT_PLACEHOLDER,
+    GUIDANCE_ACCIDENT_SECTION_PATTERN,
+    REPORT_ACCIDENT_ANCHOR_PLACEHOLDER,
+    REPORT_ACCIDENT_PLACEHOLDER,
+    REPORT_ADDITIONAL_SNIPPETS_PLACEHOLDER,
+    REPORT_AGENTIC_HISTORY_PLACEHOLDER,
+    REPORT_GUIDANCE_PLACEHOLDER,
+    REPORT_INITIAL_SNIPPETS_PLACEHOLDER,
+    render_guidance_prompt,
+    render_report_prompt,
+)
 from app.workflow.state import WorkflowState
 
 logger = logging.getLogger(__name__)
 
-GUIDANCE_ACCIDENT_PLACEHOLDER = "{在这里粘贴结构化事故信息JSON}"
-GUIDANCE_ACCIDENT_SECTION_PATTERN = re.compile(
-    r"(<事故信息>\s*)(.*?)(\s*</事故信息>)",
-    re.DOTALL,
-)
-REPORT_GUIDANCE_PLACEHOLDER = "{在这里粘贴指导意见JSON}"
-REPORT_ACCIDENT_PLACEHOLDER = "{在这里粘贴结构化事故信息JSON}"
-REPORT_ACCIDENT_ANCHOR_PLACEHOLDER = "{在这里粘贴事故信息关键锚点摘要}"
-REPORT_INITIAL_SNIPPETS_PLACEHOLDER = "{在这里粘贴首轮知识库片段JSON}"
-REPORT_ADDITIONAL_SNIPPETS_PLACEHOLDER = "{在这里粘贴模型追加检索获得的新知识库片段JSON}"
-REPORT_AGENTIC_HISTORY_PLACEHOLDER = "{在这里粘贴模型追加检索历史摘要}"
 REPORT_RETRIEVE_TOOL_NAME = "retrieve_knowledge"
 
 
@@ -751,21 +751,7 @@ class WorkflowNodes:
         return extract_json_from_text(repaired_raw), repaired_raw
 
     def _render_guidance_prompt(self, accident_data: dict[str, Any]) -> str:
-        template = self._load_guidance_prompt()
-        prompt_accident_data = self._strip_internal_fields(accident_data)
-        accident_json = json.dumps(prompt_accident_data, ensure_ascii=False, indent=2)
-
-        if GUIDANCE_ACCIDENT_PLACEHOLDER in template:
-            return template.replace(GUIDANCE_ACCIDENT_PLACEHOLDER, accident_json, 1)
-
-        if GUIDANCE_ACCIDENT_SECTION_PATTERN.search(template):
-            return GUIDANCE_ACCIDENT_SECTION_PATTERN.sub(
-                lambda match: f"{match.group(1)}{accident_json}{match.group(3)}",
-                template,
-                count=1,
-            )
-
-        raise InputValidationError("指导意见提示词模板缺少事故信息粘贴位置。")
+        return render_guidance_prompt(self._load_guidance_prompt(), accident_data)
 
     def _load_report_prompt(self) -> str:
         path: Path = self.settings.report_prompt_file
@@ -782,30 +768,14 @@ class WorkflowNodes:
         additional_snippets: list[dict[str, Any]],
         agentic_rounds: list[dict[str, Any]],
     ) -> str:
-        prompt_accident_data = self._strip_internal_fields(accident_data)
-        replacements = {
-            REPORT_GUIDANCE_PLACEHOLDER: json.dumps(guidance, ensure_ascii=False, indent=2),
-            REPORT_ACCIDENT_PLACEHOLDER: json.dumps(prompt_accident_data, ensure_ascii=False, indent=2),
-            REPORT_ACCIDENT_ANCHOR_PLACEHOLDER: self._build_accident_anchor_summary(prompt_accident_data),
-            REPORT_INITIAL_SNIPPETS_PLACEHOLDER: json.dumps(initial_snippets, ensure_ascii=False, indent=2),
-            REPORT_ADDITIONAL_SNIPPETS_PLACEHOLDER: json.dumps(
-                additional_snippets,
-                ensure_ascii=False,
-                indent=2,
-            ),
-            REPORT_AGENTIC_HISTORY_PLACEHOLDER: json.dumps(
-                self._summarize_agentic_rounds(agentic_rounds),
-                ensure_ascii=False,
-                indent=2,
-            ),
-        }
-
-        rendered = template
-        for placeholder, value in replacements.items():
-            if placeholder not in rendered:
-                raise InputValidationError(f"分析报告提示词模板缺少占位内容: {placeholder}")
-            rendered = rendered.replace(placeholder, value, 1)
-        return rendered
+        return render_report_prompt(
+            template,
+            accident_data,
+            guidance,
+            initial_snippets,
+            additional_snippets,
+            agentic_rounds,
+        )
 
     def _build_accident_anchor_summary(self, accident_data: dict[str, Any]) -> str:
         preferred_fields = [
