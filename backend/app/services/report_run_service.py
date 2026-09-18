@@ -11,7 +11,9 @@ from pydantic import ValidationError
 from psycopg.rows import dict_row
 
 from app.adapters.input.dict_input_adapter import DictInputAdapter
-from app.report_harness.contracts import canonical_digest, validate_publication, validate_review_structure
+from app.report_harness.contracts import (
+    canonical_digest, enforce_semantic_severity, validate_publication, validate_review_structure,
+)
 from app.report_harness.authorization import AuthorizationRequest
 from app.report_harness.evidence import freeze_snapshot
 from app.report_harness.errors import HarnessError
@@ -109,7 +111,7 @@ class ReportRunService:
     @staticmethod
     def _contract_digest() -> str:
         return canonical_digest({
-            "controller_version": 2, "journal_version": JOURNAL_VERSION,
+            "controller_version": 3, "journal_version": JOURNAL_VERSION,
             "candidate": CandidateReport.model_json_schema(),
             "review": ReviewResult.model_json_schema(), "tools": tool_schemas(),
         })
@@ -526,7 +528,8 @@ class ReportRunService:
         self.store.transition(owner, run_id, token, "checking",
                               {"review": review.model_dump(mode="json")},
                               "review", {"candidate_version": version})
-        review = ledger.apply(review)
+        raw_review = review.model_dump(mode="json")
+        review = ledger.apply(enforce_semantic_severity(review))
         obligations = snapshot["fact_obligations"]
         reviewer_evidence = inline_evidence | tools.accessed_evidence("reviewer")
         for claim in candidate.claims:
@@ -545,6 +548,7 @@ class ReportRunService:
         review_history = self._record_version(current.get("review_history", []), {
             "candidate_version": version, "candidate_digest": review.candidate_digest,
             "review": review.model_dump(mode="json"),
+            "raw_review": raw_review,
         }, "candidate_version")
         self.store.transition(
             owner, run_id, token, "checking",

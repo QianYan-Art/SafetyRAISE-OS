@@ -23,6 +23,16 @@ _UNRESOLVED_SEVERITIES = frozenset({"blocker", "major"})
 _UNRESOLVED_STATUSES = frozenset({"open", "contested"})
 
 
+def enforce_semantic_severity(review: ReviewResult) -> ReviewResult:
+    """语义问题至少按 major 处理；不修改原始审查或替模型关闭问题。"""
+    payload = review.model_dump(mode="json")
+    for issue in payload["issues"]:
+        if (issue["category"].strip().lower() in _SEMANTIC_ISSUE_CATEGORIES
+                and issue["severity"] == "minor"):
+            issue["severity"] = "major"
+    return ReviewResult.model_validate(payload)
+
+
 def canonical_digest(value: Any) -> str:
     """按固定 JSON 编码计算 SHA-256 摘要。"""
     if isinstance(value, BaseModel):

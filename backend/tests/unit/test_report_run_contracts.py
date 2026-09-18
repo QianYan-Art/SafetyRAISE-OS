@@ -5,7 +5,9 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from app.report_harness.contracts import canonical_digest, validate_publication
+from app.report_harness.contracts import (
+    canonical_digest, enforce_semantic_severity, validate_publication, validate_review_structure,
+)
 from app.schemas.report_run import (
     BudgetPolicy,
     CandidateReport,
@@ -92,6 +94,28 @@ def publish(candidate: CandidateReport | None = None, review: ReviewResult | Non
         {EVIDENCE_ID},
         {KNOWLEDGE_ID},
     )
+
+
+@pytest.mark.parametrize("category", [
+    "fact", "facts", "inference", "reasoning", "citation", "citations", "事实", "推理", "引用",
+])
+def test_semantic_minor_is_elevated_without_changing_raw_review(category):
+    candidate = make_candidate()
+    review = make_review(candidate, issues=[{
+        "issue_id": "model-id", "category": category, "severity": "minor",
+        "target": "claim-1", "explanation": "合成语义问题。",
+        "source_refs": [EVIDENCE_ID], "closure_condition": "由独立审查确认修正。",
+        "status": "open",
+    }])
+    normalized = enforce_semantic_severity(review)
+    assert review.issues[0].severity == "minor"
+    assert normalized.issues[0].severity == "major"
+    assert normalized.issues[0].status == "open"
+    assert enforce_semantic_severity(normalized) == normalized
+    validate_review_structure(candidate, normalized, SNAPSHOT_DIGEST,
+                              {OBLIGATION_ID}, {EVIDENCE_ID}, {KNOWLEDGE_ID})
+    with pytest.raises(ValueError, match="major"):
+        publish(candidate, normalized)
 
 
 def test_canonical_digest_is_order_independent_and_json_based() -> None:
