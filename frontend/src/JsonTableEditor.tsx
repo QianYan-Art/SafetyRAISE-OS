@@ -2,8 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 interface JsonTableEditorProps {
   initialJson: string;
-  onConfirm: (validJsonString: string) => void;
+  onConfirm: (validJsonString: string) => void | Promise<void>;
   onAutoSave?: (validJsonString: string) => void | Promise<void>;
+  onDraftChange?: (jsonString: string) => void;
+  resetKey?: string;
   disabled?: boolean;
   isGeneratingReport?: boolean;
   onCancelGenerate?: () => void;
@@ -49,6 +51,8 @@ export function JsonTableEditor({
   initialJson,
   onConfirm,
   onAutoSave,
+  onDraftChange,
+  resetKey,
   disabled,
   isGeneratingReport = false,
   onCancelGenerate,
@@ -57,9 +61,20 @@ export function JsonTableEditor({
   const [data, setData] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
   const lastSavedJsonRef = useRef("");
+  const initializedRef = useRef(false);
+  const currentJsonRef = useRef("");
+  const resetKeyRef = useRef(resetKey);
 
   useEffect(() => {
     try {
+      const resetKeyChanged = resetKeyRef.current !== resetKey;
+      if (resetKeyChanged) {
+        resetKeyRef.current = resetKey;
+        initializedRef.current = false;
+      }
+      if (!resetKeyChanged && initializedRef.current && buildJsonString(data) !== lastSavedJsonRef.current) {
+        return;
+      }
       if (initialJson) {
         const stringifiedMap = parseJsonToStringMap(initialJson);
         const nextJsonString = buildJsonString(stringifiedMap);
@@ -72,20 +87,27 @@ export function JsonTableEditor({
         setData({});
         lastSavedJsonRef.current = "";
       }
+      initializedRef.current = true;
     } catch {
       setError("输入草稿格式异常，无法解析为表格。");
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialJson]);
+  }, [initialJson, resetKey]);
 
   const handleChange = (key: string, newValue: string) => {
-    setData((prev) => ({
-      ...prev,
+    const nextData = {
+      ...data,
       [key]: newValue,
-    }));
+    };
+    setData(nextData);
+    setError("");
+    const nextJsonString = buildJsonString(nextData);
+    currentJsonRef.current = nextJsonString;
+    onDraftChange?.(nextJsonString);
   };
 
   const currentJsonString = useMemo(() => buildJsonString(data), [data]);
+  currentJsonRef.current = currentJsonString;
 
   const handleBlur = async () => {
     if (!onAutoSave) {
@@ -97,39 +119,47 @@ export function JsonTableEditor({
 
     try {
       await onAutoSave(currentJsonString);
-      lastSavedJsonRef.current = currentJsonString;
+      if (currentJsonRef.current === currentJsonString) {
+        lastSavedJsonRef.current = currentJsonString;
+      }
       setError("");
     } catch (err) {
       setError("自动保存失败：" + (err instanceof Error ? err.message : String(err)));
     }
   };
 
-  const handleConfirm = () => {
+  const handleConfirm = async () => {
     try {
-      onConfirm(currentJsonString);
+      await onConfirm(currentJsonString);
     } catch (err) {
       setError("无法生成有效的确认数据：" + (err instanceof Error ? err.message : String(err)));
     }
   };
 
-  if (error) {
-    return (
-      <div className="error-text">
-        {error}
-        <br />
-        <pre>{initialJson}</pre>
-      </div>
-    );
+  const renderError = error ? (
+    <div className="error-text" role="alert">
+      {error}
+    </div>
+  ) : null;
+
+  if (error && !initializedRef.current) {
+    return renderError;
   }
 
   const entries = Object.entries(data);
 
   if (entries.length === 0) {
-    return <p className="hint">暂无草稿数据。</p>;
+    return (
+      <div>
+        {renderError}
+        <p className="hint">暂无草稿数据。</p>
+      </div>
+    );
   }
 
   return (
     <div>
+      {renderError}
       <table className="json-table-editor">
         <thead>
           <tr>
@@ -170,7 +200,7 @@ export function JsonTableEditor({
         <button
           type="button"
           className={`btn-primary report-submit-btn ${isGeneratingReport ? "is-generating" : ""}`}
-          onClick={handleConfirm}
+          onClick={() => void handleConfirm()}
           disabled={disabled}
         >
           {isGeneratingReport ? (

@@ -5,6 +5,7 @@ import {
   canExecuteReportRun,
   canExportReportRun,
   createEmptyEvidenceRecord,
+  createReportRunAfterDraftSave,
   parseAccidentData,
   toggleEvidenceConflict,
   updateEvidenceFieldConflict,
@@ -53,6 +54,38 @@ describe("报告 harness 纯逻辑", () => {
       速度: 20,
     });
     expect(() => parseAccidentData("{}" as string)).toThrow("不能为空对象");
+  });
+
+  it("只有事故输入保存成功后才创建报告运行", async () => {
+    const events: string[] = [];
+    const result = await createReportRunAfterDraftSave(
+      async () => {
+        events.push("save");
+      },
+      async () => {
+        events.push("create");
+        return "run-1";
+      },
+    );
+
+    expect(result).toBe("run-1");
+    expect(events).toEqual(["save", "create"]);
+  });
+
+  it("事故输入保存失败时不创建报告运行", async () => {
+    let createCalled = false;
+    await expect(
+      createReportRunAfterDraftSave(
+        async () => {
+          throw new Error("409");
+        },
+        async () => {
+          createCalled = true;
+          return "run-1";
+        },
+      ),
+    ).rejects.toThrow("409");
+    expect(createCalled).toBe(false);
   });
 
   it("保守区分 synthetic_test 与 outbound 的执行资格", () => {

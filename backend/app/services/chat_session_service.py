@@ -13,7 +13,7 @@ from uuid import uuid4
 from pydantic import ValidationError
 from psycopg.types.json import Jsonb
 
-from app.core.exceptions import SessionNotFoundError
+from app.core.exceptions import SessionNotFoundError, SessionVersionConflictError
 from app.core.settings import Settings
 from app.report_harness.session_deletion import (
     assert_session_identity_available,
@@ -180,16 +180,25 @@ class ChatSessionService:
         with _get_session_lock(session_id):
             current = self.get_session(session_id)
             updates = request.model_dump(exclude_unset=True)
+            expected_updated_at = updates.pop("expected_updated_at", None)
+            if expected_updated_at is not None and expected_updated_at != current.updated_at:
+                raise SessionVersionConflictError("会话已被更新，请刷新后核对编辑内容。")
             merged_payload = current.model_dump()
             merged_payload.update(updates)
             merged_payload["owner_user_id"] = current.owner_user_id
             merged_payload["owner_username"] = current.owner_username
-            merged_payload["updated_at"] = updates.get("updated_at", self._now_ms())
+            merged_payload["updated_at"] = max(
+                current.updated_at + 1, updates.get("updated_at") or self._now_ms(),
+            )
             merged = ChatSessionRecord.model_validate(merged_payload)
-            merged = self._sync_draft_artifacts(merged)
+            merged = self._sync_draft_artifacts(
+                merged, write_artifacts=expected_updated_at is None,
+            )
             merged = self._refresh_linked_views(merged)
             merged = self._apply_session_state(merged)
-            self._write_session(merged)
+            self._write_session(merged, expected_updated_at=expected_updated_at)
+            if expected_updated_at is not None:
+                self._sync_draft_artifacts(merged, expected_updated_at=merged.updated_at)
             return merged
 
     def delete_session(self, session_id: str) -> None:
@@ -1209,12 +1218,20 @@ class ChatSessionService:
             return int(category_meta[category_id].get("sequence", 999) or 999)
         return 999
 
-    def _write_session(self, record: ChatSessionRecord) -> None:
+    def _write_session(self, record: ChatSessionRecord, *, expected_updated_at: int | None = None) -> None:
         payload = record.model_dump()
         with self.database_service.connection() as conn, conn.transaction():
             lock_session_identity(conn, record.id)
             assert_session_not_deleted(conn, record.id)
             assert_session_identity_available(conn, record.id)
+            if expected_updated_at is not None:
+                row = conn.execute(
+                    "SELECT updated_at FROM chat_sessions WHERE id=%s FOR UPDATE",
+                    (record.id,),
+                ).fetchone()
+                timestamp = row["updated_at"] if isinstance(row, dict) else row[0] if row else None
+                if timestamp != expected_updated_at:
+                    raise SessionVersionConflictError("会话已被更新，请刷新后核对编辑内容。")
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -1896,7 +1913,8 @@ class ChatSessionService:
             return None
         return path.read_text(encoding="utf-8")
 
-    def _sync_draft_artifacts(self, record: ChatSessionRecord) -> ChatSessionRecord:
+    def _sync_draft_artifacts(self, record: ChatSessionRecord, *, write_artifacts: bool = True,
+                              expected_updated_at: int | None = None) -> ChatSessionRecord:
         draft_payload = self._parse_json_object(record.draft_json)
         if not draft_payload:
             return record
@@ -1908,7 +1926,7 @@ class ChatSessionService:
             updates["draft_meta"] = draft_meta
 
         input_path = str(draft_meta.get("input_path") or "").strip()
-        if input_path:
+        if input_path and write_artifacts:
             try:
                 resolved = Path(input_path).resolve()
                 session_dir = self._session_dir(record.id)
@@ -1932,6 +1950,7 @@ class ChatSessionService:
                     self.database_service.connection,
                     record.id,
                     lambda: self._write_draft_artifact(resolved, draft_payload),
+                    expected_updated_at=expected_updated_at,
                 )
 
         if not updates:

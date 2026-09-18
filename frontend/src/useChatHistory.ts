@@ -164,6 +164,89 @@ export function buildChatSessionPayload(session: ChatSession, includeId: boolean
   };
 }
 
+export function isServerSessionVersionFresh(
+  fetchedUpdatedAt: number,
+  knownUpdatedAt: number | undefined,
+): boolean {
+  return (
+    !Number.isFinite(fetchedUpdatedAt)
+    || knownUpdatedAt === undefined
+    || !Number.isFinite(knownUpdatedAt)
+    || fetchedUpdatedAt >= knownUpdatedAt
+  );
+}
+
+function sessionValuesEqual(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) {
+    return true;
+  }
+  try {
+    return JSON.stringify(left) === JSON.stringify(right);
+  } catch {
+    return false;
+  }
+}
+
+function mergeConcurrentMessages(
+  baseMessages: ChatMessage[],
+  savedMessages: ChatMessage[],
+  currentMessages: ChatMessage[],
+): ChatMessage[] {
+  const baseById = new Map(baseMessages.map((message) => [message.id, message]));
+  const savedById = new Map(savedMessages.map((message) => [message.id, message]));
+  const currentIds = new Set(currentMessages.map((message) => message.id));
+  const merged = currentMessages.flatMap((message) => {
+    const baseMessage = baseById.get(message.id);
+    if (!baseMessage) {
+      return [message];
+    }
+    const savedMessage = savedById.get(message.id);
+    if (!savedMessage) {
+      return sessionValuesEqual(message, baseMessage) ? [] : [message];
+    }
+    if (
+      !sessionValuesEqual(savedMessage, baseMessage)
+      && sessionValuesEqual(message, baseMessage)
+    ) {
+      return [savedMessage];
+    }
+    return [message];
+  });
+
+  for (const message of savedMessages) {
+    if (!baseById.has(message.id) && !currentIds.has(message.id)) {
+      merged.push(message);
+    }
+  }
+  return merged;
+}
+
+export function mergeStrictSessionResult(
+  baseSession: ChatSession,
+  savedSession: ChatSession,
+  currentSession: ChatSession,
+  updates: Partial<SessionMutableFields>,
+): ChatSession {
+  const merged: ChatSession = { ...currentSession };
+  for (const key of Object.keys(updates) as Array<keyof SessionMutableFields>) {
+    if (key === "updatedAt") {
+      continue;
+    }
+    if (key === "messages") {
+      merged.messages = mergeConcurrentMessages(
+        baseSession.messages,
+        savedSession.messages,
+        currentSession.messages,
+      );
+      continue;
+    }
+    if (sessionValuesEqual(currentSession[key], baseSession[key])) {
+      Object.assign(merged, { [key]: savedSession[key] });
+    }
+  }
+  return merged;
+}
+
 function normalizeLegacySession(rawSession: Partial<ChatSession> & { id?: string }): ChatSession | null {
   if (!rawSession.id) {
     return null;
@@ -221,9 +304,55 @@ export function useChatHistory(currentUser: Pick<UserSummary, "id">) {
   const [isLoaded, setIsLoaded] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
   const syncTimersRef = useRef<Map<string, number>>(new Map());
+  const serverVersionsRef = useRef<Map<string, number>>(new Map());
+  const persistenceQueueRef = useRef<Map<string, Promise<unknown>>>(new Map());
   const saveTimerRef = useRef<number | null>(null);
   const mountedRef = useRef(true);
   const sessionsRef = useRef<ChatSession[]>([]);
+
+  const rememberServerSession = useCallback((record: ChatSessionApiRecord): ChatSession => {
+    if (Number.isFinite(record.updated_at)) {
+      const previousVersion = serverVersionsRef.current.get(record.id);
+      if (previousVersion === undefined || record.updated_at >= previousVersion) {
+        serverVersionsRef.current.set(record.id, record.updated_at);
+      }
+    }
+    return mapApiSession(record);
+  }, []);
+
+  const resolveFreshServerSession = useCallback(
+    (record: ChatSessionApiRecord): ChatSession | null => {
+      const knownUpdatedAt = serverVersionsRef.current.get(record.id);
+      if (!isServerSessionVersionFresh(record.updated_at, knownUpdatedAt)) {
+        return sessionsRef.current.find((item) => item.id === record.id) ?? null;
+      }
+      return rememberServerSession(record);
+    },
+    [rememberServerSession],
+  );
+
+  const enqueueSessionPersistence = useCallback(
+    <T,>(sessionId: string, operation: () => Promise<T>): Promise<T> => {
+      const previous = persistenceQueueRef.current.get(sessionId) ?? Promise.resolve();
+      const next = previous.catch(() => undefined).then(operation);
+      let tracked: Promise<T>;
+      tracked = next.finally(() => {
+        if (persistenceQueueRef.current.get(sessionId) === tracked) {
+          persistenceQueueRef.current.delete(sessionId);
+        }
+      });
+      persistenceQueueRef.current.set(sessionId, tracked);
+      return tracked;
+    },
+    [],
+  );
+
+  const waitForSessionPersistence = useCallback(async (sessionId: string): Promise<void> => {
+    const inFlight = persistenceQueueRef.current.get(sessionId);
+    if (inFlight) {
+      await inFlight.catch(() => undefined);
+    }
+  }, []);
 
   useEffect(() => {
     sessionsRef.current = sessions;
@@ -242,28 +371,41 @@ export function useChatHistory(currentUser: Pick<UserSummary, "id">) {
 
   const persistSession = useCallback(
     async (session: ChatSession, forceCreate: boolean = false) => {
-      try {
-        const saved = forceCreate
-          ? await createChatSession(buildChatSessionPayload(session, true))
-          : await updateChatSessionApi(session.id, buildChatSessionPayload(session, false));
-        if (!mountedRef.current) {
-          return;
+      await enqueueSessionPersistence(session.id, async () => {
+        try {
+          const sessionToPersist = sessionsRef.current.find((item) => item.id === session.id) ?? session;
+          let saved: ChatSessionApiRecord;
+          try {
+            saved = forceCreate
+              ? await createChatSession(buildChatSessionPayload(sessionToPersist, true))
+              : await updateChatSessionApi(sessionToPersist.id, buildChatSessionPayload(sessionToPersist, false));
+          } catch (error) {
+            if (!forceCreate && error instanceof ApiError && error.status === 404) {
+              saved = await createChatSession(buildChatSessionPayload(sessionToPersist, true));
+            } else {
+              throw error;
+            }
+          }
+
+          const mapped = rememberServerSession(saved);
+          if (!mountedRef.current) {
+            return;
+          }
+          const currentSession = sessionsRef.current.find((item) => item.id === session.id);
+          if (currentSession === sessionToPersist) {
+            replaceSession(mapped);
+          }
+          setSyncError(null);
+        } catch (error) {
+          if (!mountedRef.current) {
+            return;
+          }
+          console.error("同步会话失败", error);
+          setSyncError(formatApiErrorMessage(error, "同步会话失败。"));
         }
-        replaceSession(mapApiSession(saved));
-        setSyncError(null);
-      } catch (error) {
-        if (!forceCreate && error instanceof ApiError && error.status === 404) {
-          await persistSession(session, true);
-          return;
-        }
-        if (!mountedRef.current) {
-          return;
-        }
-        console.error("同步会话失败", error);
-        setSyncError(formatApiErrorMessage(error, "同步会话失败。"));
-      }
+      });
     },
-    [replaceSession],
+    [enqueueSessionPersistence, rememberServerSession, replaceSession],
   );
 
   const scheduleSessionSync = useCallback(
@@ -298,18 +440,88 @@ export function useChatHistory(currentUser: Pick<UserSummary, "id">) {
     [persistSession],
   );
 
+  const saveSessionById = useCallback(
+    async (sessionId: string, updates?: SessionUpdate): Promise<ChatSession> => {
+      const existingTimer = syncTimersRef.current.get(sessionId);
+      if (existingTimer) {
+        window.clearTimeout(existingTimer);
+        syncTimersRef.current.delete(sessionId);
+      }
+
+      return enqueueSessionPersistence(sessionId, async () => {
+        try {
+          const session = sessionsRef.current.find((item) => item.id === sessionId);
+          if (!session) {
+            throw new Error("会话不存在，无法保存。");
+          }
+
+          const resolvedUpdates = updates === undefined
+            ? {}
+            : typeof updates === "function"
+              ? updates(session)
+              : updates;
+          const nextSession: ChatSession = {
+            ...session,
+            ...resolvedUpdates,
+            updatedAt: resolvedUpdates.updatedAt ?? Date.now(),
+          };
+
+          let expectedUpdatedAt = serverVersionsRef.current.get(sessionId);
+          if (!Number.isFinite(expectedUpdatedAt)) {
+            const fetched = await fetchChatSessionApi(sessionId);
+            rememberServerSession(fetched);
+            expectedUpdatedAt = serverVersionsRef.current.get(sessionId);
+          }
+          if (!Number.isFinite(expectedUpdatedAt)) {
+            throw new Error("缺少服务端会话版本，已拒绝严格保存。");
+          }
+
+          const saved = await updateChatSessionApi(
+            nextSession.id,
+            {
+              ...buildChatSessionPayload(nextSession, false),
+              expected_updated_at: expectedUpdatedAt,
+            },
+          );
+          const mapped = rememberServerSession(saved);
+          if (mountedRef.current) {
+            const currentSession = sessionsRef.current.find((item) => item.id === sessionId);
+            if (currentSession === session) {
+              replaceSession(mapped);
+            } else if (currentSession) {
+              replaceSession(mergeStrictSessionResult(session, mapped, currentSession, resolvedUpdates));
+            }
+            setSyncError(null);
+          }
+          return mapped;
+        } catch (error) {
+          if (mountedRef.current) {
+            console.error("严格保存会话失败", error);
+            setSyncError(formatApiErrorMessage(error, "保存会话失败。"));
+          }
+          throw error;
+        }
+      });
+    },
+    [enqueueSessionPersistence, rememberServerSession, replaceSession],
+  );
+
   const refreshSessionById = useCallback(
     async (sessionId: string) => {
       if (syncTimersRef.current.has(sessionId)) {
         await flushSessionById(sessionId);
       }
+      await waitForSessionPersistence(sessionId);
 
       try {
         const fetched = await fetchChatSessionApi(sessionId);
+        const mapped = resolveFreshServerSession(fetched);
         if (!mountedRef.current) {
           return null;
         }
-        const mapped = mapApiSession(fetched);
+        if (!mapped) {
+          return null;
+        }
         replaceSession(mapped);
         setSyncError(null);
         return mapped;
@@ -332,7 +544,7 @@ export function useChatHistory(currentUser: Pick<UserSummary, "id">) {
         return null;
       }
     },
-    [flushSessionById, replaceSession],
+    [flushSessionById, replaceSession, resolveFreshServerSession, waitForSessionPersistence],
   );
 
   useEffect(() => {
@@ -401,6 +613,7 @@ export function useChatHistory(currentUser: Pick<UserSummary, "id">) {
     setActiveSessionId(null);
     setIsLoaded(false);
     setSyncError(null);
+    serverVersionsRef.current.clear();
     for (const timerId of syncTimersRef.current.values()) {
       window.clearTimeout(timerId);
     }
@@ -413,7 +626,7 @@ export function useChatHistory(currentUser: Pick<UserSummary, "id">) {
           return;
         }
         if (remoteSessions.length > 0) {
-          const nextSessions = sortSessions(remoteSessions.map(mapApiSession));
+          const nextSessions = sortSessions(remoteSessions.map(rememberServerSession));
           sessionsRef.current = nextSessions;
           setSessions(nextSessions);
           setSyncError(null);
@@ -442,7 +655,7 @@ export function useChatHistory(currentUser: Pick<UserSummary, "id">) {
     return () => {
       cancelled = true;
     };
-  }, [storageKey]);
+  }, [rememberServerSession, storageKey]);
 
   useEffect(() => {
     if (sessions.length === 0) {
@@ -533,6 +746,7 @@ export function useChatHistory(currentUser: Pick<UserSummary, "id">) {
         window.clearTimeout(existingTimer);
         syncTimersRef.current.delete(sessionId);
       }
+      await waitForSessionPersistence(sessionId);
       try {
         await deleteChatSessionApi(sessionId);
       } catch (error) {
@@ -547,7 +761,7 @@ export function useChatHistory(currentUser: Pick<UserSummary, "id">) {
       setActiveSessionId((current) => (current === sessionId ? null : current));
       setSyncError(null);
     },
-    [],
+    [waitForSessionPersistence],
   );
 
   const reorderSessions = useCallback(
@@ -587,6 +801,7 @@ export function useChatHistory(currentUser: Pick<UserSummary, "id">) {
     createNewSession,
     updateSessionById,
     flushSessionById,
+    saveSessionById,
     refreshSessionById,
     reorderSessions,
     updateActiveSession,

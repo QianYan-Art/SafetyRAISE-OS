@@ -76,6 +76,7 @@ def guarded_session_file_write(
     connection_factory: Callable[[], Any],
     session_id: str,
     writer: Callable[[], Any],
+    expected_updated_at: int | None = None,
 ) -> Any:
     """在同一会话的数据库锁和删除屏障检查内执行文件写入。"""
     with connection_factory() as conn, conn.transaction():
@@ -83,6 +84,12 @@ def guarded_session_file_write(
         lock_session_identity(conn, session_id)
         assert_session_not_deleted(conn, session_id)
         assert_session_identity_available(conn, session_id)
+        if expected_updated_at is not None:
+            row = conn.execute(
+                "SELECT updated_at FROM chat_sessions WHERE id=%s", (session_id,),
+            ).fetchone()
+            if row is None or row["updated_at"] != expected_updated_at:
+                return None
         return writer()
 
 

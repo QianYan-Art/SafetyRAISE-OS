@@ -1,4 +1,4 @@
-import { ChangeEvent, DragEvent, KeyboardEvent as ReactKeyboardEvent, MouseEvent, TouchEvent, useEffect, useRef, useState } from "react";
+import { ChangeEvent, DragEvent, KeyboardEvent as ReactKeyboardEvent, MouseEvent, TouchEvent, useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -60,6 +60,7 @@ import {
 } from "./uploadGroups";
 import { UserModelConfigDrawer } from "./UserModelConfigDrawer";
 import { ReportHarnessPanel } from "./ReportHarnessPanel";
+import type { ReportHarnessPanelHandle } from "./ReportHarnessPanel";
 
 const SidebarIcon = ({ isOpen }: { isOpen?: boolean }) => (
   <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -678,6 +679,7 @@ function WorkspaceApp({
     createNewSession,
     updateSessionById,
     flushSessionById,
+    saveSessionById,
     refreshSessionById,
     reorderSessions,
     persistSessionOnPagehide,
@@ -796,6 +798,12 @@ function WorkspaceApp({
   const reportAbortControllerRef = useRef<AbortController | null>(null);
   const reportGeneratingSessionIdRef = useRef<string | null>(null);
   const reportProgressMessageIdRef = useRef<string | null>(null);
+  const reportHarnessRef = useRef<ReportHarnessPanelHandle | null>(null);
+  const harnessDraftSaveQueueRef = useRef<Map<string, Promise<void>>>(new Map());
+  const activeSessionIdRef = useRef(activeSessionId);
+  const sessionTransitionRef = useRef<Promise<void> | null>(null);
+  const sessionTransitionSequenceRef = useRef(0);
+  activeSessionIdRef.current = activeSessionId;
   const [reportingSessionId, setReportingSessionId] = useState<string | null>(null);
   const isAdminUser = currentUser.role === "admin";
   const uploadDropzoneHintLines = buildUploadDropzoneHintLines(publicAppConfig.upload_limits);
@@ -1167,6 +1175,73 @@ function WorkspaceApp({
     await flushSessionById(sessionId);
   }
 
+  const persistHarnessDraft = useCallback(
+    async (sessionId: string, editedJsonString: string) => {
+      const previousSave = harnessDraftSaveQueueRef.current.get(sessionId) ?? Promise.resolve();
+      const nextSave = previousSave
+        .catch(() => undefined)
+        .then(async () => {
+          if (!getSessionSnapshot(sessionId)) {
+            throw new Error("会话不存在，无法保存事故输入。");
+          }
+          await saveSessionById(sessionId, (session) => {
+            const nextMessages = [...session.messages];
+            for (let index = nextMessages.length - 1; index >= 0; index -= 1) {
+              const message = nextMessages[index];
+              if (message.role === "assistant" && message.kind === "json") {
+                nextMessages[index] = {
+                  ...message,
+                  content: editedJsonString,
+                };
+                break;
+              }
+            }
+
+            return {
+              draftJson: editedJsonString,
+              messages: nextMessages,
+            };
+          });
+        });
+      const settledSave = nextSave.catch(() => undefined);
+      harnessDraftSaveQueueRef.current.set(sessionId, settledSave);
+      try {
+        await nextSave;
+      } finally {
+        if (harnessDraftSaveQueueRef.current.get(sessionId) === settledSave) {
+          harnessDraftSaveQueueRef.current.delete(sessionId);
+        }
+      }
+    },
+    [saveSessionById],
+  );
+
+  const flushBeforeLeavingSession = useCallback(
+    async (sessionId: string | null) => {
+      if (!sessionId) {
+        return;
+      }
+      await reportHarnessRef.current?.flushDraft(sessionId);
+      await flushSessionById(sessionId);
+    },
+    [flushSessionById],
+  );
+
+  function beginSessionTransition(operation: (sequence: number) => Promise<void>): Promise<void> | null {
+    if (sessionTransitionRef.current) {
+      return null;
+    }
+    const sequence = ++sessionTransitionSequenceRef.current;
+    let tracked: Promise<void>;
+    tracked = operation(sequence).finally(() => {
+      if (sessionTransitionRef.current === tracked) {
+        sessionTransitionRef.current = null;
+      }
+    });
+    sessionTransitionRef.current = tracked;
+    return tracked;
+  }
+
   function startProgressMessage(
     sessionId: string,
     messageId: string,
@@ -1252,15 +1327,31 @@ function WorkspaceApp({
     });
   }
 
-  function handleAddSession() {
-    resetPendingUploadState();
-    setErrorMessage("");
-    createNewSession({
-      title: formatCurrentTime(),
-      messages: [
-        createMessage("system", "text", WELCOME_MESSAGE),
-      ],
+  async function handleAddSession() {
+    const sourceSessionId = activeSessionIdRef.current;
+    const transition = beginSessionTransition(async (sequence) => {
+      try {
+        await flushBeforeLeavingSession(sourceSessionId);
+      } catch (error) {
+        setErrorMessage(resolveUiErrorMessage(error, "当前会话尚有未保存事故输入，未新建会话。"));
+        return;
+      }
+      if (sequence !== sessionTransitionSequenceRef.current) {
+        return;
+      }
+      resetPendingUploadState();
+      setErrorMessage("");
+      const nextSession = createNewSession({
+        title: formatCurrentTime(),
+        messages: [
+          createMessage("system", "text", WELCOME_MESSAGE),
+        ],
+      });
+      activeSessionIdRef.current = nextSession.id;
     });
+    if (transition) {
+      await transition;
+    }
   }
 
   function resetPendingUploadState() {
@@ -1925,22 +2016,92 @@ function WorkspaceApp({
     if (!confirmed) {
       return;
     }
-    try {
-      setErrorMessage("");
-      await deleteSession(sessionId);
-    } catch (error) {
-      setErrorMessage(resolveUiErrorMessage(error, "删除会话失败。"));
+    const transition = beginSessionTransition(async (sequence) => {
+      try {
+        if (sessionId === activeSessionIdRef.current) {
+          await flushBeforeLeavingSession(sessionId);
+        }
+        if (sequence !== sessionTransitionSequenceRef.current) {
+          return;
+        }
+        setErrorMessage("");
+        await deleteSession(sessionId);
+      } catch (error) {
+        setErrorMessage(resolveUiErrorMessage(error, "删除会话失败。"));
+      }
+    });
+    if (transition) {
+      await transition;
     }
   }
 
   async function handleSelectSession(sessionId: string) {
     clearMobileRenamePressTimer();
-    setActiveSessionId(sessionId);
-    setMobileActionMenuId(null);
-    if (isMobileSidebarOpen) {
-      setIsMobileSidebarOpen(false);
+    const sourceSessionId = activeSessionIdRef.current;
+    const transition = beginSessionTransition(async (sequence) => {
+      if (sourceSessionId && sourceSessionId !== sessionId) {
+        try {
+          await flushBeforeLeavingSession(sourceSessionId);
+        } catch (error) {
+          setErrorMessage(resolveUiErrorMessage(error, "当前会话尚有未保存事故输入，未切换会话。"));
+          return;
+        }
+      }
+      if (sequence !== sessionTransitionSequenceRef.current) {
+        return;
+      }
+      setActiveSessionId(sessionId);
+      activeSessionIdRef.current = sessionId;
+      setMobileActionMenuId(null);
+      if (isMobileSidebarOpen) {
+        setIsMobileSidebarOpen(false);
+      }
+      await refreshSessionById(sessionId);
+    });
+    if (transition) {
+      await transition;
     }
-    await refreshSessionById(sessionId);
+  }
+
+  async function handleWorkspaceModeChange(nextMode: WorkspaceMode) {
+    if (workspaceMode === nextMode) {
+      return;
+    }
+    const sourceSessionId = activeSessionIdRef.current;
+    const transition = beginSessionTransition(async (sequence) => {
+      try {
+        await flushBeforeLeavingSession(sourceSessionId);
+      } catch (error) {
+        setErrorMessage(resolveUiErrorMessage(error, "当前会话尚有未保存事故输入，未切换报告模式。"));
+        return;
+      }
+      if (sequence !== sessionTransitionSequenceRef.current) {
+        return;
+      }
+      setWorkspaceMode(nextMode);
+    });
+    if (transition) {
+      await transition;
+    }
+  }
+
+  async function handleLogout() {
+    const sourceSessionId = activeSessionIdRef.current;
+    const transition = beginSessionTransition(async (sequence) => {
+      try {
+        await flushBeforeLeavingSession(sourceSessionId);
+      } catch (error) {
+        setErrorMessage(resolveUiErrorMessage(error, "当前会话尚有未保存事故输入，未退出登录。"));
+        return;
+      }
+      if (sequence !== sessionTransitionSequenceRef.current) {
+        return;
+      }
+      onLogout();
+    });
+    if (transition) {
+      await transition;
+    }
   }
 
   function handleSessionItemClick(sessionId: string) {
@@ -2129,7 +2290,7 @@ function WorkspaceApp({
             className="account-popover-item is-danger"
             onClick={() => {
               setIsAccountMenuOpen(false);
-              void onLogout();
+               void handleLogout();
             }}
           >
             退出登录
@@ -2845,7 +3006,7 @@ function WorkspaceApp({
                 role="tab"
                 aria-selected={workspaceMode === "legacy"}
                 className={`workspace-mode-tab ${workspaceMode === "legacy" ? "is-active" : ""}`}
-                onClick={() => setWorkspaceMode("legacy")}
+                 onClick={() => void handleWorkspaceModeChange("legacy")}
               >
                 旧报告
               </button>
@@ -2854,7 +3015,7 @@ function WorkspaceApp({
                 role="tab"
                 aria-selected={workspaceMode === "report-harness"}
                 className={`workspace-mode-tab ${workspaceMode === "report-harness" ? "is-active" : ""}`}
-                onClick={() => setWorkspaceMode("report-harness")}
+                 onClick={() => void handleWorkspaceModeChange("report-harness")}
               >
                 证据报告
               </button>
@@ -2863,9 +3024,11 @@ function WorkspaceApp({
             {workspaceMode === "report-harness" ? (
               <div className="workspace report-harness-workspace">
                 <ReportHarnessPanel
+                  ref={reportHarnessRef}
                   key={activeSession.id}
                   sessionId={activeSession.id}
                   initialDraftJson={activeSession.draftJson}
+                  onPersistDraft={persistHarnessDraft}
                 />
               </div>
             ) : (
@@ -3008,6 +3171,7 @@ function WorkspaceApp({
                        </div>
                        <JsonTableEditor 
                           initialJson={activeSession.draftJson}
+                          resetKey={activeSession.id}
                           onAutoSave={handleAutoSaveDraft}
                           onConfirm={handleConfirmAndGenerateReport}
                           disabled={isGeneratingReport}

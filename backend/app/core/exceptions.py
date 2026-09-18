@@ -109,6 +109,14 @@ class RequestCancelledError(WorkflowError):
     default_retryable = True
 
 
+class SessionVersionConflictError(WorkflowError):
+    """事故编辑基于旧会话版本，拒绝覆盖其他客户端的新数据。"""
+
+    default_code = "SESSION_VERSION_CONFLICT"
+    default_status_code = 409
+    default_retryable = True
+
+
 class AuthenticationError(WorkflowError):
     """认证失败。"""
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -105,6 +105,14 @@ export function parseAccidentData(json: string): Record<string, unknown> {
     throw new Error("事故输入不能为空对象。");
   }
   return parsed as Record<string, unknown>;
+}
+
+export async function createReportRunAfterDraftSave<T>(
+  persistDraft: () => Promise<void>,
+  createRun: () => Promise<T>,
+): Promise<T> {
+  await persistDraft();
+  return createRun();
 }
 
 export function buildAuthorizationPayload(
@@ -269,13 +277,22 @@ function isApiNotFound(error: unknown): boolean {
   return error instanceof ApiError && error.status === 404;
 }
 
+export interface ReportHarnessPanelHandle {
+  flushDraft: (expectedSessionId?: string) => Promise<void>;
+}
+
 type ReportHarnessPanelProps = {
   sessionId: string;
   initialDraftJson: string;
+  onPersistDraft: (sessionId: string, json: string) => Promise<void>;
 };
 
-export function ReportHarnessPanel({ sessionId, initialDraftJson }: ReportHarnessPanelProps) {
-  const [accidentJson, setAccidentJson] = useState(initialDraftJson.trim() || "{}");
+export const ReportHarnessPanel = forwardRef<ReportHarnessPanelHandle, ReportHarnessPanelProps>(function ReportHarnessPanel(
+  { sessionId, initialDraftJson, onPersistDraft },
+  ref,
+) {
+  const normalizedInitialDraftJson = initialDraftJson.trim() || "{}";
+  const [accidentJson, setAccidentJson] = useState(normalizedInitialDraftJson);
   const [evidenceRevision, setEvidenceRevision] = useState(0);
   const [evidenceRecords, setEvidenceRecords] = useState<ReportEvidenceRecord[]>([]);
   const [evidenceDirty, setEvidenceDirty] = useState(false);
@@ -306,6 +323,12 @@ export function ReportHarnessPanel({ sessionId, initialDraftJson }: ReportHarnes
   const loadGenerationRef = useRef(0);
   const runCursorRef = useRef<string | null>(null);
   const selectedRunIdRef = useRef<string | null>(null);
+  const sessionIdRef = useRef(sessionId);
+  const draftSessionIdRef = useRef(sessionId);
+  const accidentJsonRef = useRef(normalizedInitialDraftJson);
+  const savedAccidentJsonRef = useRef(normalizedInitialDraftJson);
+  const draftSaveChainRef = useRef<Promise<void>>(Promise.resolve());
+  sessionIdRef.current = sessionId;
   selectedRunIdRef.current = selectedRunId;
 
   const hasDraft = Boolean(initialDraftJson.trim());
@@ -315,6 +338,59 @@ export function ReportHarnessPanel({ sessionId, initialDraftJson }: ReportHarnes
   const executeAllowed = Boolean(selectedRun && canExecuteReportRun(selectedRun, isSelectedRunAuthorized));
   const formalExportAllowed = Boolean(selectedRun && canExportReportRun(selectedRun, "formal"));
   const engineeringExportAllowed = Boolean(selectedRun && canExportReportRun(selectedRun, "engineering"));
+
+  const updateAccidentJson = useCallback((nextJson: string) => {
+    accidentJsonRef.current = nextJson;
+    setAccidentJson(nextJson);
+    setErrorMessage("");
+  }, []);
+
+  const persistDraft = useCallback(
+    async (json: string) => {
+      const previousSave = draftSaveChainRef.current;
+      const nextSave = previousSave
+        .catch(() => undefined)
+        .then(async () => {
+          if (sessionIdRef.current !== sessionId) {
+            throw new Error("会话已切换，已停止保存原会话编辑。");
+          }
+          parseAccidentData(json);
+          await onPersistDraft(sessionId, json);
+          if (sessionIdRef.current === sessionId) {
+            savedAccidentJsonRef.current = json;
+          }
+        });
+      draftSaveChainRef.current = nextSave.catch(() => undefined);
+      return nextSave;
+    },
+    [onPersistDraft, sessionId],
+  );
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      flushDraft: async (expectedSessionId) => {
+        if (expectedSessionId && sessionIdRef.current !== expectedSessionId) {
+          throw new Error("当前编辑不属于请求离开的会话。");
+        }
+        await draftSaveChainRef.current;
+        if (expectedSessionId && sessionIdRef.current !== expectedSessionId) {
+          throw new Error("会话已切换，未继续保存原会话编辑。");
+        }
+        const currentJson = accidentJsonRef.current;
+        if (currentJson === savedAccidentJsonRef.current) {
+          return;
+        }
+        try {
+          await persistDraft(currentJson);
+        } catch (error) {
+          setErrorMessage(formatApiErrorMessage(error, "保存事故输入失败，未切换会话。"));
+          throw error;
+        }
+      },
+    }),
+    [persistDraft],
+  );
 
   const loadWorkspace = useCallback(async (append = false) => {
     const generation = ++loadGenerationRef.current;
@@ -368,9 +444,20 @@ export function ReportHarnessPanel({ sessionId, initialDraftJson }: ReportHarnes
   }, [sessionId]);
 
   useEffect(() => {
+    if (draftSessionIdRef.current === sessionId) {
+      return;
+    }
+    draftSessionIdRef.current = sessionId;
+    const nextDraftJson = initialDraftJson.trim() || "{}";
+    accidentJsonRef.current = nextDraftJson;
+    savedAccidentJsonRef.current = nextDraftJson;
+    draftSaveChainRef.current = Promise.resolve();
+    setAccidentJson(nextDraftJson);
+  }, [initialDraftJson, sessionId]);
+
+  useEffect(() => {
     streamAbortControllerRef.current?.abort();
     streamAbortControllerRef.current = null;
-    setAccidentJson(initialDraftJson.trim() || "{}");
     setEvidenceRevision(0);
     setEvidenceRecords([]);
     setEvidenceDirty(false);
@@ -392,7 +479,19 @@ export function ReportHarnessPanel({ sessionId, initialDraftJson }: ReportHarnes
       streamAbortControllerRef.current?.abort();
       streamAbortControllerRef.current = null;
     };
-  }, [initialDraftJson, loadWorkspace, sessionId]);
+  }, [loadWorkspace, sessionId]);
+
+  useEffect(() => {
+    if (draftSessionIdRef.current !== sessionId || accidentJsonRef.current !== savedAccidentJsonRef.current) {
+      return;
+    }
+    const nextDraftJson = initialDraftJson.trim() || "{}";
+    if (nextDraftJson !== accidentJsonRef.current) {
+      accidentJsonRef.current = nextDraftJson;
+      savedAccidentJsonRef.current = nextDraftJson;
+      setAccidentJson(nextDraftJson);
+    }
+  }, [initialDraftJson, sessionId]);
 
   useEffect(() => {
     if (!selectedRunId) {
@@ -581,6 +680,17 @@ export function ReportHarnessPanel({ sessionId, initialDraftJson }: ReportHarnes
     }
   }
 
+  async function handleAutoSaveDraft(json: string) {
+    updateAccidentJson(json);
+    try {
+      await persistDraft(json);
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage(formatApiErrorMessage(error, "自动保存事故输入失败。"));
+      throw error;
+    }
+  }
+
   async function handleCreateRun(json: string) {
     if (creatingRun || streamingAction || streamAbortControllerRef.current) {
       return;
@@ -589,14 +699,17 @@ export function ReportHarnessPanel({ sessionId, initialDraftJson }: ReportHarnes
     setErrorMessage("");
     setNoticeMessage("");
     try {
+      updateAccidentJson(json);
       const accidentData = parseAccidentData(json);
-      const run = await createReportRun({
-        request_id: createEvidenceId(),
-        session_id: sessionId,
-        accident_data: accidentData,
-        evidence_revision: evidenceRevision,
-      });
-      setAccidentJson(json);
+      const run = await createReportRunAfterDraftSave(
+        () => persistDraft(json),
+        () => createReportRun({
+          request_id: createEvidenceId(),
+          session_id: sessionId,
+          accident_data: accidentData,
+          evidence_revision: evidenceRevision,
+        }),
+      );
       setRuns((current) => upsertRun(current, run, true));
       setSelectedRunId(run.run_id);
       selectedRunIdRef.current = run.run_id;
@@ -1331,8 +1444,10 @@ export function ReportHarnessPanel({ sessionId, initialDraftJson }: ReportHarnes
             {hasDraft ? (
               <JsonTableEditor
                 initialJson={initialDraftJson}
-                onAutoSave={(json) => setAccidentJson(json)}
-                onConfirm={(json) => void handleCreateRun(json)}
+                resetKey={sessionId}
+                onDraftChange={updateAccidentJson}
+                onAutoSave={handleAutoSaveDraft}
+                onConfirm={handleCreateRun}
                 disabled={creatingRun || Boolean(streamingAction)}
                 confirmLabel={creatingRun ? "正在创建运行..." : "创建证据报告运行"}
               />
@@ -1390,6 +1505,6 @@ export function ReportHarnessPanel({ sessionId, initialDraftJson }: ReportHarnes
       </div>
     </div>
   );
-}
+});
 
 export default ReportHarnessPanel;

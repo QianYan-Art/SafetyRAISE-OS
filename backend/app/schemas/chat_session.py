@@ -63,6 +63,7 @@ class CreateChatSessionRequest(StrictModel):
 
 
 class UpdateChatSessionRequest(StrictModel):
+    expected_updated_at: Optional[int] = Field(default=None, ge=0, strict=True)
     title: Optional[str] = None
     updated_at: Optional[int] = None
     sort_order: Optional[int] = None

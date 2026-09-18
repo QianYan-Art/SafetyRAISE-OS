@@ -238,6 +238,7 @@ export interface ChatSessionApiRecord {
 
 export interface ChatSessionUpsertPayload {
   id?: string;
+  expected_updated_at?: number;
   title: string;
   created_at?: number;
   updated_at?: number;
