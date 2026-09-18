@@ -43,14 +43,18 @@ class RevisionRoles(SyntheticRoles):
         if version == 1:
             result["issues"] = [{
                 "issue_id": "model-proposed-id",
-                "category": "style" if self.mode == "minor" else "reasoning",
-                "severity": "minor" if self.mode in {"minor", "semantic_minor"} else "major",
+                "category": ("style" if self.mode == "minor" else
+                             "coverage" if self.mode == "coverage_minor" else "reasoning"),
+                "severity": "minor" if self.mode in {
+                    "minor", "semantic_minor", "coverage_minor",
+                } else "major",
                 "target": "claim-1", "explanation": "合成检查：需要明确不确定性。",
                 "source_refs": refs, "closure_condition": "明确给定事实不能支持确定因果。",
                 "status": "resolved" if self.mode == "initial_resolved" else "open",
             }]
-            if self.mode == "semantic_minor":
-                result["completed_checks"][2]["passed"] = False
+            if self.mode in {"semantic_minor", "coverage_minor"}:
+                check_index = 1 if self.mode == "coverage_minor" else 2
+                result["completed_checks"][check_index]["passed"] = False
             return result
         if self.mode == "dropped":
             return result
@@ -116,15 +120,17 @@ def test_http_only_minor_wording_issue_does_not_force_revision(tool_client):
     assert record["review"]["issues"][0]["severity"] == "minor"
 
 
-def test_http_semantic_minor_is_blocking_and_independently_revised(tool_client):
-    roles = RevisionRoles("semantic_minor")
+@pytest.mark.parametrize("mode", ["semantic_minor", "coverage_minor"])
+def test_http_semantic_minor_is_blocking_and_independently_revised(tool_client, mode):
+    roles = RevisionRoles(mode)
     record, _ = run_http(tool_client, roles)
     assert record["state"] == "published", record["terminal_reason"]
     assert roles.versions == [1, 2] and roles.reviewed == [1, 2]
     first = record["review_history"][0]
     assert first["raw_review"]["issues"][0]["severity"] == "minor"
     assert first["review"]["issues"][0]["severity"] == "major"
-    assert not first["review"]["completed_checks"][2]["passed"]
+    check_index = 1 if mode == "coverage_minor" else 2
+    assert not first["review"]["completed_checks"][check_index]["passed"]
     assert roles.received_issues[1][0]["severity"] == "major"
     assert record["review"]["issues"][0]["status"] == "resolved"
 

@@ -6,7 +6,7 @@ from decimal import Decimal
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from app.schemas.base import StrictModel
 
@@ -222,10 +222,25 @@ class CoverageCheck(StrictModel):
 
 
 class CompletedCheck(StrictModel):
+    model_config = ConfigDict(json_schema_extra={
+        "anyOf": [
+            {"required": ["evidence_refs"],
+             "properties": {"evidence_refs": {"minItems": 1}}},
+            {"required": ["knowledge_refs"],
+             "properties": {"knowledge_refs": {"minItems": 1}}},
+        ],
+    })
+
     category: CheckCategory
     passed: bool
-    evidence_refs: list[str] = Field(default_factory=list)
-    knowledge_refs: list[str] = Field(default_factory=list)
+    evidence_refs: list[str] = Field(
+        default_factory=list,
+        description="实际核对的证据ID；五类检查均须有依据，不能与knowledge_refs同时为空。",
+    )
+    knowledge_refs: list[str] = Field(
+        default_factory=list,
+        description="实际读取的知识ID；未用知识时留空，此时evidence_refs必须非空。",
+    )
     conclusion: str = Field(min_length=1)
 
     @field_validator("conclusion", mode="before")

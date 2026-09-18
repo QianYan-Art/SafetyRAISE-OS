@@ -19,15 +19,16 @@ _REQUIRED_CHECK_CATEGORIES = frozenset(
 _SEMANTIC_ISSUE_CATEGORIES = frozenset(
     {"fact", "facts", "inference", "reasoning", "citation", "citations", "事实", "推理", "引用"}
 )
+_COSMETIC_ISSUE_CATEGORIES = frozenset({"style", "formatting", "wording"})
 _UNRESOLVED_SEVERITIES = frozenset({"blocker", "major"})
 _UNRESOLVED_STATUSES = frozenset({"open", "contested"})
 
 
 def enforce_semantic_severity(review: ReviewResult) -> ReviewResult:
-    """语义问题至少按 major 处理；不修改原始审查或替模型关闭问题。"""
+    """非明确排版措辞问题至少按 major 处理，不替模型关闭问题。"""
     payload = review.model_dump(mode="json")
     for issue in payload["issues"]:
-        if (issue["category"].strip().lower() in _SEMANTIC_ISSUE_CATEGORIES
+        if (issue["category"].strip().lower() not in _COSMETIC_ISSUE_CATEGORIES
                 and issue["severity"] == "minor"):
             issue["severity"] = "major"
     return ReviewResult.model_validate(payload)
@@ -243,9 +244,8 @@ def _validate_report_contract(
         )
         if issue.category.strip().lower() in _SEMANTIC_ISSUE_CATEGORIES and issue.severity == "minor":
             raise ValueError("事实、推理或引用问题不能标记为 minor。")
-        if issue.severity == "minor" and issue.category.strip().lower() not in {
-            "style", "formatting", "wording",
-        }:
+        if (issue.severity == "minor"
+                and issue.category.strip().lower() not in _COSMETIC_ISSUE_CATEGORIES):
             raise ValueError("只有明确的排版或措辞问题可以标记为 minor。")
         if issue.status == "resolved" and issue.issue_id not in resolved_issue_ids:
             raise ValueError("当前契约没有历史问题闭合上下文，不接受模型首次声明 resolved。")

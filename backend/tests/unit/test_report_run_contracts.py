@@ -98,6 +98,7 @@ def publish(candidate: CandidateReport | None = None, review: ReviewResult | Non
 
 @pytest.mark.parametrize("category", [
     "fact", "facts", "inference", "reasoning", "citation", "citations", "事实", "推理", "引用",
+    "coverage", "conciseness", "unclassified",
 ])
 def test_semantic_minor_is_elevated_without_changing_raw_review(category):
     candidate = make_candidate()
@@ -122,6 +123,18 @@ def test_canonical_digest_is_order_independent_and_json_based() -> None:
     assert canonical_digest({"b": 2, "a": 1}) == canonical_digest({"a": 1, "b": 2})
     candidate = make_candidate()
     assert canonical_digest(candidate) == canonical_digest(candidate.model_dump(mode="json"))
+
+
+def test_completed_check_wire_schema_requires_at_least_one_source_list():
+    schema = ReviewResult.model_json_schema()["$defs"]["CompletedCheck"]
+    assert schema["additionalProperties"] is False
+    assert schema["anyOf"] == [
+        {"required": ["evidence_refs"],
+         "properties": {"evidence_refs": {"minItems": 1}}},
+        {"required": ["knowledge_refs"],
+         "properties": {"knowledge_refs": {"minItems": 1}}},
+    ]
+    assert set(schema["required"]) >= {"category", "passed", "conclusion"}
 
 
 def test_create_and_execute_requests_are_strict_and_bounded() -> None:
