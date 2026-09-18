@@ -36,7 +36,7 @@ from evals.report_harness.quoted_roles import QuotedTransportRoles
 from app.schemas.report_run import BudgetPolicy, CreateRunRequest
 from app.services.report_run_service import ReportRunService
 from evals.report_harness.development_provider import (
-    DevelopmentClient, ENDPOINT, MODEL, OUTPUT_LIMIT, TOKEN_BOUND,
+    DevelopmentClient, ENDPOINT, MODEL, MODEL_OUTPUT_LIMIT, TOKEN_BOUND,
     REQUEST_CNY_UPPER, USD_TO_CNY_UPPER, GENERATION_SETTINGS, validate_metadata,
 )
 
@@ -94,7 +94,8 @@ def load_input(path: Path, expected_sha256: str) -> dict:
 def execution_proof(version: str) -> dict:
     return {
         "model": MODEL, "endpoint": ENDPOINT, "version": version,
-        "token_bound": TOKEN_BOUND, "output_limit": OUTPUT_LIMIT,
+        "token_bound": TOKEN_BOUND, "provider_output_bound": MODEL_OUTPUT_LIMIT,
+        "request_output_limit": None,
         "price_caps": {"prompt": "0.000001", "completion": "0.000003",
                        "input_cache_read": "0.000001"},
         "accounting_fx": str(USD_TO_CNY_UPPER), "request_upper": str(REQUEST_CNY_UPPER),
@@ -181,7 +182,7 @@ async def run(args):
     policy = BudgetPolicy(
         max_physical_requests=8, max_tool_calls=12, max_revision_rounds=2,
         max_retrieval_requests=0, max_active_seconds=900,
-        max_total_tokens=TOKEN_BOUND * 10, max_output_tokens_per_request=OUTPUT_LIMIT,
+        max_total_tokens=TOKEN_BOUND * 10, max_output_tokens_per_request=MODEL_OUTPUT_LIMIT,
         # 请求账本只核token；货币限额由下层持久MoneyGuard独立执行。
         max_money=None,
     )
@@ -209,10 +210,10 @@ async def run(args):
 
         transport = BudgetedTransport(
             RequestLedger(active_store), guarded, owner=active_owner, run_id=run_id, token=token,
-            endpoint_digest=catalog.endpoint_digest, output_limit=OUTPUT_LIMIT,
+            endpoint_digest=catalog.endpoint_digest, output_limit=MODEL_OUTPUT_LIMIT,
             review_reserve_tokens=TOKEN_BOUND, generation_reserve_tokens=TOKEN_BOUND,
             authorize=authorize, remaining_seconds=lambda: 900 - (time.monotonic() - started),
-            bound_provider=lambda role, payload: RequestBound(TOKEN_BOUND, OUTPUT_LIMIT, proof_digest),
+            bound_provider=lambda role, payload: RequestBound(TOKEN_BOUND, MODEL_OUTPUT_LIMIT, proof_digest),
             verified_proofs=frozenset({proof_digest}),
         )
         return QuotedTransportRoles(transport, {

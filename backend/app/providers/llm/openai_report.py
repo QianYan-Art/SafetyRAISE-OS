@@ -7,6 +7,7 @@ import httpx
 
 from app.core.json_parser import extract_json_from_text
 from app.core.exceptions import ModelTimeoutError, ProviderError
+from app.core.model_requests import omit_explicit_token_limits
 from app.core.settings import ReportModelSettings
 from app.providers.llm.base import BaseLLMProvider, LLMGenerateResult, LLMToolCall
 from app.providers.llm.lmstudio_compat import (
@@ -263,6 +264,7 @@ class OpenAIReportProvider(BaseLLMProvider):
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
             payload["parallel_tool_calls"] = False
+        omit_explicit_token_limits(payload)
         return payload
 
     def _parse_response(self, data: dict[str, Any]) -> LLMGenerateResult:

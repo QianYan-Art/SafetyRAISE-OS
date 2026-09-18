@@ -99,8 +99,7 @@ models:
           key: *openrouter_api_key
           url: "https://openrouter.ai"
         url: "https://openrouter.ai/api/v1/chat/completions"
-        model: "deepseek/deepseek-v4-pro"
-        verbosity: "high"
+        model: "tencent/hy4-preview"
         timeout_seconds: 1800
         reasoning:
           effort: "high"
@@ -118,8 +117,6 @@ models:
     provider: "raise"
     # 视觉识别温度，建议保持较低以稳定结构化输出。
     temperature: 1.0
-    # 最大输出 token 数，图片较多、字段较多时需要较大上限。
-    max_tokens: 128000
     # 视觉端点列表，当前通常配置一个即可。
     endpoints:
       - name: "openrouter_vision"
@@ -127,14 +124,12 @@ models:
         # 视觉模型接口地址，必须兼容 OpenAI Chat Completions 且支持图像输入。
         url: "https://openrouter.ai/api/v1/chat/completions"
         # 视觉模型名称。
-        model: "qwen/qwen3.7-plus"
-        verbosity: "high"
+        model: "openai/gpt-5.6-luna"
         # 单次调用超时时间，单位秒。
         timeout_seconds: 1800
-        # 强制启用推理模式，并将思维链预算收敛到中高档位。
+        # 按模型最高推理等级执行，不附加输出或推理token截断。
         reasoning:
-          enabled: true
-          max_tokens: 32768
+          effort: "max"
         # 这里通过顶部锚点复用同一份 key。
         api_key_env: *openrouter_api_key
 

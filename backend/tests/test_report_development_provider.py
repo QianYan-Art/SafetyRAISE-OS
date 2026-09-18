@@ -7,7 +7,7 @@ import pytest
 
 from evals.report_harness.development_provider import (
     CONTEXT_LIMIT, MODEL, MODEL_OUTPUT_LIMIT, REQUEST_CNY_UPPER,
-    USD_TO_CNY_UPPER, OUTPUT_LIMIT, DevelopmentClient, validate_metadata,
+    USD_TO_CNY_UPPER, DevelopmentClient, validate_metadata,
 )
 from app.report_harness.errors import HarnessError
 from app.report_harness.transport import HTTPAttemptClient
@@ -64,17 +64,19 @@ def test_fixed_routing_and_reasoning_redaction(monkeypatch):
         client = DevelopmentClient("synthetic-key")
         try:
             result = await client.attempt("generator", {
-                "model": MODEL, "max_tokens": OUTPUT_LIMIT, "messages": [],
+                "model": MODEL, "messages": [],
             }, 1)
             assert result["choices"][0]["message"] == {"content": "{}"}
             assert sent[0]["provider"]["allow_fallbacks"] is False
             assert sent[0]["provider"]["only"] == ["tencent/fp8"]
             assert sent[0]["provider"]["max_price"]["request"] == 0
             assert sent[0]["reasoning"]["exclude"] is True
-            assert sent[0]["reasoning"]["effort"] == "low"
+            assert sent[0]["reasoning"]["effort"] == "high"
+            assert not {"max_tokens", "max_completion_tokens", "max_output_tokens"} & sent[0].keys()
+            assert "max_tokens" not in sent[0]["reasoning"]
             with pytest.raises(HarnessError):
                 await client.attempt("generator", {
-                    "model": MODEL, "max_tokens": OUTPUT_LIMIT, "messages": [],
+                    "model": MODEL, "messages": [],
                     "plugins": [{"id": "web"}],
                 }, 1)
             assert len(sent) == 1
@@ -95,10 +97,28 @@ def test_transport_failure_records_type_not_sensitive_message(monkeypatch):
         try:
             with pytest.raises(httpx.ReadError):
                 await client.attempt("generator", {
-                    "model": MODEL, "max_tokens": OUTPUT_LIMIT, "messages": [],
+                    "model": MODEL, "messages": [],
                 }, 1)
             assert client.last_error_type == "ReadError"
             assert client.last_http_status is None
+        finally:
+            await client.close()
+
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("field", ["max_tokens", "max_completion_tokens", "max_output_tokens", "reasoning"])
+def test_development_client_rejects_unapproved_token_or_reasoning_override(field, monkeypatch):
+    async def forbidden(*args, **kwargs):
+        raise AssertionError("不合法请求不应进入物理发送")
+
+    monkeypatch.setattr(HTTPAttemptClient, "attempt", forbidden)
+
+    async def check():
+        client = DevelopmentClient("synthetic-key")
+        try:
+            with pytest.raises(HarnessError, match="development_payload_unapproved"):
+                await client.attempt("reviewer", {"model": MODEL, "messages": [], field: 10}, 1)
         finally:
             await client.close()
 

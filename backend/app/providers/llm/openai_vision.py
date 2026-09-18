@@ -8,6 +8,7 @@ from typing import Any, Optional
 import httpx
 
 from app.core.exceptions import ModelTimeoutError, ProviderError
+from app.core.model_requests import omit_explicit_token_limits
 from app.core.settings import ReportModelSettings
 from app.providers.llm.lmstudio_compat import (
     build_lmstudio_models_urls,
@@ -160,7 +161,6 @@ class OpenAIVisionProvider:
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": model_name,
-            "max_tokens": self.config.max_tokens,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_content},
@@ -178,6 +178,7 @@ class OpenAIVisionProvider:
         lmstudio = self._lmstudio_by_endpoint[endpoint.name]
         if lmstudio.enabled and lmstudio.ttl_seconds is not None:
             payload["ttl"] = lmstudio.ttl_seconds
+        omit_explicit_token_limits(payload)
         return payload
 
     def _build_image_payload(self, image_path: Path) -> dict[str, object]:

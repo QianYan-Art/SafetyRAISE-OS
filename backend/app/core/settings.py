@@ -241,7 +241,8 @@ class ReportModelSettings(BaseModel):
     model: Optional[str] = None
     api_key_env: Optional[str] = None
     temperature: Optional[float] = Field(default=None, ge=0, le=2)
-    max_tokens: int = Field(default=4000, ge=128)
+    # 保留旧配置解析兼容；报告与视觉请求不再发送此输出截断参数。
+    max_tokens: Optional[int] = Field(default=None, ge=128)
     endpoints: list[ReportEndpointSettings] = Field(default_factory=list)
     retry: ReportRetrySettings = Field(default_factory=ReportRetrySettings)
 

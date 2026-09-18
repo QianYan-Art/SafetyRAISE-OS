@@ -51,7 +51,8 @@ def runtime_factory(url, config, *, expert=False):
             verified_proofs=frozenset({proof}),
         )
         return TransportRoles(
-            transport, {role: RoleModel("synthetic-" + role) for role in registered},
+            transport, {role: RoleModel("synthetic-" + role, output_limit_field="max_tokens")
+                        for role in registered},
         )
     return factory
 

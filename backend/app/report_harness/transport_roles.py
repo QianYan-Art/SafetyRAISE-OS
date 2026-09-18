@@ -10,12 +10,12 @@ from app.report_harness.errors import HarnessError
 @dataclass(frozen=True)
 class RoleModel:
     model: str
-    output_limit_field: str = "max_tokens"
+    output_limit_field: str | None = None
     json_object_mode: bool = False
 
     def __post_init__(self):
         if not self.model.strip() or self.output_limit_field not in {
-            "max_tokens", "max_completion_tokens", "max_output_tokens",
+            None, "max_tokens", "max_completion_tokens", "max_output_tokens",
         }:
             raise ValueError("模型和输出限制字段必须由服务端固定登记。")
 
@@ -75,8 +75,9 @@ class TransportRoles:
                     content, ensure_ascii=False, allow_nan=False, sort_keys=True,
                 )},
             ],
-            profile.output_limit_field: self.transport.output_limit,
         }
+        if profile.output_limit_field is not None:
+            payload[profile.output_limit_field] = self.transport.output_limit
         if profile.json_object_mode:
             payload["response_format"] = {"type": "json_object"}
         return profile, payload

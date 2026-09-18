@@ -12,11 +12,10 @@ MODEL = "tencent/hy4-preview"
 ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 CONTEXT_LIMIT = 1048576
 MODEL_OUTPUT_LIMIT = 64000
-OUTPUT_LIMIT = 16384
 TOKEN_BOUND = CONTEXT_LIMIT + MODEL_OUTPUT_LIMIT
 USD_TO_CNY_UPPER = Decimal("10")
 REQUEST_CNY_UPPER = Decimal("24")
-GENERATION_SETTINGS = {"reasoning": {"effort": "low", "exclude": True}}
+GENERATION_SETTINGS = {"reasoning": {"effort": "high", "exclude": True}}
 
 
 def validate_metadata(data: dict) -> dict:
@@ -44,7 +43,7 @@ def validate_metadata(data: dict) -> dict:
             raise ValueError("存在未经预留的附加计费项。")
     if not {"prompt", "completion"} <= prices.keys():
         raise ValueError("缺少必要价格。")
-    if not {"max_tokens", "response_format", "reasoning"} <= set(item["supported_parameters"]):
+    if not {"response_format", "reasoning"} <= set(item["supported_parameters"]):
         raise ValueError("所需请求能力未登记。")
     maximum = (CONTEXT_LIMIT * (limits["prompt"] + limits["input_cache_read"])
                + MODEL_OUTPUT_LIMIT * limits["completion"]) * USD_TO_CNY_UPPER
@@ -68,10 +67,9 @@ class DevelopmentClient(HTTPAttemptClient):
         self.last_error_type = None
 
     async def attempt(self, role, payload, timeout):
-        if (role not in self.registered_roles or payload.get("model") != MODEL
-                or payload.get("max_tokens") != OUTPUT_LIMIT):
+        if role not in self.registered_roles or payload.get("model") != MODEL:
             raise HarnessError("development_profile_mismatch")
-        if set(payload) - {"model", "messages", "max_tokens", "response_format"}:
+        if set(payload) - {"model", "messages", "response_format"}:
             raise HarnessError("development_payload_unapproved")
         outbound = deepcopy(payload)
         outbound.update({
