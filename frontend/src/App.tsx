@@ -61,6 +61,8 @@ import {
 import { UserModelConfigDrawer } from "./UserModelConfigDrawer";
 import { ReportHarnessPanel } from "./ReportHarnessPanel";
 import type { ReportHarnessPanelHandle } from "./ReportHarnessPanel";
+import { IntegratedReport } from "./IntegratedReport";
+import type { IntegratedReportHandle } from "./IntegratedReport";
 
 const SidebarIcon = ({ isOpen }: { isOpen?: boolean }) => (
   <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -777,6 +779,13 @@ function WorkspaceApp({
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>("legacy");
   const [adminTab, setAdminTab] = useState<AdminTab>("users");
   const [publicAppConfig, setPublicAppConfig] = useState<PublicAppConfig>(DEFAULT_PUBLIC_APP_CONFIG);
+  const integratedReportRef = useRef<IntegratedReportHandle>(null);
+  const [integratedReportBusy, setIntegratedReportBusy] = useState(false);
+  const [integratedReportActive, setIntegratedReportActive] = useState(false);
+  const [integratedReportCancelling, setIntegratedReportCancelling] = useState(false);
+  const [integratedReportStatus, setIntegratedReportStatus] = useState("正在生成报告");
+  const [publicConfigStatus, setPublicConfigStatus] = useState<"loading" | "ready" | "failed">("loading");
+  const harnessOnline = publicAppConfig.report_harness?.online_enabled === true;
   const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
   const [artifactPreview, setArtifactPreview] = useState<ArtifactPreviewState | null>(null);
   const [exportingFormat, setExportingFormat] = useState<ReportExportFormat | null>(null);
@@ -856,10 +865,15 @@ function WorkspaceApp({
               ...nextConfig.upload_limits,
             },
             report_model: normalizeReportModelConfig(nextConfig.report_model),
+            report_harness: nextConfig.report_harness,
           });
+          setPublicConfigStatus("ready");
         }
       } catch (error) {
-        console.warn("读取后端配置失败，将继续使用前端兜底限制。", error);
+        if (!cancelled) {
+          setPublicConfigStatus("failed");
+        }
+        console.warn("读取报告服务配置失败，已停止生成入口。", error);
       }
     }
 
@@ -1144,7 +1158,11 @@ function WorkspaceApp({
     }
 
     const currentSession = getSessionSnapshot(sessionId);
-    if (!currentSession || currentSession.draftJson === editedJsonString) {
+    if (!currentSession) {
+      return;
+    }
+    if (currentSession.draftJson === editedJsonString) {
+      await flushSessionById(sessionId);
       return;
     }
 
@@ -1515,7 +1533,6 @@ function WorkspaceApp({
     });
     inputGeneratingSessionIdRef.current = sessionId;
     inputProgressMessageIdRef.current = progressMessage.id;
-    await flushSessionById(sessionId);
     const progressController = startProgressMessage(
       sessionId,
       progressMessage.id,
@@ -1525,6 +1542,7 @@ function WorkspaceApp({
     );
 
     try {
+      await flushSessionById(sessionId);
       const response = await generateInputFromUploads(uploadPayload);
       const draftJsonString = prettyJson(response.generated_input);
       const processHint = response.media_type === "mixed"
@@ -1595,6 +1613,14 @@ function WorkspaceApp({
   }
 
   async function handleConfirmAndGenerateReport(confirmedJsonString: string) {
+    if (publicConfigStatus !== "ready") {
+      setErrorMessage("报告服务配置尚未就绪，请稍后刷新重试。");
+      return;
+    }
+    if (harnessOnline && publicAppConfig.report_harness?.available === false) {
+      setErrorMessage("报告生成服务暂不可用，已有报告和执行记录已保留。");
+      return;
+    }
     const sessionId = activeSession?.id;
     if (!sessionId) {
       return;
@@ -1602,6 +1628,15 @@ function WorkspaceApp({
 
     if (!confirmedJsonString.trim()) {
       setErrorMessage("当前没有可确认的事故信息草稿。");
+      return;
+    }
+
+    if (harnessOnline) {
+      if (!integratedReportRef.current) {
+        setErrorMessage("报告区域尚未就绪，请稍后重试。");
+        return;
+      }
+      await integratedReportRef.current.generate(confirmedJsonString);
       return;
     }
 
@@ -1638,9 +1673,8 @@ function WorkspaceApp({
       messages: [...(currentSession?.messages || []), userMsg, progressMessage],
     });
     reportProgressMessageIdRef.current = progressMessage.id;
-    await flushSessionById(sessionId);
-
     try {
+      await flushSessionById(sessionId);
       let hasKnowledgeSummary = false;
       const emittedRounds = new Set<number>();
 
@@ -1749,7 +1783,9 @@ function WorkspaceApp({
           },
         };
       });
-      await flushSessionById(sessionId);
+      await flushSessionById(sessionId).catch((saveError) => {
+        setErrorMessage(resolveUiErrorMessage(saveError, "报告已生成，但会话同步失败；本地结果已保留。"));
+      });
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
         patchSessionMessage(sessionId, progressMessage.id, {
@@ -1764,7 +1800,9 @@ function WorkspaceApp({
         appendSessionMessages(sessionId, [
           createMessage("assistant", "text", "已停止当前报告生成，现有草稿会保留，你可以稍后重新开始。"),
         ]);
-        await flushSessionById(sessionId);
+        await flushSessionById(sessionId).catch((saveError) => {
+          setErrorMessage(resolveUiErrorMessage(saveError, "已停止生成，但会话同步失败；本地记录已保留。"));
+        });
         return;
       }
       const message = resolveUiErrorMessage(error, "生成分析报告失败。");
@@ -1781,7 +1819,9 @@ function WorkspaceApp({
       appendSessionMessages(sessionId, [
         createMessage("assistant", "text", `分析报告生成失败：${message}`),
       ]);
-      await flushSessionById(sessionId);
+      await flushSessionById(sessionId).catch((saveError) => {
+        setErrorMessage(`${message}；${resolveUiErrorMessage(saveError, "会话同步失败，本地记录已保留。")}`);
+      });
     } finally {
       if (reportAbortControllerRef.current === abortController) {
         reportAbortControllerRef.current = null;
@@ -1935,11 +1975,15 @@ function WorkspaceApp({
   }
 
   async function handleFinishRename(sessionId: string) {
-    if (editTitle.trim()) {
-      updateSessionById(sessionId, { title: editTitle.trim() });
-      await flushSessionById(sessionId);
+    try {
+      if (editTitle.trim()) {
+        updateSessionById(sessionId, { title: editTitle.trim() });
+        await flushSessionById(sessionId);
+      }
+      setEditingSessionId(null);
+    } catch (error) {
+      setErrorMessage(resolveUiErrorMessage(error, "会话名称保存失败，编辑已保留。"));
     }
-    setEditingSessionId(null);
   }
 
   function handleSessionDragStart(sessionId: string, event: DragEvent<HTMLDivElement>) {
@@ -2043,7 +2087,7 @@ function WorkspaceApp({
         try {
           await flushBeforeLeavingSession(sourceSessionId);
         } catch (error) {
-          setErrorMessage(resolveUiErrorMessage(error, "当前会话尚有未保存事故输入，未切换会话。"));
+          setErrorMessage(`当前会话保存失败，未切换会话。${resolveUiErrorMessage(error, "本地编辑已保留。")}`);
           return;
         }
       }
@@ -2740,7 +2784,7 @@ function WorkspaceApp({
   }
 
   return (
-    <div className={`app-container theme-${themeMode}`}>
+    <div className={`app-container safety-workbench theme-${themeMode}`}>
       {isMobileSidebarOpen && (
         <div className="mobile-overlay" onClick={() => setIsMobileSidebarOpen(false)} />
       )}
@@ -2857,13 +2901,19 @@ function WorkspaceApp({
                             }}
                           />
                         ) : (
-                          <span 
+                          <button
+                            type="button"
                             className="session-title" 
+                            aria-current={session.id === activeSessionId ? "true" : undefined}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              handleSessionItemClick(session.id);
+                            }}
                             onDoubleClick={isMobileSidebarOpen ? undefined : (e) => handleStartRename(session, e)}
                             title={isMobileSidebarOpen ? "长按会话卡片可重命名" : "双击重命名"}
                           >
                             {session.title}
-                          </span>
+                          </button>
                         )}
                         {(() => {
                           const sessionArtifacts = normalizeLinkedArtifacts(session.linkedArtifacts);
@@ -2985,8 +3035,7 @@ function WorkspaceApp({
               renderAdminHeaderTabs()
             ) : (
               <div>
-                <h1>道路交通事故分析</h1>
-                <p>智能识别道路交通事故照片/视频，辅助生成带有定责意见与研判论述的分析报告</p>
+                <h1>SafetyRAISE <span className="workbench-title-divider">/</span> <span className="workbench-title-category">事故分析</span></h1>
               </div>
             )}
           </div>
@@ -2999,7 +3048,7 @@ function WorkspaceApp({
           <AdminConsole currentUser={currentUser} activeTab={adminTab} />
         ) : (
           <>
-            <div className="workspace-mode-switch" role="tablist" aria-label="报告模式">
+            {!harnessOnline && <div className="workspace-mode-switch" role="tablist" aria-label="报告模式">
               <span className="workspace-mode-label">报告模式</span>
               <button
                 type="button"
@@ -3019,9 +3068,9 @@ function WorkspaceApp({
               >
                 证据报告
               </button>
-            </div>
+            </div>}
 
-            {workspaceMode === "report-harness" ? (
+            {workspaceMode === "report-harness" && !harnessOnline ? (
               <div className="workspace report-harness-workspace">
                 <ReportHarnessPanel
                   ref={reportHarnessRef}
@@ -3036,12 +3085,14 @@ function WorkspaceApp({
             <div className="mobile-tabs mobile-only">
               <button 
                 className={`mobile-tab-btn ${mobileTab === 'chat' ? 'active' : ''}`}
+                aria-pressed={mobileTab === "chat"}
                 onClick={() => setMobileTab('chat')}
               >
                 对话交互
               </button>
               <button 
                 className={`mobile-tab-btn ${mobileTab === 'review' ? 'active' : ''}`}
+                aria-pressed={mobileTab === "review"}
                 onClick={() => setMobileTab('review')}
               >
                 分析与审阅
@@ -3049,11 +3100,14 @@ function WorkspaceApp({
             </div>
 
             <div className="workspace workspace-grid">
-              <section className={`panel ${mobileTab !== 'chat' ? 'mobile-hidden' : ''}`} style={{ flex: 1 }}>
+              <section className={`panel conversation-panel ${mobileTab !== 'chat' ? 'mobile-hidden' : ''}`}>
                 <div className="panel-header">
                   <h2>聊天与记录</h2>
                 </div>
                 <div className="panel-body chat-list" ref={chatListRef}>
+                  {activeSession.messages.length === 0 && (
+                    <div className="conversation-empty">暂无分析记录</div>
+                  )}
                   {activeSession.messages.map((message, messageIndex) => (
                     <div
                       key={`${message.id}-${messageIndex}`}
@@ -3104,18 +3158,24 @@ function WorkspaceApp({
                 </div>
               </section>
 
-              <section className={`panel ${mobileTab !== 'review' ? 'mobile-hidden' : ''}`} style={{ flex: 1.2 }}>
+              <section className={`panel review-panel ${mobileTab !== 'review' ? 'mobile-hidden' : ''}`}>
                 <div className="panel-header">
                   <h2>操作与审阅区</h2>
                 </div>
                 <div className="panel-body">
-                  {errorMessage && <div className="error-text">{errorMessage}</div>}
+                  {publicConfigStatus === "failed" && (
+                    <div className="error-text" role="alert">读取报告服务配置失败，暂不能生成报告，请刷新页面重试。</div>
+                  )}
+                  {publicConfigStatus === "ready" && harnessOnline
+                    && publicAppConfig.report_harness?.available === false && (
+                      <div className="error-text" role="alert">报告生成暂不可用，已有报告仍可查看或停止；服务恢复后请刷新页面。</div>
+                    )}
+                  {errorMessage && <div className="error-text" role="alert">{errorMessage}</div>}
                   {uploadNoticeMessage && <div className="warning-text">{uploadNoticeMessage}</div>}
-                  {syncError && <div className="error-text">会话记录同步提醒：{syncError}</div>}
+                  {syncError && <div className="error-text" role="alert">会话记录同步提醒：{syncError}</div>}
 
                   {activeLinkedArtifacts.length > 0 && (
                     <div className="artifact-wall-panel">
-                      {renderBrandWatermark("artifact-wall-watermark")}
                       <div className="artifact-wall-header">
                         <h3>本会话关联文件</h3>
                         <span>{activeLinkedArtifacts.length} 项</span>
@@ -3155,10 +3215,10 @@ function WorkspaceApp({
 
                   {shouldShowUploadWorkbench && renderUploadWorkbenchSurface()}
 
-                  {activeSession.draftJson && !activeSession.reportResult && (
+                  {activeSession.draftJson && (harnessOnline || !activeSession.reportResult) && (
                     <div>
-                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                          <h3 style={{ margin: 0, fontSize: '16px', color: '#0f172a' }}>事故属性摘要表（可直接点击编辑）</h3>
+                       <div className="accident-section-heading">
+                          <h3>事故信息</h3>
                           {activeSession.draftMeta?.media_type && (
                             <span className="tag">
                               {activeSession.draftMeta.media_type === "video"
@@ -3174,14 +3234,29 @@ function WorkspaceApp({
                           resetKey={activeSession.id}
                           onAutoSave={handleAutoSaveDraft}
                           onConfirm={handleConfirmAndGenerateReport}
-                          disabled={isGeneratingReport}
-                          isGeneratingReport={isGeneratingReport && activeSession.id === reportingSessionId}
-                          onCancelGenerate={handleStopReportGeneration}
+                          disabled={publicConfigStatus !== "ready"
+                            || (harnessOnline && publicAppConfig.report_harness?.available === false)
+                            || (harnessOnline ? integratedReportBusy : isGeneratingReport)}
+                          isGeneratingReport={harnessOnline ? integratedReportActive : isGeneratingReport && activeSession.id === reportingSessionId}
+                          isCancellingReport={harnessOnline && integratedReportCancelling}
+                          generationStatusLabel={harnessOnline ? integratedReportStatus : undefined}
+                          onCancelGenerate={harnessOnline ? () => void integratedReportRef.current?.cancel() : handleStopReportGeneration}
                        />
                     </div>
                   )}
 
-                  {activeSession.reportResult && (
+                  {harnessOnline && <IntegratedReport
+                    key={activeSession.id}
+                    ref={integratedReportRef}
+                    sessionId={activeSession.id}
+                    onPersistDraft={persistHarnessDraft}
+                    onBusyChange={setIntegratedReportBusy}
+                    onActiveChange={setIntegratedReportActive}
+                    onCancellingChange={setIntegratedReportCancelling}
+                    onStatusChange={setIntegratedReportStatus}
+                  />}
+
+                  {activeSession.reportResult && !harnessOnline && (
                     <div>
                   <div className="report-export-ribbon">
                     <div className="report-export-ribbon-top">

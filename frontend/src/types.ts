@@ -252,6 +252,7 @@ export interface ChatSessionUpsertPayload {
 }
 
 export interface PublicAppConfig {
+  report_harness?: { enabled: boolean; online_enabled: boolean; available?: boolean };
   upload_limits: {
     max_total_bytes: number;
     max_image_bytes: number;

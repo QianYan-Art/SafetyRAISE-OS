@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { TextareaHTMLAttributes } from "react";
 
 interface JsonTableEditorProps {
   initialJson: string;
@@ -8,8 +9,35 @@ interface JsonTableEditorProps {
   resetKey?: string;
   disabled?: boolean;
   isGeneratingReport?: boolean;
+  isCancellingReport?: boolean;
+  generationStatusLabel?: string;
   onCancelGenerate?: () => void;
   confirmLabel?: string;
+}
+
+function GrowingValueInput(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const resize = () => {
+    const element = ref.current;
+    if (!element) return;
+    element.style.height = "auto";
+    element.style.height = `${element.scrollHeight + element.offsetHeight - element.clientHeight}px`;
+  };
+  useLayoutEffect(resize, [props.value]);
+  useEffect(() => {
+    const element = ref.current;
+    if (!element || typeof ResizeObserver === "undefined") return;
+    let width = element.getBoundingClientRect().width;
+    const observer = new ResizeObserver(([entry]) => {
+      if (entry.contentRect.width !== width) {
+        width = entry.contentRect.width;
+        resize();
+      }
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  return <textarea {...props} ref={ref} rows={1} />;
 }
 
 function parseJsonToStringMap(initialJson: string): Record<string, string> {
@@ -55,6 +83,8 @@ export function JsonTableEditor({
   resetKey,
   disabled,
   isGeneratingReport = false,
+  isCancellingReport = false,
+  generationStatusLabel = "正在生成报告",
   onCancelGenerate,
   confirmLabel = "确认事故信息并生成报告",
 }: JsonTableEditorProps) {
@@ -172,9 +202,10 @@ export function JsonTableEditor({
             <tr key={key}>
               <td className="key-cell">{key}</td>
               <td>
-                <input
-                  type="text"
+                <GrowingValueInput
                   className="value-input"
+                  aria-label={key}
+                  title={val}
                   value={val}
                   onChange={(e) => handleChange(key, e.target.value)}
                   onBlur={handleBlur}
@@ -191,11 +222,12 @@ export function JsonTableEditor({
           type="button"
           className="btn-danger report-stop-btn"
           onClick={onCancelGenerate}
-          disabled={!isGeneratingReport}
+          disabled={!isGeneratingReport || isCancellingReport}
+          aria-busy={isCancellingReport}
           aria-hidden={!isGeneratingReport}
           tabIndex={isGeneratingReport ? 0 : -1}
         >
-          停止
+          {isCancellingReport ? "正在停止" : "停止"}
         </button>
         <button
           type="button"
@@ -206,7 +238,7 @@ export function JsonTableEditor({
           {isGeneratingReport ? (
             <>
               <span className="spinner" />
-              正在生成报告
+              {generationStatusLabel}
             </>
           ) : confirmLabel}
         </button>

@@ -306,6 +306,7 @@ export function useChatHistory(currentUser: Pick<UserSummary, "id">) {
   const syncTimersRef = useRef<Map<string, number>>(new Map());
   const serverVersionsRef = useRef<Map<string, number>>(new Map());
   const persistenceQueueRef = useRef<Map<string, Promise<unknown>>>(new Map());
+  const persistenceErrorsRef = useRef<Map<string, unknown>>(new Map());
   const saveTimerRef = useRef<number | null>(null);
   const mountedRef = useRef(true);
   const sessionsRef = useRef<ChatSession[]>([]);
@@ -350,7 +351,9 @@ export function useChatHistory(currentUser: Pick<UserSummary, "id">) {
   const waitForSessionPersistence = useCallback(async (sessionId: string): Promise<void> => {
     const inFlight = persistenceQueueRef.current.get(sessionId);
     if (inFlight) {
-      await inFlight.catch(() => undefined);
+      await inFlight.catch((error) => {
+        persistenceErrorsRef.current.set(sessionId, error);
+      });
     }
   }, []);
 
@@ -369,16 +372,46 @@ export function useChatHistory(currentUser: Pick<UserSummary, "id">) {
     setSessions(nextSessions);
   }, []);
 
+  const reportSyncFailure = useCallback((error: unknown, fallback: string) => {
+    if (!mountedRef.current) {
+      return;
+    }
+    console.error("同步会话失败", error);
+    setSyncError(formatApiErrorMessage(error, fallback));
+  }, []);
+
+  const clearRecoveredSyncError = useCallback(() => {
+    if (persistenceErrorsRef.current.size === 0) {
+      setSyncError(null);
+    }
+  }, []);
+
   const persistSession = useCallback(
-    async (session: ChatSession, forceCreate: boolean = false) => {
-      await enqueueSessionPersistence(session.id, async () => {
-        try {
-          const sessionToPersist = sessionsRef.current.find((item) => item.id === session.id) ?? session;
-          let saved: ChatSessionApiRecord;
+    async (session: ChatSession, forceCreate: boolean = false): Promise<ChatSession> => {
+      const operation = enqueueSessionPersistence(session.id, async () => {
+        const sessionToPersist = sessionsRef.current.find((item) => item.id === session.id) ?? session;
+        let saved: ChatSessionApiRecord;
+        if (forceCreate) {
+          saved = await createChatSession(buildChatSessionPayload(sessionToPersist, true));
+        } else {
+          let expectedUpdatedAt = serverVersionsRef.current.get(session.id);
+          if (!Number.isFinite(expectedUpdatedAt)) {
+            const fetched = await fetchChatSessionApi(session.id);
+            rememberServerSession(fetched);
+            expectedUpdatedAt = serverVersionsRef.current.get(session.id);
+          }
+          if (!Number.isFinite(expectedUpdatedAt)) {
+            throw new Error("缺少服务端会话版本，已拒绝严格保存。");
+          }
+
           try {
-            saved = forceCreate
-              ? await createChatSession(buildChatSessionPayload(sessionToPersist, true))
-              : await updateChatSessionApi(sessionToPersist.id, buildChatSessionPayload(sessionToPersist, false));
+            saved = await updateChatSessionApi(
+              sessionToPersist.id,
+              {
+                ...buildChatSessionPayload(sessionToPersist, false),
+                expected_updated_at: expectedUpdatedAt,
+              },
+            );
           } catch (error) {
             if (!forceCreate && error instanceof ApiError && error.status === 404) {
               saved = await createChatSession(buildChatSessionPayload(sessionToPersist, true));
@@ -386,26 +419,27 @@ export function useChatHistory(currentUser: Pick<UserSummary, "id">) {
               throw error;
             }
           }
-
-          const mapped = rememberServerSession(saved);
-          if (!mountedRef.current) {
-            return;
-          }
-          const currentSession = sessionsRef.current.find((item) => item.id === session.id);
-          if (currentSession === sessionToPersist) {
-            replaceSession(mapped);
-          }
-          setSyncError(null);
-        } catch (error) {
-          if (!mountedRef.current) {
-            return;
-          }
-          console.error("同步会话失败", error);
-          setSyncError(formatApiErrorMessage(error, "同步会话失败。"));
         }
+
+        const mapped = rememberServerSession(saved);
+        persistenceErrorsRef.current.delete(session.id);
+        if (!mountedRef.current) {
+          return mapped;
+        }
+        const currentSession = sessionsRef.current.find((item) => item.id === session.id);
+        if (currentSession === sessionToPersist) {
+          replaceSession(mapped);
+        }
+        clearRecoveredSyncError();
+        return mapped;
+      });
+
+      return operation.catch((error) => {
+        persistenceErrorsRef.current.set(session.id, error);
+        throw error;
       });
     },
-    [enqueueSessionPersistence, rememberServerSession, replaceSession],
+    [clearRecoveredSyncError, enqueueSessionPersistence, rememberServerSession, replaceSession],
   );
 
   const scheduleSessionSync = useCallback(
@@ -416,11 +450,13 @@ export function useChatHistory(currentUser: Pick<UserSummary, "id">) {
       }
       const timerId = window.setTimeout(() => {
         syncTimersRef.current.delete(session.id);
-        void persistSession(session);
+        void persistSession(session).catch((error) => {
+          reportSyncFailure(error, "同步会话失败。");
+        });
       }, SYNC_DEBOUNCE_MS);
       syncTimersRef.current.set(session.id, timerId);
     },
-    [persistSession],
+    [persistSession, reportSyncFailure],
   );
 
   const flushSessionById = useCallback(
@@ -435,9 +471,14 @@ export function useChatHistory(currentUser: Pick<UserSummary, "id">) {
       if (!session) {
         return;
       }
-      await persistSession(session);
+      try {
+        await persistSession(session);
+      } catch (error) {
+        reportSyncFailure(error, "保存会话失败。");
+        throw error;
+      }
     },
-    [persistSession],
+    [persistSession, reportSyncFailure],
   );
 
   const saveSessionById = useCallback(
@@ -484,6 +525,7 @@ export function useChatHistory(currentUser: Pick<UserSummary, "id">) {
             },
           );
           const mapped = rememberServerSession(saved);
+          persistenceErrorsRef.current.delete(sessionId);
           if (mountedRef.current) {
             const currentSession = sessionsRef.current.find((item) => item.id === sessionId);
             if (currentSession === session) {
@@ -491,29 +533,32 @@ export function useChatHistory(currentUser: Pick<UserSummary, "id">) {
             } else if (currentSession) {
               replaceSession(mergeStrictSessionResult(session, mapped, currentSession, resolvedUpdates));
             }
-            setSyncError(null);
+            clearRecoveredSyncError();
           }
           return mapped;
         } catch (error) {
-          if (mountedRef.current) {
-            console.error("严格保存会话失败", error);
-            setSyncError(formatApiErrorMessage(error, "保存会话失败。"));
-          }
+          persistenceErrorsRef.current.set(sessionId, error);
+          reportSyncFailure(error, "保存会话失败。");
           throw error;
         }
       });
     },
-    [enqueueSessionPersistence, rememberServerSession, replaceSession],
+    [clearRecoveredSyncError, enqueueSessionPersistence, rememberServerSession, replaceSession, reportSyncFailure],
   );
 
   const refreshSessionById = useCallback(
     async (sessionId: string) => {
-      if (syncTimersRef.current.has(sessionId)) {
-        await flushSessionById(sessionId);
-      }
-      await waitForSessionPersistence(sessionId);
-
       try {
+        if (syncTimersRef.current.has(sessionId)) {
+          await flushSessionById(sessionId);
+        }
+        await waitForSessionPersistence(sessionId);
+        const persistenceError = persistenceErrorsRef.current.get(sessionId);
+        if (persistenceError) {
+          reportSyncFailure(persistenceError, "保存会话失败，已保留本地未保存内容。");
+          return null;
+        }
+
         const fetched = await fetchChatSessionApi(sessionId);
         const mapped = resolveFreshServerSession(fetched);
         if (!mountedRef.current) {
@@ -523,7 +568,7 @@ export function useChatHistory(currentUser: Pick<UserSummary, "id">) {
           return null;
         }
         replaceSession(mapped);
-        setSyncError(null);
+        clearRecoveredSyncError();
         return mapped;
       } catch (error) {
         if (!mountedRef.current) {
@@ -539,12 +584,15 @@ export function useChatHistory(currentUser: Pick<UserSummary, "id">) {
           return null;
         }
 
-        console.error("刷新会话失败", error);
-        setSyncError(formatApiErrorMessage(error, "刷新会话失败。"));
+        if (persistenceErrorsRef.current.has(sessionId)) {
+          reportSyncFailure(error, "保存会话失败，已保留本地未保存内容。");
+          return null;
+        }
+        reportSyncFailure(error, "刷新会话失败。");
         return null;
       }
     },
-    [flushSessionById, replaceSession, resolveFreshServerSession, waitForSessionPersistence],
+    [clearRecoveredSyncError, flushSessionById, replaceSession, reportSyncFailure, resolveFreshServerSession, waitForSessionPersistence],
   );
 
   useEffect(() => {
@@ -614,6 +662,7 @@ export function useChatHistory(currentUser: Pick<UserSummary, "id">) {
     setIsLoaded(false);
     setSyncError(null);
     serverVersionsRef.current.clear();
+    persistenceErrorsRef.current.clear();
     for (const timerId of syncTimersRef.current.values()) {
       window.clearTimeout(timerId);
     }
@@ -700,10 +749,12 @@ export function useChatHistory(currentUser: Pick<UserSummary, "id">) {
       sessionsRef.current = nextSessions;
       setSessions(nextSessions);
       setActiveSessionId(newSession.id);
-      void persistSession(newSession, true);
+      void persistSession(newSession, true).catch((error) => {
+        reportSyncFailure(error, "新建会话同步失败。");
+      });
       return newSession;
     },
-    [persistSession],
+    [persistSession, reportSyncFailure],
   );
 
   const updateSessionById = useCallback(
@@ -786,9 +837,13 @@ export function useChatHistory(currentUser: Pick<UserSummary, "id">) {
       sessionsRef.current = sortedSessions;
       setSessions(sortedSessions);
 
-      await Promise.all(sortedSessions.map((session) => persistSession(session)));
-    },
-    [persistSession],
+      try {
+        await Promise.all(sortedSessions.map((session) => persistSession(session)));
+      } catch (error) {
+        reportSyncFailure(error, "会话排序同步失败。");
+      }
+     },
+    [persistSession, reportSyncFailure],
   );
 
   return {

@@ -1,7 +1,5 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-
 :root {
-  font-family: 'Inter', "Microsoft YaHei", "PingFang SC", sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
   line-height: 1.6;
   color: #1e293b;
   background: #f8fafc;
@@ -1992,6 +1990,9 @@ button {
 }
 
 /* Panels */
+.workspace > .conversation-panel { flex: 1; }
+.workspace > .review-panel { flex: 1.2; }
+
 .panel {
   background: #ffffff;
   border: 1px solid var(--border-color);
@@ -2700,6 +2701,10 @@ button {
 }
 
 .json-table-editor .value-input {
+  display: block;
+  resize: none;
+  overflow: hidden;
+  line-height: 1.55;
   width: 100%;
   border: none;
   background: transparent;

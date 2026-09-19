@@ -7,6 +7,7 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { cleanupSucceeded, stopChild, trackChild } from "./process-cleanup.mjs";
+import { verifyIntegratedReport } from "./integrated-report-scenario.mjs";
 
 const frontend = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const root = path.dirname(frontend);
@@ -121,6 +122,12 @@ try {
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.goto(ui);
+  if (process.env.HARNESS_INTEGRATED_UI_TEST === "1") {
+    await verifyIntegratedReport({ page, bootstrap, api, output, results, waitUntil, request });
+    assert.deepEqual(pageErrors, []);
+    await fs.writeFile(path.join(output, "results.json"), JSON.stringify({ results }, null, 2));
+    console.log(JSON.stringify({ passed: results.length, results, output }));
+  } else {
   await page.locator(`[data-session-id="${bootstrap.session_id}"] .session-item`).click();
   const primaryModeSave = page.waitForResponse((response) => response.url().endsWith(`/api/v1/chat-sessions/${bootstrap.session_id}`)
     && response.request().method() === "PUT");
@@ -128,7 +135,7 @@ try {
   assert.equal((await primaryModeSave).status(), 200);
   const headers = { Authorization: `Bearer ${bootstrap.token}`, "Content-Type": "application/json" };
   const chatSessionUrl = `${api}/api/v1/chat-sessions/${bootstrap.session_id}`;
-  await waitUntil(async () => (await page.locator(".json-table-editor input.value-input").count()) === 1);
+  await waitUntil(async () => (await page.locator(".json-table-editor .value-input").count()) === 1);
 
   secondaryContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   await secondaryContext.addInitScript((token) => {
@@ -145,7 +152,7 @@ try {
     && response.request().method() === "PUT");
   await secondaryPage.getByRole("tab", { name: "证据报告", exact: true }).click();
   assert.equal((await secondaryModeSave).status(), 200);
-  await waitUntil(async () => (await secondaryPage.locator(".json-table-editor input.value-input").count()) === 1);
+  await waitUntil(async () => (await secondaryPage.locator(".json-table-editor .value-input").count()) === 1);
   trackSessionTraffic(page, "client-a", chatSessionUrl);
   trackSessionTraffic(secondaryPage, "client-b", chatSessionUrl);
 
@@ -163,7 +170,7 @@ try {
   assert.equal(clientAInitial.updated_at, clientBInitial.updated_at);
   assert.equal(typeof clientAInitial.updated_at, "number");
 
-  const clientADraft = page.locator(".json-table-editor input.value-input").first();
+  const clientADraft = page.locator(".json-table-editor .value-input").first();
   await clientADraft.fill("客户端A保存");
   const clientAPutRequest = page.waitForRequest((request) => request.url().endsWith(`/api/v1/chat-sessions/${bootstrap.session_id}`)
     && request.method() === "PUT");
@@ -183,7 +190,7 @@ try {
   await page.reload();
   await page.locator(`[data-session-id="${bootstrap.session_id}"] .session-item`).click();
   await page.getByRole("tab", { name: "证据报告", exact: true }).click();
-  await waitUntil(async () => (await page.locator(".json-table-editor input.value-input").first().inputValue()) === "客户端A保存");
+  await waitUntil(async () => (await page.locator(".json-table-editor .value-input").first().inputValue()) === "客户端A保存");
   results.push("真实后端会话保存后刷新仍读取客户端A编辑");
 
   const raceBaseline = await request(chatSessionUrl, { headers });
@@ -212,7 +219,7 @@ try {
     await route.continue();
   });
   try {
-    const raceDraft = page.locator(".json-table-editor input.value-input").first();
+    const raceDraft = page.locator(".json-table-editor .value-input").first();
     await raceDraft.fill("严格保存期间的新事故");
     const strictResponse = page.waitForResponse((response) => {
       if (!response.url().endsWith(`/api/v1/chat-sessions/${bootstrap.session_id}`)
@@ -235,7 +242,8 @@ try {
         return false;
       }
       try {
-        return !Object.hasOwn(request.postDataJSON(), "expected_updated_at");
+        const payload = request.postDataJSON();
+        return Object.hasOwn(payload, "expected_updated_at") && payload.title === "并发普通重命名";
       } catch {
         return false;
       }
@@ -246,7 +254,8 @@ try {
         return false;
       }
       try {
-        return !Object.hasOwn(response.request().postDataJSON(), "expected_updated_at");
+        const payload = response.request().postDataJSON();
+        return Object.hasOwn(payload, "expected_updated_at") && payload.title === "并发普通重命名";
       } catch {
         return false;
       }
@@ -263,6 +272,8 @@ try {
     ]);
     assert.equal(strictResponseValue.status(), 200);
     assert.equal(ordinaryResponseValue.status(), 200);
+    const strictSaved = await strictResponseValue.json();
+    assert.equal(ordinaryRequestValue.postDataJSON().expected_updated_at, strictSaved.updated_at);
     assert.match(ordinaryRequestValue.postDataJSON().draft_json, /严格保存期间的新事故/);
     const storedAfterConcurrentSave = await request(chatSessionUrl, { headers });
     assert.equal(storedAfterConcurrentSave.title, "并发普通重命名");
@@ -272,6 +283,7 @@ try {
       strict_expected_updated_at: heldStrict.payload.expected_updated_at,
       strict_response_status: strictResponseValue.status(),
       ordinary_response_status: ordinaryResponseValue.status(),
+      ordinary_expected_updated_at: ordinaryRequestValue.postDataJSON().expected_updated_at,
       ordinary_payload_draft_json: ordinaryRequestValue.postDataJSON().draft_json,
       stored_title: storedAfterConcurrentSave.title,
       stored_draft_json: storedAfterConcurrentSave.draft_json,
@@ -282,7 +294,7 @@ try {
     await page.unroute(browserSessionPattern);
   }
 
-  const clientBDraft = secondaryPage.locator(".json-table-editor input.value-input").first();
+  const clientBDraft = secondaryPage.locator(".json-table-editor .value-input").first();
   await clientBDraft.fill("客户端B冲突");
   const clientBPutRequest = secondaryPage.waitForRequest((request) => request.url().endsWith(`/api/v1/chat-sessions/${bootstrap.session_id}`)
     && request.method() === "PUT");
@@ -366,7 +378,7 @@ try {
   await waitUntil(async () => (await page.getByLabel("证据内容", { exact: true }).inputValue()).includes("合成案例"));
   results.push("证据CAS冲突不静默覆盖");
 
-  const draftBeforeSwitch = page.locator(".json-table-editor input.value-input").first();
+  const draftBeforeSwitch = page.locator(".json-table-editor .value-input").first();
   await draftBeforeSwitch.fill("切换前保存A");
   const switchSave = page.waitForResponse((response) => response.url().endsWith(`/api/v1/chat-sessions/${bootstrap.session_id}`)
     && response.request().method() === "PUT");
@@ -381,7 +393,7 @@ try {
   assert(savedAfterSwitch.draft_json.includes("切换前保存A"));
   await page.locator(`[data-session-id="${bootstrap.session_id}"] .session-item`).click();
   await page.getByRole("tab", { name: "证据报告", exact: true }).click();
-  await waitUntil(async () => (await page.locator(".json-table-editor input.value-input").first().inputValue()) === "切换前保存A");
+  await waitUntil(async () => (await page.locator(".json-table-editor .value-input").first().inputValue()) === "切换前保存A");
   results.push("聚焦编辑切换到新会话前先保存，返回原会话无串写");
 
   await page.getByRole("button", { name: "添加证据", exact: true }).click();
@@ -575,6 +587,7 @@ try {
   results.push("1440×900与390×844布局、无页面脚本异常");
   await fs.writeFile(path.join(output, "results.json"), JSON.stringify({ results }, null, 2));
   console.log(JSON.stringify({ passed: results.length, results, output }));
+  }
 } catch (error) {
   await fs.writeFile(path.join(output, "cas-trace.json"), JSON.stringify(casTrace, null, 2)).catch(() => {});
   if (page) {
