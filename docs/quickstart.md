@@ -200,7 +200,7 @@ curl http://127.0.0.1:8000/api/v1/ready
 ```
 
 `/ready` 会直接暴露未就绪依赖，通常比直接从前端排查更快。
-如果知识库、YOLO 权重、embedding、reranker 或模型端点尚未准备好，`/ready` 返回 `503` 属于预期现象。
+如果知识库、YOLO 权重、embedding、模型端点，或已显式启用的 reranker 尚未准备好，`/ready` 返回 `503` 属于预期现象。
 
 ## 常见失败点
 

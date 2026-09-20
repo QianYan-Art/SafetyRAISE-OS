@@ -135,8 +135,8 @@ POST /rerank
 
 说明：
 
-1. 服务器部署默认可直接使用 Compose 内置的 `retrieval-reranker` 容器
-2. 本地联调时也可以自行起一个兼容 `/rerank` 的服务
+1. reranker 默认关闭，服务器 Compose 不内置 reranker 服务
+2. 只有显式启用 reranker 时，才需要自行部署一个兼容 `/health` 和 `/rerank` 的服务
 
 ### 视觉模型
 
@@ -198,8 +198,8 @@ POST /rerank
 启用默认的 `hybrid_local` 检索还需要：
 
 1. Embedding 服务
-2. Reranker 服务
-3. Dense 索引三件套
+2. Dense 索引三件套
+3. 仅在显式启用 reranker 时准备 Reranker 服务
 
 ## 知识库文件
 
@@ -213,8 +213,8 @@ POST /rerank
 
 `hybrid_local`：
 
-1. 在 `local_jsonl` 基础上增加向量召回和 reranker
-2. 需要 Embedding 服务、Reranker 服务和 Dense 索引文件
+1. 在 `local_jsonl` 基础上增加向量召回，并默认通过 RRF 融合稀疏与 dense 结果
+2. 需要 Embedding 服务和 Dense 索引文件；Reranker 服务仅在显式启用时需要
 3. 是仓库默认检索模式
 
 首次联调如果还没有 Embedding 或 Dense 索引，可以先把：

@@ -421,8 +421,8 @@ sh deployment/docker/setup-https.sh
 如果你希望服务器部署尽量接近当前默认配置，建议这样准备：
 
 1. YOLO：下载 `yolo11n.pt`，挂到 `MODELS_HOST_PATH`
-2. embedding：当前生产配置默认走 `https://<MODEL_API_HOST>/v1`
-3. 专家模型：当前生产配置默认走 `https://<MODEL_API_HOST>/v1`，模型名用实际服务里的 `safetyraise`
+2. embedding：按 `RETRIEVAL_EMBEDDING_BASE_URL` 和 `RETRIEVAL_EMBEDDING_MODEL` 配置；`.env.server` 可按实际部署端点覆盖代码默认值
+3. 专家模型：按 `EXPERT_LOCAL_BASE_URL` 和 `EXPERT_LOCAL_MODEL` 配置，模型名必须与实际服务加载的名称一致；`.env.server` 可覆盖代码默认值
 4. 报告 / 视觉模型：优先用远端 API，减少显存和部署复杂度
 5. reranker：当前不作为必需资产
 6. 会话与运行时状态：当前已改为 PostgreSQL 持久化
