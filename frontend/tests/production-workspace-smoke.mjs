@@ -303,8 +303,10 @@ async function loginPage(page, credentials) {
 }
 
 async function verifyProductionBuild() {
-  const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
-  const build = spawnSync(npmCommand, ["run", "build"], {
+  const buildCommand = process.platform === "win32"
+    ? { command: process.env.ComSpec || "cmd.exe", args: ["/d", "/s", "/c", "npm run build"] }
+    : { command: "npm", args: ["run", "build"] };
+  const build = spawnSync(buildCommand.command, buildCommand.args, {
     cwd: frontendDir,
     encoding: "utf8",
     timeout: 120_000,
