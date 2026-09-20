@@ -26,9 +26,14 @@ _KNOWLEDGE_FIELDS = (
     "digest",
     "manifest_digest",
 )
+_KNOWLEDGE_OPTIONAL_FIELDS = frozenset({"source_kind"})
+_KNOWLEDGE_SOURCE_KINDS = frozenset({"rule_excerpt", "source_chunk"})
 _EVIDENCE_STATUSES = frozenset({"unverified", "human_confirmed", "disputed"})
 _EVIDENCE_KINDS = frozenset({"observation", "statement", "document_excerpt", "other"})
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_UUID_TEXT_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
 
 
 class ControlledTools:
@@ -426,7 +431,9 @@ class ControlledTools:
                     422,
                     {"reason": "知识片段缺少必要字段。", "index": index, "missing": missing},
                 )
-            extra = sorted(set(raw) - set(_KNOWLEDGE_FIELDS))
+            extra = sorted(
+                set(raw) - set(_KNOWLEDGE_FIELDS) - _KNOWLEDGE_OPTIONAL_FIELDS
+            )
             if extra:
                 raise HarnessError(
                     "knowledge_chunks_invalid",
@@ -447,6 +454,22 @@ class ControlledTools:
                         },
                     )
                 item[field] = value
+            if "source_kind" in raw:
+                source_kind = raw["source_kind"]
+                if (
+                    not isinstance(source_kind, str)
+                    or source_kind not in _KNOWLEDGE_SOURCE_KINDS
+                ):
+                    raise HarnessError(
+                        "knowledge_chunks_invalid",
+                        422,
+                        {
+                            "reason": "知识片段 source_kind 无效。",
+                            "index": index,
+                            "field": "source_kind",
+                        },
+                    )
+                item["source_kind"] = source_kind
             for field in ("id", "document_id", "version"):
                 if (
                     len(item[field]) > _MAX_KNOWLEDGE_ID_CHARS
@@ -854,6 +877,62 @@ class ControlledTools:
             )
         return normalized
 
+    def _canonicalize_evidence_id(self, value: str, *, tool: str) -> str:
+        if value.startswith("accident:"):
+            if value not in self._evidence_by_id:
+                raise HarnessError(
+                    "evidence_not_found",
+                    404,
+                    {"reason": "证据不在当前冻结快照中。", "evidence_id": value},
+                )
+            return value
+
+        if value.startswith("evidence:"):
+            uuid_text = value[len("evidence:"):]
+            if _UUID_TEXT_RE.fullmatch(uuid_text) is None:
+                self._raise_invalid(
+                    "规范 evidence 引用必须包含标准 UUID。",
+                    tool=tool,
+                    field="evidence_ids",
+                )
+            canonical = self._evidence_ref_from_uuid(uuid_text)
+            if canonical != value:
+                self._raise_invalid(
+                    "evidence 引用必须使用小写规范 UUID。",
+                    tool=tool,
+                    field="evidence_ids",
+                )
+        else:
+            if _UUID_TEXT_RE.fullmatch(value) is None:
+                self._raise_invalid(
+                    "裸证据 ID 必须是标准 UUID；事故输入需使用 accident JSON Pointer。",
+                    tool=tool,
+                    field="evidence_ids",
+                )
+            canonical = self._evidence_ref_from_uuid(value)
+
+        if canonical not in self._evidence_by_id:
+            raise HarnessError(
+                "evidence_not_found",
+                404,
+                {"reason": "证据不在当前冻结快照中。", "evidence_id": canonical},
+            )
+        return canonical
+
+    def _validate_evidence_ids(self, args: dict, *, tool: str) -> list[str]:
+        raw_ids = self._validate_ids(args, key="evidence_ids", tool=tool)
+        normalized = [
+            self._canonicalize_evidence_id(value, tool=tool)
+            for value in raw_ids
+        ]
+        if len(set(normalized)) != len(normalized):
+            self._raise_invalid(
+                "evidence_ids 规范化后不能包含重复引用。",
+                tool=tool,
+                field="evidence_ids",
+            )
+        return normalized
+
     def _list_evidence(self, args: dict) -> dict:
         self._validate_exact_keys(args, tool="list_evidence", required=set(), optional={"cursor"})
         cursor = args.get("cursor")
@@ -893,7 +972,7 @@ class ControlledTools:
     def _read_evidence(self, role: str, args: dict) -> dict:
         tool = "read_evidence"
         self._validate_exact_keys(args, tool=tool, required={"evidence_ids"}, optional={"cursor"})
-        evidence_ids = self._validate_ids(args, key="evidence_ids", tool=tool)
+        evidence_ids = self._validate_evidence_ids(args, tool=tool)
         items = []
         for evidence_id in evidence_ids:
             item = self._evidence_by_id.get(evidence_id)
@@ -1373,7 +1452,9 @@ class ControlledTools:
                     {"reason": "检索结果必须是对象。", "index": index},
                 )
             missing = [field for field in _KNOWLEDGE_FIELDS if field not in candidate]
-            extra = sorted(set(candidate) - set(_KNOWLEDGE_FIELDS))
+            extra = sorted(
+                set(candidate) - set(_KNOWLEDGE_FIELDS) - _KNOWLEDGE_OPTIONAL_FIELDS
+            )
             if missing or extra:
                 raise HarnessError(
                     "knowledge_search_invalid_response",
@@ -1385,6 +1466,21 @@ class ControlledTools:
                         "extra": extra,
                     },
                 )
+            if "source_kind" in candidate:
+                source_kind = candidate["source_kind"]
+                if (
+                    not isinstance(source_kind, str)
+                    or source_kind not in _KNOWLEDGE_SOURCE_KINDS
+                ):
+                    raise HarnessError(
+                        "knowledge_search_invalid_response",
+                        502,
+                        {
+                            "reason": "检索结果 source_kind 无效。",
+                            "index": index,
+                            "field": "source_kind",
+                        },
+                    )
             chunk_id = candidate["id"]
             if not isinstance(chunk_id, str) or not chunk_id:
                 raise HarnessError(
@@ -1460,6 +1556,16 @@ class ControlledTools:
                             "field": field,
                         },
                     )
+            if candidate.get("source_kind") != approved.get("source_kind"):
+                raise HarnessError(
+                    "knowledge_snapshot_conflict",
+                    409,
+                    {
+                        "reason": "检索结果与冻结知识片段不一致。",
+                        "chunk_id": chunk_id,
+                        "field": "source_kind",
+                    },
+                )
             validated.append(deepcopy(approved))
         return validated
 

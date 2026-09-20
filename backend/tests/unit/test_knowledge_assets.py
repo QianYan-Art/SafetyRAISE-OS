@@ -128,6 +128,26 @@ def test_source_neighbors_are_existing_adjacent_chunks_of_same_document(tmp_path
     assert assets.chunks[0]["digest"] == canonical_digest(assets.chunks[0]["text"])
 
 
+def test_rule_exposes_only_existing_body_chunks_from_its_own_source(tmp_path, monkeypatch):
+    settings, _, digest, sparse = fixture_settings(tmp_path, monkeypatch)
+    sparse._chunk_records = [
+        {"chunk_id": "law#0002", "source_id": "law", "content": "完整条款与例外"},
+        {"chunk_id": "law#0001", "source_id": "law", "content": "发布及施行信息"},
+        {"chunk_id": "other#0001", "source_id": "other", "content": "其他来源"},
+    ]
+    sparse._rule_records = [
+        {"rule_id": "law#rule#0001", "source_id": "law", "content": "规则摘录"},
+        {"rule_id": "missing#rule#0001", "source_id": "missing", "content": "孤立摘录"},
+    ]
+    assets = load_knowledge_assets(settings, approved_content_digest=digest)
+    text = assets.chunks[-2]["text"]
+    assert "同来源正文索引（仅供定位，尚未读取）：law#0001、law#0002" in text
+    assert "other#0001" not in text
+    assert "law#rule#0001、" not in text
+    assert "同来源正文索引（仅供定位，尚未读取）：未提供" in assets.chunks[-1]["text"]
+    assert assets.chunks[-2]["digest"] == canonical_digest(text)
+
+
 def test_real_sparse_dense_assets_feed_original_hybrid_retriever(tmp_path):
     """真实文件与原检索器；合成向量不证明嵌入模型的语义质量。"""
     names = ("manifest", "chunks", "rules", "search_index", "dense_manifest", "dense_records")

@@ -16,9 +16,17 @@ from app.schemas.base import StrictModel
 def tool_schemas(retrieval_constraints: dict | None = None) -> list[dict]:
     """角色只获四个只读动作，不暴露执行环境或发布操作。"""
     ids = {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 10}
+    evidence_ids = {
+        **ids,
+        "description": (
+            "优先使用规范 evidence:UUID；当前冻结补充证据也接受能唯一匹配的裸 UUID。"
+            "事故表单字段使用 accident:/JSON-Pointer，可从 list_evidence 获取准确ID。"
+            "工具输出、访问记录和分页 cursor 统一使用规范 evidence:UUID。"
+        ),
+    }
     definitions = [
         ("list_evidence", {"cursor": {"type": "string"}}, []),
-        ("read_evidence", {"evidence_ids": ids, "cursor": {"type": "string"}}, ["evidence_ids"]),
+        ("read_evidence", {"evidence_ids": evidence_ids, "cursor": {"type": "string"}}, ["evidence_ids"]),
         ("search_knowledge", {
             "query": {"type": "string", "minLength": 1, "maxLength": 1000},
             "top_k": {"type": "integer", "minimum": 1, "maximum": 10},

@@ -34,6 +34,65 @@ def enforce_semantic_severity(review: ReviewResult) -> ReviewResult:
     return ReviewResult.model_validate(payload)
 
 
+def enforce_source_authority(
+    candidate: CandidateReport, review: ReviewResult,
+    knowledge_sources: Iterable[dict], issue_history: Iterable[dict],
+) -> ReviewResult:
+    """规则摘录只能帮助定位；确定性否决不能被模型的引用通过结论覆盖。"""
+    excerpts = {
+        item["id"] for item in knowledge_sources
+        if item.get("source_kind") == "rule_excerpt"
+        or (item.get("source_kind") is None and "#rule#" in item["id"])
+    }
+    rejected = sorted({
+        ref for claim in candidate.claims for ref in claim.knowledge_refs if ref in excerpts
+    })
+    if not rejected:
+        return review
+    payload = review.model_dump(mode="json")
+    history = list(issue_history)
+    for ref in rejected:
+        target = "knowledge-source:" + ref
+        previous = next((
+            item for item in reversed(history)
+            if item["category"] == "citations" and item["target"] == target
+        ), None)
+        issue = next((
+            item for item in payload["issues"]
+            if item["category"] == "citations" and item["target"] == target
+        ), None)
+        if previous is not None:
+            # 不代替审查者关闭问题；证据仍不合格时保留原稳定身份和闭合条件。
+            if issue is None:
+                issue = dict(previous)
+                payload["issues"].append(issue)
+            issue.update({
+                key: previous[key]
+                for key in ("issue_id", "category", "severity", "target", "closure_condition")
+            })
+        elif issue is None:
+            issue = {
+                "issue_id": "source-check:" + canonical_digest(ref),
+                "category": "citations", "severity": "major", "target": target,
+                "closure_condition": "删除该摘录作为断言依据的引用，读取并引用完整来源条文，"
+                                     "由独立审查确认前提、例外、适用版本和时间。",
+            }
+            payload["issues"].append(issue)
+        issue.update(
+            status="open", source_refs=[ref],
+            explanation="程序核验：候选仍把规则摘录作为断言依据。摘录仅为检索线索；"
+                        "即使注明未读取完整条文，也不能替代完整来源和适用性核实。",
+        )
+    for check in payload["completed_checks"]:
+        if check["category"] == "citations":
+            check.update(
+                passed=False,
+                conclusion="程序核验未通过：候选引用了规则摘录，必须改用实际读取的来源条文。",
+                knowledge_refs=sorted(set(check["knowledge_refs"]) | set(rejected)),
+            )
+    return ReviewResult.model_validate(payload)
+
+
 def canonical_digest(value: Any) -> str:
     """按固定 JSON 编码计算 SHA-256 摘要。"""
     if isinstance(value, BaseModel):

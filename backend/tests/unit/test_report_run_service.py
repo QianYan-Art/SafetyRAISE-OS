@@ -59,6 +59,36 @@ def test_candidate_knowledge_refs_require_complete_independent_review(
     assert roles.closed
 
 
+@pytest.mark.parametrize("external_source", [False, True])
+def test_complete_excerpt_read_still_requires_revision_not_publication(external_source):
+    roles = KnowledgeCitationRoles("full", "law#rule#0001")
+    base = dependencies(roles)
+    text = "合成规则摘录，即使读完也不是完整法条。"
+    source = {
+        "id": "law#rule#0001", "document_id": "law", "version": "v1",
+        "text": text, "digest": canonical_digest(text),
+        "manifest_digest": base.knowledge_manifest_digest,
+    }
+    runtime = replace(
+        base, knowledge_chunks=(source,),
+        external_knowledge_source=external_source,
+        budget_policy=base.budget_policy.model_copy(update={"max_revision_rounds": 0}),
+    )
+    service = ReportRunService(MemoryStore(), runtime)
+    run = create(service)
+    result = asyncio.run(service.execute("owner", run["run_id"], 0))
+    assert result["state"] == "needs_review"
+    assert "report" not in result
+    recorded = service.store.get("owner", run["run_id"])["review_history"][0]
+    assert recorded["raw_review"]["issues"] == []
+    assert recorded["review"]["issues"][0]["category"] == "citations"
+    assert recorded["review"]["issues"][0]["status"] == "open"
+    assert not next(
+        check["passed"] for check in recorded["review"]["completed_checks"]
+        if check["category"] == "citations"
+    )
+
+
 def test_controller_requires_separate_review_of_final_candidate():
     roles = SyntheticRoles()
     service = ReportRunService(MemoryStore(), dependencies(roles))

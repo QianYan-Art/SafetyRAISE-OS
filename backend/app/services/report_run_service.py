@@ -12,7 +12,8 @@ from psycopg.rows import dict_row
 
 from app.adapters.input.dict_input_adapter import DictInputAdapter
 from app.report_harness.contracts import (
-    canonical_digest, enforce_semantic_severity, validate_publication, validate_review_structure,
+    canonical_digest, enforce_semantic_severity, enforce_source_authority,
+    validate_publication, validate_review_structure,
 )
 from app.report_harness.authorization import AuthorizationRequest
 from app.report_harness.evidence import freeze_snapshot
@@ -118,7 +119,7 @@ class ReportRunService:
     @staticmethod
     def _contract_digest() -> str:
         return canonical_digest({
-            "controller_version": 4, "journal_version": JOURNAL_VERSION,
+            "controller_version": 5, "journal_version": JOURNAL_VERSION,
             "candidate": CandidateReport.model_json_schema(),
             "review": ReviewResult.model_json_schema(), "tools": tool_schemas(),
         })
@@ -572,7 +573,12 @@ class ReportRunService:
                               {"review": review.model_dump(mode="json")},
                               "review", {"candidate_version": version})
         raw_review = review.model_dump(mode="json")
-        review = ledger.apply(enforce_semantic_severity(review))
+        review = ledger.apply(enforce_semantic_severity(enforce_source_authority(
+            candidate, review,
+            self.dependencies.knowledge_chunks if record.get("external_knowledge_source")
+            else record["knowledge_source"],
+            ledger.history(),
+        )))
         obligations = snapshot["fact_obligations"]
         reviewer_evidence = inline_evidence | tools.accessed_evidence("reviewer")
         reviewer_knowledge = tools.accessed_knowledge("reviewer")

@@ -90,6 +90,71 @@ def test_evidence_ids_and_provenance_are_frozen_and_readable():
     assert tools.execute("generator", "read_evidence", {"evidence_ids": [evidence_id]})["items"][0]["text"] == record["text"]
 
 
+def test_bare_evidence_uuid_is_normalized_and_access_is_role_scoped():
+    record = evidence()
+    tools, _ = make_tools(records=[record])
+    bare_id = record["evidence_id"]
+    canonical_id = "evidence:" + bare_id
+
+    result = tools.execute("reviewer", "read_evidence", {"evidence_ids": [bare_id]})
+
+    assert result["items"][0]["evidence_id"] == canonical_id
+    assert tools.accessed_evidence("reviewer") == {canonical_id}
+    assert tools.accessed_evidence("generator") == set()
+
+    with pytest.raises(HarnessError) as error:
+        tools.execute(
+            "reviewer",
+            "read_evidence",
+            {"evidence_ids": [bare_id, canonical_id]},
+        )
+    assert error.value.code == "invalid_tool_arguments"
+
+
+def test_read_evidence_rejects_malformed_unknown_and_cross_snapshot_ids():
+    record = evidence()
+    tools, _ = make_tools(records=[record])
+    canonical_id = "evidence:" + record["evidence_id"]
+
+    with pytest.raises(HarnessError) as error:
+        tools.execute("reviewer", "read_evidence", {"evidence_ids": ["not-a-uuid"]})
+    assert error.value.code == "invalid_tool_arguments"
+
+    with pytest.raises(HarnessError) as error:
+        tools.execute("reviewer", "read_evidence", {"evidence_ids": [str(uuid4())]})
+    assert error.value.code == "evidence_not_found"
+
+    other, _ = make_tools(records=[evidence()])
+    with pytest.raises(HarnessError) as error:
+        other.execute("reviewer", "read_evidence", {"evidence_ids": [canonical_id]})
+    assert error.value.code == "evidence_not_found"
+
+
+def test_bare_and_canonical_evidence_ids_share_cursor_binding():
+    records = [
+        evidence(text="X" * 8000, source_locator=f"位置-{index}")
+        for index in range(5)
+    ]
+    tools, _ = make_tools(records=records)
+    bare_ids = [record["evidence_id"] for record in records]
+    canonical_ids = ["evidence:" + value for value in bare_ids]
+
+    page = tools.execute("reviewer", "read_evidence", {"evidence_ids": bare_ids})
+    assert page["next_cursor"] is not None
+    assert all(item["evidence_id"] in canonical_ids for item in page["items"])
+
+    cursor = page["next_cursor"]
+    while cursor is not None:
+        page = tools.execute(
+            "reviewer",
+            "read_evidence",
+            {"evidence_ids": canonical_ids, "cursor": cursor},
+        )
+        cursor = page["next_cursor"]
+
+    assert tools.accessed_evidence("reviewer") == set(canonical_ids)
+
+
 def test_accessed_ids_are_role_scoped_and_list_is_not_a_read():
     record = evidence()
     tools, _ = make_tools(records=[record])
@@ -223,6 +288,39 @@ def test_registered_knowledge_is_a_deep_copy_and_direct_read_is_authorized():
     with pytest.raises(HarnessError) as error:
         tools.execute("reviewer", "read_knowledge", {"chunk_ids": ["unknown"]})
     assert error.value.code == "knowledge_not_authorized"
+
+
+def test_knowledge_source_kind_is_optional_and_strict():
+    legacy = chunk()
+    tools, _ = make_tools(chunks=[legacy])
+    assert "source_kind" not in tools.registered_knowledge()[0]
+
+    for source_kind in ("rule_excerpt", "source_chunk"):
+        approved = chunk(chunk_id=f"{source_kind}-1")
+        approved["source_kind"] = source_kind
+        tools, _ = make_tools(
+            chunks=[approved],
+            search=lambda _query, _top_k, item=approved: [deepcopy(item)],
+        )
+        assert tools.registered_knowledge()[0]["source_kind"] == source_kind
+        assert tools.execute(
+            "reviewer", "read_knowledge", {"chunk_ids": [approved["id"]]}
+        )["items"][0]["source_kind"] == source_kind
+        assert tools.execute(
+            "reviewer", "search_knowledge", {"query": "规则", "top_k": 1}
+        )["items"][0]["source_kind"] == source_kind
+
+    invalid = chunk()
+    invalid["source_kind"] = "other"
+    with pytest.raises(HarnessError) as error:
+        ControlledTools(make_tools()[1], [invalid])
+    assert error.value.code == "knowledge_chunks_invalid"
+
+    extra = chunk()
+    extra["unexpected"] = "拒绝"
+    with pytest.raises(HarnessError) as error:
+        ControlledTools(make_tools()[1], [extra])
+    assert error.value.code == "knowledge_chunks_invalid"
 
 
 def test_without_callback_search_is_explicitly_limited_to_registered_chunks():

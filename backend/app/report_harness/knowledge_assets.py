@@ -26,7 +26,10 @@ def _identity(path: Path):
     return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
 
 
-def source_text(record: dict, identifier: str, source: str, adjacent: tuple[str, ...]) -> str:
+def source_text(
+    record: dict, identifier: str, source: str, adjacent: tuple[str, ...],
+    source_chunks: tuple[str, ...] = (),
+) -> str:
     content = record["content"]
     metadata = {
         key: record[key] for key in (
@@ -45,6 +48,10 @@ def source_text(record: dict, identifier: str, source: str, adjacent: tuple[str,
         "来源元数据：" + json.dumps(metadata, ensure_ascii=False, sort_keys=True),
         "原始片段SHA256：" + sha256(content.encode("utf-8")).hexdigest(),
         "相邻来源片段：" + ("、".join(adjacent) if adjacent else "未提供"),
+        "同来源正文索引（仅供定位，尚未读取）：" + (
+            "、".join(source_chunks) if source_chunks else "未提供"
+        ),
+        "引用前须读取正文中的完整条款、前提例外及版本施行信息；索引和规则摘录不能替代正文。",
         "以下为资产原文；缺失的生效日期或发布机关均为未知，不得推定：",
         content,
     ))
@@ -156,11 +163,13 @@ def load_knowledge_assets(settings, *, approved_content_digest: str) -> Knowledg
                 for position in (int(ordinal) - 1, int(ordinal) + 1)
                 if f"{source}#{position:0{len(ordinal)}d}" in source_ids.get(source, set())
             )
-        original = source_text(record, identifier, source, adjacent)
+        source_chunks = tuple(sorted(source_ids.get(source, ())))
+        original = source_text(record, identifier, source, adjacent, source_chunks)
         chunks.append({
             "id": identifier, "document_id": source, "version": collection.version,
             "text": original, "digest": canonical_digest(original),
             "manifest_digest": manifest_digest,
+            "source_kind": "rule_excerpt" if record.get("rule_id") else "source_chunk",
         })
     if not chunks:
         raise HarnessError("knowledge_dependencies_unavailable", 503)
