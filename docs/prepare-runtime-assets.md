@@ -359,8 +359,9 @@ python backend/app/tools/build_dense_index.py \
 6. 跑通 `/api/v1/health`
 7. 检查 `/api/v1/ready`
 8. 接入视觉模型和报告模型 API
-9. 准备 Embedding 服务、Reranker 服务和 Dense 索引
-10. 切回 `hybrid_local`
+9. 准备 Embedding 服务和 Dense 索引
+10. 仅在显式启用 reranker 时准备 Reranker 服务（默认关闭，首次联调可跳过）
+11. 切回 `hybrid_local`
 
 ## 常见改动位置
 
