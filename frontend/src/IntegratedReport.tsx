@@ -18,6 +18,7 @@ import "./integratedReport.css";
 export interface IntegratedReportHandle {
   generate: (json: string) => Promise<void>;
   cancel: () => Promise<void>;
+  isTransitionBlocked: () => boolean;
 }
 
 const labels: Record<string, string> = {
@@ -195,6 +196,7 @@ export const IntegratedReport = forwardRef<IntegratedReportHandle, {
   }
 
   useImperativeHandle(ref, () => ({
+    isTransitionBlocked: () => running.current || cancellationPending.current || active,
     generate: (json) => action(async () => {
       if (loading) throw new Error("正在读取此会话，请稍后重试。");
       if (loadFailed) throw new Error("报告记录未读取成功，请先重新读取。");

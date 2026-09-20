@@ -7,15 +7,144 @@ export async function verifyIntegratedReport({ page, bootstrap, api, output, res
   const headers = { Authorization: `Bearer ${bootstrap.token}`, "Content-Type": "application/json" };
   const sessionPath = `/api/v1/chat-sessions/${bootstrap.session_id}`;
   const evidenceUrl = `${api}${sessionPath}/report-evidence`;
+  const panel = page.getByRole("region", { name: "事故分析报告" });
+  const materialsHost = page.locator(".materials-stage-host");
+  const factsHost = page.locator(".facts-stage-host");
+  const reportHost = page.locator(".report-stage-host");
+
+  async function openArchive() {
+    const drawer = page.getByRole("dialog", { name: "档案导航" });
+    if (!(await drawer.isVisible())) {
+      await page.getByRole("button", { name: "打开档案列表", exact: true }).click();
+    }
+    await drawer.waitFor({ state: "visible" });
+    return drawer;
+  }
+
+  async function selectSession(sessionId) {
+    await openArchive();
+    const sessionButton = page.locator(`[data-session-id="${sessionId}"] button.session-title`);
+    await sessionButton.waitFor();
+    await sessionButton.click();
+    await waitUntil(async () => (await sessionButton.getAttribute("aria-current")) === "true");
+  }
+
+  async function selectStage(label) {
+    const stageButton = page.locator(".workspace-stages button").filter({ hasText: label }).first();
+    await stageButton.click();
+    await waitUntil(async () => (await stageButton.getAttribute("aria-current")) === "step");
+  }
+
+  async function waitForReportStatus(label, timeout = 45000) {
+    await selectStage("查看报告");
+    await panel.waitFor({ state: "visible" });
+    await waitUntil(async () => (await panel.locator(".report-status").innerText()) === label, timeout);
+  }
+
+  async function openEvidenceSection() {
+    const section = panel.locator(".report-evidence-section");
+    await section.waitFor({ state: "visible" });
+    if (!(await section.evaluate((node) => node.open))) {
+      await section.locator("summary").click();
+    }
+  }
+
+  async function assertStageLayout(selector, label) {
+    const layout = await page.locator(selector).evaluate((node) => {
+      const isVisible = (element) => {
+        if (element.closest("[hidden]") || element.getAttribute("aria-hidden") === "true") return false;
+        const style = getComputedStyle(element);
+        const box = element.getBoundingClientRect();
+        return style.display !== "none" && style.visibility !== "hidden" && box.width > 0 && box.height > 0
+          && (typeof element.checkVisibility !== "function" || element.checkVisibility());
+      };
+      const isInHorizontalScroller = (element) => {
+        for (let parent = element.parentElement; parent && parent !== node; parent = parent.parentElement) {
+          const style = getComputedStyle(parent);
+          if ((style.overflowX === "auto" || style.overflowX === "scroll")
+            && parent.scrollWidth > parent.clientWidth + 1) {
+            return true;
+          }
+        }
+        return false;
+      };
+      const hostBox = node.getBoundingClientRect();
+      const controls = [...node.querySelectorAll("button,input,textarea,select")]
+        .filter((element) => isVisible(element) && !isInHorizontalScroller(element));
+      const boxes = controls.map((element) => ({
+        element,
+        box: element.getBoundingClientRect(),
+        label: element.getAttribute("aria-label") || element.textContent?.trim().slice(0, 40) || element.tagName,
+      }));
+      const outside = boxes.filter(({ box }) => box.left < -1 || box.right > innerWidth + 1)
+        .map(({ label, box }) => ({ label, left: box.left, right: box.right, top: box.top }));
+      const overlaps = [];
+      for (let leftIndex = 0; leftIndex < boxes.length; leftIndex += 1) {
+        for (let rightIndex = leftIndex + 1; rightIndex < boxes.length; rightIndex += 1) {
+          const left = boxes[leftIndex].box;
+          const right = boxes[rightIndex].box;
+          const width = Math.min(left.right, right.right) - Math.max(left.left, right.left);
+          const height = Math.min(left.bottom, right.bottom) - Math.max(left.top, right.top);
+          if (width > 2 && height > 2) {
+            overlaps.push([boxes[leftIndex].label, boxes[rightIndex].label]);
+          }
+        }
+      }
+      return {
+        documentOverflow: document.documentElement.scrollWidth > innerWidth + 1,
+        hostVisible: !node.closest("[hidden]") && hostBox.width > 0 && hostBox.height > 0,
+        hostWithinViewport: hostBox.left >= -1 && hostBox.right <= innerWidth + 1,
+        outside,
+        overlaps,
+        minimumControlHeight: boxes.length > 0 ? Math.min(...boxes.map(({ box }) => box.height)) : 0,
+      };
+    });
+    assert(layout.hostVisible, `${label}阶段必须可见：${JSON.stringify(layout)}`);
+    assert(layout.hostWithinViewport, `${label}阶段容器不能越出视口：${JSON.stringify(layout)}`);
+    assert.equal(layout.documentOverflow, false, `${label}阶段不能产生横向溢出：${JSON.stringify(layout)}`);
+    assert.deepEqual(layout.outside, [], `${label}阶段控件不能越出视口：${JSON.stringify(layout)}`);
+    assert.deepEqual(layout.overlaps, [], `${label}阶段控件不能互相遮挡：${JSON.stringify(layout)}`);
+    if (layout.minimumControlHeight > 0) {
+      assert(layout.minimumControlHeight >= 28, `${label}阶段控件尺寸过小：${JSON.stringify(layout)}`);
+    }
+  }
+
+  async function assertStableLayout(viewport, screenshotName) {
+    await page.waitForFunction(() => !document.getAnimations().some((animation) =>
+      animation.playState === "running" && animation.effect?.getTiming().iterations !== Infinity));
+    await assertStageLayout(".facts-stage-host", "核对事实");
+    await selectStage("查看报告");
+    await assertStageLayout(".report-stage-host", "查看报告");
+    await page.screenshot({ path: path.join(output, screenshotName), fullPage: true });
+    results.push(`${viewport.width}px 阶段布局无横向溢出且关键控件不重叠`);
+  }
+
+  await page.getByRole("navigation", { name: "事故处理阶段" }).waitFor();
+  assert.equal(await page.getByRole("tab", { name: "证据报告", exact: true }).count(), 0);
+  assert.equal(await page.getByRole("button", { name: "分析与审阅", exact: true }).count(), 0);
+  assert.equal(await page.getByRole("button", { name: "上传事故资料", exact: true }).count(), 0);
+  assert.equal(await page.getByRole("button", { name: "退出满屏", exact: true }).count(), 0);
+  assert.equal(await page.getByRole("button", { name: "切换为深色模式", exact: true }).count(), 0);
+
+  await openArchive();
   const sessionButton = page.locator(`[data-session-id="${bootstrap.session_id}"] button.session-title`);
   await sessionButton.focus();
   await sessionButton.press("Enter");
-  const panel = page.getByRole("region", { name: "事故分析报告" });
-  await panel.waitFor();
+  await waitUntil(async () => (await sessionButton.getAttribute("aria-current")) === "true");
   assert.equal(await sessionButton.getAttribute("aria-current"), "true");
-  results.push("会话通过原生按钮键盘进入，并标识当前会话");
-  assert.equal(await page.getByRole("tab", { name: "证据报告", exact: true }).count(), 0);
-  await panel.locator("summary").first().click();
+  await waitUntil(async () => (await page.locator(".integrated-report").count()) === 1);
+  assert.equal(await page.locator(".integrated-report").count(), 1);
+  results.push("档案抽屉内会话按钮支持原生键盘进入，并标识当前会话");
+
+  await selectStage("核对事实");
+  assert.equal(await factsHost.isVisible(), true);
+  assert.equal(await reportHost.isVisible(), false);
+  assert.equal(await panel.isVisible(), false);
+  await assertStageLayout(".facts-stage-host", "核对事实");
+
+  await selectStage("查看报告");
+  await panel.waitFor({ state: "visible" });
+  await openEvidenceSection();
   await panel.getByLabel("材料来源", { exact: true }).fill("合成现场记录");
   await panel.getByLabel("页码或位置", { exact: true }).fill("第1页");
   await panel.getByLabel("补充内容", { exact: true }).fill("仅工程验证：道路干燥。");
@@ -32,14 +161,15 @@ export async function verifyIntegratedReport({ page, bootstrap, api, output, res
   });
   await panel.getByRole("button", { name: "删除", exact: true }).click();
   await waitUntil(async () => (await request(evidenceUrl, { headers })).records.length === 0);
-  results.push("原页面补充材料新增、修改核实状态、删除均经真实HTTP持久化");
+  results.push("查看报告阶段补充材料新增、修改核实状态、删除均经真实HTTP持久化");
 
-  const editor = page.locator(".json-table-editor .value-input").first();
-  await editor.fill("合成案例一：原表单确认后生成。");
+  await selectStage("核对事实");
+  const editor = factsHost.locator(".json-table-editor .value-input").first();
+  await editor.fill("合成案例一：新三阶段确认后生成。");
   await editor.blur();
-  const confirm = page.getByRole("button", { name: /确认.*生成/ }).first();
+  const confirm = factsHost.getByRole("button", { name: "确认事故信息并生成报告", exact: true });
   await confirm.click();
-  await waitUntil(async () => (await panel.getByRole("status").innerText()) === "报告已完成", 45000);
+  await waitForReportStatus("报告已完成");
   let runs = await request(`${api}/api/v1/report-runs?session_id=${bootstrap.session_id}`, { headers });
   assert.equal(runs.runs.length, 1);
   const firstId = runs.runs[0].run_id;
@@ -48,9 +178,10 @@ export async function verifyIntegratedReport({ page, bootstrap, api, output, res
   assert.equal(runs.runs[0].review_status, "passed");
   assert.equal(runs.runs[0].formal_export_eligible, false);
   assert.equal(await panel.getByRole("button", { name: "下载Word" }).count(), 0);
-  results.push("原确认按钮依次完成保存、创建、授权、合成生成和独立合成审查；禁止冒充正式导出");
+  results.push("核对事实阶段确认后完成真实保存、创建、授权、合成生成和独立审查，未冒充正式导出");
 
-  await editor.fill("合成案例二：验证历史报告切换。");
+  await selectStage("核对事实");
+  await editor.fill("合成案例二：验证新阶段历史切换。");
   await editor.blur();
   await confirm.click();
   await waitUntil(async () => {
@@ -58,188 +189,124 @@ export async function verifyIntegratedReport({ page, bootstrap, api, output, res
     return runs.runs.length === 2 && runs.runs[0].state === "published";
   }, 45000);
   const secondId = runs.runs[0].run_id;
+  await waitForReportStatus("报告已完成");
   await waitUntil(async () => !(await panel.getByLabel("历史报告").isDisabled()));
   await panel.getByLabel("历史报告").selectOption(firstId);
   await waitUntil(async () => (await panel.getByLabel("历史报告").inputValue()) === firstId);
   await panel.getByLabel("历史报告").selectOption(secondId);
   await page.reload();
-  await page.locator(`[data-session-id="${bootstrap.session_id}"] .session-item`).click();
-  await waitUntil(async () => (await panel.getByRole("status").innerText()) === "报告已完成");
+  await selectSession(bootstrap.session_id);
+  await waitForReportStatus("报告已完成");
   assert.equal(await panel.getByLabel("历史报告").inputValue(), secondId);
-  results.push("历史报告可切换，刷新后恢复最新报告");
+  results.push("历史报告可在查看报告阶段切换，刷新档案后恢复最新报告");
 
   for (const viewport of [
     { width: 1440, height: 900 }, { width: 1024, height: 900 },
     { width: 768, height: 1024 }, { width: 390, height: 844 }, { width: 320, height: 720 },
   ]) {
     await page.setViewportSize(viewport);
-    await page.waitForFunction(() => {
-      const sidebar = document.querySelector(".sidebar:not(.mobile-open)");
-      return innerWidth > 768 || !sidebar || sidebar.getBoundingClientRect().right <= 1;
-    });
-    if (viewport.width <= 1024) {
-      await page.getByRole("button", { name: "分析与审阅", exact: true }).click();
-    }
-    await panel.scrollIntoViewIfNeeded();
-    await page.waitForFunction(() => !document.getAnimations().some((animation) =>
-      animation.playState === "running" && animation.effect?.getTiming().iterations !== Infinity));
-    await page.waitForFunction(() => [...document.querySelectorAll(".json-table-editor .value-input")]
-      .every((input) => input.scrollHeight <= input.clientHeight + 1));
-    const layout = await panel.evaluate((node) => ({
-      width: document.documentElement.scrollWidth,
-      viewport: innerWidth,
-      contained: innerWidth > 1024 || node.getBoundingClientRect().bottom
-        <= node.closest(".panel").getBoundingClientRect().bottom + 1,
-      overflowing: [...node.querySelectorAll("button,input,textarea,select")].filter((element) => {
-        const box = element.getBoundingClientRect();
-        return element.checkVisibility() && box.width > 0 && (box.left < -1 || box.right > innerWidth + 1);
-      }).map((element) => ({
-        tag: element.tagName, label: element.getAttribute("aria-label"),
-        left: element.getBoundingClientRect().left, right: element.getBoundingClientRect().right,
-      })),
-    }));
-    assert(layout.width <= layout.viewport + 1, JSON.stringify(layout));
-    assert(layout.contained, "手机报告内容必须位于审阅区内");
-    assert.deepEqual(layout.overflowing, []);
-    const alignment = await page.locator(".report-action-dock").evaluate((node) => {
-      const box = node.getBoundingClientRect();
-      const body = node.closest(".panel-body").getBoundingClientRect();
-      const button = node.querySelector(".report-submit-btn").getBoundingClientRect();
-      return {
-        inside: box.left >= body.left && box.right <= body.right,
-        buttonInside: button.left >= box.left - 1 && button.right <= box.right + 1,
-        height: box.height,
-      };
-    });
-    assert(alignment.inside && alignment.buttonInside, JSON.stringify(alignment));
-    assert(alignment.height >= 44 && alignment.height <= 48, JSON.stringify(alignment));
-    assert.equal(await page.locator(".artifact-wall-watermark:visible").count(), 0);
-    await page.screenshot({ path: path.join(output, `integrated-${viewport.width}.png`), fullPage: true });
-    await panel.locator("summary").first().click();
-    const editorOverflow = await panel.locator(".report-evidence-editor").evaluate((node) =>
-      [...node.querySelectorAll("button,input,textarea")].filter((element) => {
-        const box = element.getBoundingClientRect();
-        return element.checkVisibility() && (box.left < -1 || box.right > innerWidth + 1);
-      }).map((element) => element.outerHTML.slice(0, 180)));
-    assert.deepEqual(editorOverflow, [], `补证展开后控件越界：${viewport.width}`);
-    await panel.locator("summary").first().click();
+    await selectStage("核对事实");
+    await assertStableLayout(viewport, `integrated-${viewport.width}.png`);
+    await panel.locator(".report-evidence-section summary").click();
+    await assertStageLayout(".report-stage-host", "查看报告补证展开");
+    await panel.locator(".report-evidence-section summary").click();
   }
-  results.push("1440/1024/768/390/320布局无横向溢出，主按钮44至48px并对齐且无水印遮挡");
 
-  await page.getByRole("button", { name: "切换为深色模式", exact: true }).click();
-  for (const width of [1440, 390]) {
-    await page.setViewportSize({ width, height: 900 });
-    await page.waitForFunction(() => {
-      const sidebar = document.querySelector(".sidebar:not(.mobile-open)");
-      return innerWidth > 768 || !sidebar || sidebar.getBoundingClientRect().right <= 1;
-    });
-    if (width <= 1024) await page.getByRole("button", { name: "分析与审阅", exact: true }).click();
-    await panel.scrollIntoViewIfNeeded();
-    await page.waitForFunction(() => !document.getAnimations().some((animation) =>
-      animation.playState === "running" && animation.effect?.getTiming().iterations !== Infinity));
-    assert.equal(await page.locator(".safety-workbench.theme-dark").count(), 1);
-    const colors = await panel.evaluate((node) => ({
-      color: getComputedStyle(node).color,
-      surface: getComputedStyle(node.closest(".panel")).backgroundColor,
-      overflow: document.documentElement.scrollWidth > innerWidth + 1,
-    }));
-    assert.notEqual(colors.color, colors.surface);
-    assert.equal(colors.overflow, false);
-    await page.screenshot({ path: path.join(output, `integrated-dark-${width}.png`), fullPage: true });
+  async function startReportRun(value) {
+    await selectStage("核对事实");
+    const currentEditor = factsHost.locator(".json-table-editor .value-input").first();
+    await currentEditor.fill(value);
+    await currentEditor.blur();
+    await factsHost.getByRole("button", { name: "确认事故信息并生成报告", exact: true }).click();
   }
-  await page.getByRole("button", { name: "切换为浅色模式", exact: true }).click();
-  results.push("深色主题桌面与手机无溢出，正文与工作面颜色不同并保留状态文字");
 
-  await confirm.click();
-  const busyDock = page.locator(".report-action-dock.is-generating");
-  await busyDock.waitFor();
-  const busyGeometry = await busyDock.evaluate((node) => {
-    const main = node.querySelector(".report-submit-btn").getBoundingClientRect();
-    const stop = node.querySelector(".report-stop-btn").getBoundingClientRect();
-    const dock = node.getBoundingClientRect();
-    return { aligned: main.left >= dock.left - 1 && stop.right <= dock.right + 1
-      && main.right <= stop.left && main.height >= 44 && stop.height >= 44,
-      main: { left: main.left, right: main.right, height: main.height },
-      stop: { left: stop.left, right: stop.right, height: stop.height },
-      dock: { left: dock.left, right: dock.right } };
-  });
-  assert(busyGeometry.aligned, `生成中主按钮和停止按钮必须对齐且不重叠：${JSON.stringify(busyGeometry)}`);
-  let releaseCancel;
-  let cancelRequests = 0;
-  const cancelBarrier = new Promise((resolve) => { releaseCancel = resolve; });
+  let releaseFactsCancel;
+  let factsCancelRequests = 0;
+  const factsCancelBarrier = new Promise((resolve) => { releaseFactsCancel = resolve; });
   await page.route("**/api/v1/report-runs/*/cancel", async (route) => {
-    cancelRequests += 1;
-    await cancelBarrier;
+    factsCancelRequests += 1;
+    await factsCancelBarrier;
     await route.continue();
   });
   try {
-    await page.locator(".report-stop-btn").click();
-    await waitUntil(async () => await panel.getByRole("button", { name: "正在停止", exact: true }).isDisabled());
-    await waitUntil(() => page.locator(".report-stop-btn").isDisabled());
-    assert.equal(await page.locator(".report-stop-btn").innerText(), "正在停止");
-    const waitingGeometry = await page.locator(".report-action-dock").evaluate((node) => {
-      const stop = node.querySelector(".report-stop-btn");
-      return stop.scrollWidth <= stop.clientWidth;
-    });
-    assert(waitingGeometry, "正在停止文案必须完整容纳于固定宽度按钮");
-    assert.equal(cancelRequests, 1);
-    await page.screenshot({ path: path.join(output, "integrated-cancelling.png") });
-    for (const width of [1440, 390]) {
-      await page.setViewportSize({ width, height: 900 });
-      await page.waitForFunction(() => !document.getAnimations().some((animation) =>
-        animation.playState === "running" && animation.effect?.getTiming().iterations !== Infinity));
-      const sizes = await page.evaluate(() => {
-        const top = document.querySelector(".report-stop-btn");
-        const bottom = document.querySelector(".integrated-report button[aria-busy='true']");
-        return {
-          top: top.getBoundingClientRect().height,
-          bottom: bottom.getBoundingClientRect().height,
-          radiusTop: getComputedStyle(top).borderRadius,
-          radiusBottom: getComputedStyle(bottom).borderRadius,
-        };
-      });
-      assert.equal(sizes.top, width > 640 ? 44 : 48);
-      assert.equal(sizes.top, sizes.bottom, JSON.stringify({ width, ...sizes }));
-      assert.equal(sizes.radiusTop, sizes.radiusBottom);
-      await page.screenshot({ path: path.join(output, `integrated-cancelling-${width}.png`) });
-    }
+    await startReportRun("合成案例三：在核对事实阶段停止。");
+    await selectStage("核对事实");
+    const factsStop = factsHost.locator(".report-stop-btn");
+    await waitUntil(async () => (await factsStop.isVisible()) && !(await factsStop.isDisabled()));
+    assert.equal(await panel.isVisible(), false);
+    await factsStop.click();
+    await waitUntil(async () => (await factsStop.isDisabled()) && (await factsStop.innerText()) === "正在停止");
+    assert.equal(factsCancelRequests, 1);
+    await selectStage("查看报告");
+    assert.equal(await factsStop.isVisible(), false);
+    releaseFactsCancel();
+    await waitUntil(async () => (await panel.locator(".report-status").innerText()) === "已停止");
   } finally {
-    releaseCancel();
+    releaseFactsCancel();
+    await page.unroute("**/api/v1/report-runs/*/cancel");
   }
-  await waitUntil(async () => (await panel.getByRole("status").innerText()) === "已停止");
-  await page.unroute("**/api/v1/report-runs/*/cancel");
   runs = await request(`${api}/api/v1/report-runs?session_id=${bootstrap.session_id}`, { headers });
   assert.equal(runs.runs[0].state, "cancelled");
-  results.push("两处停止按钮等待时同步禁用且文案不溢出，真实取消后数据库保留状态");
+  results.push("核对事实阶段停止按钮单独可用，报告阶段隐藏时仍以真实HTTP取消并保留数据库状态");
+
+  let releaseReportCancel;
+  let reportCancelRequests = 0;
+  const reportCancelBarrier = new Promise((resolve) => { releaseReportCancel = resolve; });
+  await page.route("**/api/v1/report-runs/*/cancel", async (route) => {
+    reportCancelRequests += 1;
+    await reportCancelBarrier;
+    await route.continue();
+  });
+  try {
+    await startReportRun("合成案例四：在查看报告阶段停止。");
+    await selectStage("查看报告");
+    const reportStop = panel.locator(".integrated-report-toolbar button.report-danger");
+    await waitUntil(async () => (await reportStop.isVisible()) && !(await reportStop.isDisabled()));
+    assert.equal(await factsHost.isVisible(), false);
+    await reportStop.click();
+    await waitUntil(async () => (await reportStop.isDisabled()) && (await reportStop.innerText()) === "正在停止");
+    assert.equal(reportCancelRequests, 1);
+    releaseReportCancel();
+    await waitUntil(async () => (await panel.locator(".report-status").innerText()) === "已停止");
+  } finally {
+    releaseReportCancel();
+    await page.unroute("**/api/v1/report-runs/*/cancel");
+  }
+  runs = await request(`${api}/api/v1/report-runs?session_id=${bootstrap.session_id}`, { headers });
+  assert.equal(runs.runs[0].state, "cancelled");
+  results.push("查看报告阶段停止按钮单独可用，核对事实阶段隐藏时按钮不重叠且真实取消落库");
+
+  const deniedControl = await fetch(`${api}/__harness_test__/scenario/unknown`, { method: "POST" });
+  assert.equal(deniedControl.status, 403);
+  results.push("未携带测试控制令牌的未知场景请求真实返回403");
 
   const unknown = await request(`${api}/__harness_test__/scenario/unknown`, {
     method: "POST", headers: { "X-Harness-Control": bootstrap.control_token },
   });
-  await page.setViewportSize({ width: 1440, height: 900 });
   await page.reload();
-  await page.locator(`[data-session-id="${bootstrap.session_id}"] .session-item`).click();
-  await waitUntil(async () => (await panel.getByRole("status").innerText()) === "生成已暂停");
+  await selectSession(bootstrap.session_id);
+  await waitForReportStatus("生成已暂停");
   assert(await panel.getByRole("button", { name: "继续生成", exact: true }).isDisabled());
   const suspended = await request(`${api}/api/v1/report-runs/${unknown.run_id}`, { headers });
   assert.equal(suspended.budget.unknown_requests, 1);
   await panel.getByLabel("确认重试未收到结果的请求，可能重复计费").check();
   await panel.getByLabel("历史报告").selectOption(firstId);
-  await waitUntil(async () => (await panel.getByRole("status").innerText()) === "报告已完成");
+  await waitUntil(async () => (await panel.locator(".report-status").innerText()) === "报告已完成");
   await panel.getByLabel("历史报告").selectOption(unknown.run_id);
-  await waitUntil(async () => (await panel.getByRole("status").innerText()) === "生成已暂停");
+  await waitUntil(async () => (await panel.locator(".report-status").innerText()) === "生成已暂停");
   assert.equal(await panel.getByLabel("确认重试未收到结果的请求，可能重复计费").isChecked(), false);
   assert(await panel.getByRole("button", { name: "继续生成", exact: true }).isDisabled());
   await panel.getByLabel("确认重试未收到结果的请求，可能重复计费").check();
   await panel.getByRole("button", { name: "继续生成", exact: true }).click();
-  await waitUntil(async () => (await panel.getByRole("status").innerText()) === "报告已完成", 45000);
-  results.push("合成未知请求刷新不自动重试，用户显式确认后才恢复");
+  await waitUntil(async () => (await panel.locator(".report-status").innerText()) === "报告已完成", 45000);
+  results.push("未知请求刷新不自动重试，历史切换会清除确认状态，用户显式确认后才恢复");
 
   await request(`${api}/__harness_test__/scenario/unknown`, {
     method: "POST", headers: { "X-Harness-Control": bootstrap.control_token },
   });
   await page.reload();
-  await page.locator(`[data-session-id="${bootstrap.session_id}"] .session-item`).click();
-  await waitUntil(async () => (await panel.getByRole("status").innerText()) === "生成已暂停");
+  await selectSession(bootstrap.session_id);
+  await waitForReportStatus("生成已暂停");
   assert.equal(await panel.getByLabel("确认重试未收到结果的请求，可能重复计费").isChecked(), false);
   assert(await panel.getByRole("button", { name: "继续生成", exact: true }).isDisabled());
   results.push("上一次未知请求的重复计费确认不沿用到新任务");
@@ -252,14 +319,18 @@ export async function verifyIntegratedReport({ page, bootstrap, api, output, res
   await page.route("**/api/v1/app-config", (route) => route.fulfill({
     status: 503, contentType: "application/json", body: '{"error":"unavailable"}',
   }));
-  await page.reload();
-  await page.locator(`[data-session-id="${bootstrap.session_id}"] .session-item`).click();
-  await page.getByText("读取报告服务配置失败，暂不能生成报告，请刷新页面重试。", { exact: true }).waitFor();
-  assert(await page.getByRole("button", { name: /确认.*生成/ }).first().isDisabled());
-  assert.equal(legacyRequests, 0);
-  page.off("request", observe);
-  await page.unroute("**/api/v1/app-config");
-  results.push("公开配置失败时禁止生成，不回退旧报告接口");
+  try {
+    await page.reload();
+    await selectSession(bootstrap.session_id);
+    await page.getByText("读取报告服务配置失败，暂不能生成报告，请刷新页面重试。", { exact: true }).waitFor();
+    await selectStage("核对事实");
+    assert(await factsHost.getByRole("button", { name: /确认.*生成/ }).first().isDisabled());
+    assert.equal(legacyRequests, 0);
+  } finally {
+    page.off("request", observe);
+    await page.unroute("**/api/v1/app-config");
+  }
+  results.push("公开配置失败时禁止确认生成，不回退旧报告接口");
 
   const template = JSON.parse(await readFile(
     new URL("../../backend/config/input_accident_template.json", import.meta.url), "utf8"));
@@ -273,14 +344,15 @@ export async function verifyIntegratedReport({ page, bootstrap, api, output, res
     }),
   });
   await page.reload();
-  await page.locator(`[data-session-id="${bootstrap.session_id}"] .session-item`).click();
-  await waitUntil(async () => await page.locator(".json-table-editor .value-input").count() === 37);
+  await selectSession(bootstrap.session_id);
+  await selectStage("核对事实");
+  await waitUntil(async () => await factsHost.locator(".json-table-editor .value-input").count() === 37);
   for (const width of [1440, 320]) {
     await page.setViewportSize({ width, height: 900 });
-    if (width <= 1024) await page.getByRole("button", { name: "分析与审阅", exact: true }).click();
+    await selectStage("核对事实");
     await page.waitForFunction(() => !document.getAnimations().some((animation) =>
       animation.playState === "running" && animation.effect?.getTiming().iterations !== Infinity));
-    const fields = await page.locator(".json-table-editor").evaluate((table) =>
+    const fields = await factsHost.locator(".json-table-editor").evaluate((table) =>
       [...table.querySelectorAll(".value-input")].map((input) => {
         const box = input.getBoundingClientRect();
         const cell = input.closest("td").getBoundingClientRect();
@@ -292,64 +364,84 @@ export async function verifyIntegratedReport({ page, bootstrap, api, output, res
         };
       }));
     assert(fields.every((field) => field.named && field.contained && field.readable), JSON.stringify(fields));
-    await page.locator(".json-table-editor").scrollIntoViewIfNeeded();
+    await assertStageLayout(".facts-stage-host", "长文本核对事实");
+    await factsHost.scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(output, `fields-37-${width}.png`), fullPage: true });
   }
-  await page.getByRole("button", { name: "切换为深色模式", exact: true }).click();
-  await page.locator(".json-table-editor").scrollIntoViewIfNeeded();
-  await page.screenshot({ path: path.join(output, "fields-37-dark-320.png") });
-  results.push("原模板37字段配合合成长文本在1440/320完整换行可读且不越单元格，并有字段可访问名称");
-  await page.getByRole("button", { name: "切换为浅色模式", exact: true }).click();
+  results.push("原模板37字段配合合成长文本在1440/320完整换行可读、不越单元格且保留字段可访问名称");
+
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.getByRole("button", { name: "新建对话", exact: true }).click();
-  await page.getByText("尚未生成报告", { exact: true }).waitFor();
-  for (const width of [1440, 390]) {
-    await page.setViewportSize({ width, height: 900 });
-    if (width <= 1024) await page.getByRole("button", { name: "分析与审阅", exact: true }).click();
-    await page.waitForFunction(() => !document.getAnimations().some((animation) =>
-      animation.playState === "running" && animation.effect?.getTiming().iterations !== Infinity));
-    await page.waitForFunction(() => {
-      const sidebar = document.querySelector(".sidebar");
-      return innerWidth > 768 || !sidebar || sidebar.getBoundingClientRect().right <= 1;
+  const archive = await openArchive();
+  await archive.getByRole("button", { name: "新建事故档案", exact: true }).click();
+  const newSessionId = await waitUntil(async () => {
+    await openArchive();
+    const active = page.locator("[data-session-id]").filter({
+      has: page.locator("button.session-title[aria-current='true']"),
     });
-    assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
-    await page.screenshot({ path: path.join(output, `empty-workbench-${width}.png`) });
-  }
-  results.push("新建空会话在桌面手机无横向溢出且显示真实空态");
-  await page.getByRole("button", { name: "上传事故资料", exact: true }).click();
-  const uploadDialog = page.getByRole("dialog", { name: "上传工作台" });
-  await uploadDialog.waitFor();
-  assert.equal(await uploadDialog.locator(".upload-group-panel").count(), 8);
-  const [fileChooser] = await Promise.all([
-    page.waitForEvent("filechooser"),
-    uploadDialog.getByRole("button", { name: "上传资料", exact: true }).first().click({ timeout: 10000 }),
-  ]);
-  await fileChooser.setFiles(path.join(output, "empty-workbench-390.png"));
-  await uploadDialog.getByText("empty-workbench-390.png", { exact: true }).waitFor();
-  assert.equal(await uploadDialog.getByRole("button", { name: "生成事故信息", exact: true }).isDisabled(), false);
-  for (const width of [1440, 390]) {
-    await page.setViewportSize({ width, height: 900 });
-    await page.waitForFunction(() => !document.getAnimations().some((animation) =>
-      animation.playState === "running" && animation.effect?.getTiming().iterations !== Infinity));
-    const bounds = await uploadDialog.evaluate((node) => {
-      const box = node.getBoundingClientRect();
-      return { left: box.left, right: box.right, viewport: innerWidth, overflow: node.scrollWidth > node.clientWidth + 1 };
-    });
-    assert(bounds.left >= 0 && bounds.right <= bounds.viewport && !bounds.overflow, JSON.stringify(bounds));
-    await page.screenshot({ path: path.join(output, `upload-group-${width}.png`) });
-  }
-  await uploadDialog.getByRole("button", { name: "删除", exact: true }).click();
-  assert(await uploadDialog.getByRole("button", { name: "生成事故信息", exact: true }).isDisabled());
-  await uploadDialog.getByRole("button", { name: "退出满屏", exact: true }).click();
-  await uploadDialog.waitFor({ state: "hidden" });
-  results.push("上传分组支持实际文件选择与删除，生成启用态正确，满屏桌面手机不越界");
-  await page.setViewportSize({ width: 1440, height: 900 });
-  const newSessionId = await page.locator("[data-session-id]")
-    .filter({ has: page.locator("button.session-title[aria-current='true']") })
-    .getAttribute("data-session-id");
+    return (await active.count()) > 0 ? await active.first().getAttribute("data-session-id") : null;
+  });
   assert(newSessionId && newSessionId !== bootstrap.session_id);
-  await page.locator(`[data-session-id="${bootstrap.session_id}"] button.session-title`).click();
-  await waitUntil(async () => await page.locator(".json-table-editor .value-input").count() === 37);
+  await page.keyboard.press("Escape");
+  await selectStage("整理资料");
+  await page.getByText("从事故资料开始", { exact: true }).waitFor();
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await selectStage("整理资料");
+    await assertStageLayout(".materials-stage-host", "整理资料空态");
+    assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+    await page.screenshot({ path: path.join(output, `empty-workbench-${width}.png`), fullPage: true });
+  }
+  const fixture = path.join(output, "empty-workbench-390.png");
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await selectStage("整理资料");
+  const materials = materialsHost.locator(".materials-workspace");
+  await materials.waitFor({ state: "visible" });
+  const [firstChooser] = await Promise.all([
+    page.waitForEvent("filechooser"),
+    materials.getByRole("button", { name: /添加资料到/ }).first().click(),
+  ]);
+  await firstChooser.setFiles(fixture);
+  await waitUntil(async () => await materials.locator(".materials-media-item").count() === 1);
+  const categoryTitles = await materials.locator(".materials-category-button").evaluateAll((buttons) =>
+    buttons.map((button) => button.getAttribute("title")));
+  assert.deepEqual(categoryTitles, [
+    "全部资料", "事故参与方总体概况和损坏照片", "视频", "损伤信息照片",
+    "车辆外部及外部损伤情况", "车辆内部及内部损伤情况", "其它信息", "现场", "隐私处理与截图",
+  ]);
+  assert.match(await materials.locator(".materials-add-destination").innerText(), /事故概况/);
+  await materials.getByRole("button", { name: "列表视图", exact: true }).click();
+  assert.equal(await materials.locator(".materials-media-grid.is-list").count(), 1);
+  await materials.getByRole("button", { name: "缩略图视图", exact: true }).click();
+  const firstMaterial = materials.locator(".materials-media-item").first();
+  await firstMaterial.click();
+  const materialDialog = page.locator(".materials-dialog");
+  await materialDialog.waitFor({ state: "visible" });
+  await waitUntil(async () => await materialDialog.locator("img").isVisible());
+  await materialDialog.getByRole("button", { name: "关闭资料详情", exact: true }).click();
+  await firstMaterial.click();
+  await materialDialog.getByRole("button", { name: "删除资料", exact: true }).click();
+  await waitUntil(async () => await materials.locator(".materials-media-item").count() === 0);
+
+  const videoCategory = materials.locator('.materials-category-button[title="视频"]');
+  await videoCategory.click();
+  await waitUntil(async () => (await videoCategory.getAttribute("aria-pressed")) === "true");
+  assert.match(await materials.locator(".materials-add-destination").innerText(), /视频/);
+  const [secondChooser] = await Promise.all([
+    page.waitForEvent("filechooser"),
+    materials.getByRole("button", { name: /添加资料到/ }).first().click(),
+  ]);
+  await secondChooser.setFiles(fixture);
+  await waitUntil(async () => await materials.locator(".materials-media-item").count() === 1);
+  assert.equal(await materials.locator(".materials-media-category").innerText(), "视频");
+  await materials.locator(".materials-media-item").click();
+  await materialDialog.getByRole("button", { name: "删除资料", exact: true }).click();
+  await waitUntil(async () => await materials.locator(".materials-media-item").count() === 0);
+  assert(await materials.getByRole("button", { name: "生成事故事实", exact: true }).isDisabled());
+  results.push("新建事故档案从档案抽屉进入真实资料空态，默认事故概况、八类真实分类、缩略图/列表、预览与删除路径均可用");
+
+  await selectSession(bootstrap.session_id);
+  await selectStage("核对事实");
+  await waitUntil(async () => await factsHost.locator(".json-table-editor .value-input").count() === 37);
   const beforeConflict = await request(`${api}${sessionPath}`, { headers });
   const otherDraft = JSON.stringify({ 事故标题: "另一个客户端已保存的事故" });
   await request(`${api}${sessionPath}`, {
@@ -357,10 +449,11 @@ export async function verifyIntegratedReport({ page, bootstrap, api, output, res
       expected_updated_at: beforeConflict.updated_at, draft_json: otherDraft,
     }),
   });
-  const unsaved = page.locator(".json-table-editor .value-input").first();
+  const unsaved = factsHost.locator(".json-table-editor .value-input").first();
   await unsaved.fill("当前客户端尚未保存的事故");
   const conflict = page.waitForResponse((response) => response.url().endsWith(sessionPath)
     && response.request().method() === "PUT" && response.status() === 409);
+  await openArchive();
   await page.locator(`[data-session-id="${newSessionId}"] button.session-title`).click();
   await conflict;
   await page.getByRole("alert").filter({ hasText: "未切换会话" }).waitFor();
@@ -369,5 +462,5 @@ export async function verifyIntegratedReport({ page, bootstrap, api, output, res
   assert.equal(await unsaved.inputValue(), "当前客户端尚未保存的事故");
   const afterConflict = await request(`${api}${sessionPath}`, { headers });
   assert.equal(afterConflict.draft_json, otherDraft);
-  results.push("普通失焦保存遇真实409保留本地编辑并阻止切换，不覆盖其他客户端草稿");
+  results.push("新档案切换遇真实409时保留本地编辑并阻止切换，不覆盖其他客户端草稿");
 }

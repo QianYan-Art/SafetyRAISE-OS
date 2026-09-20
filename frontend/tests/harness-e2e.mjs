@@ -18,6 +18,11 @@ const ui = "http://127.0.0.1:15174";
 const output = process.env.REPORT_HARNESS_E2E_OUTPUT
   || await fs.mkdtemp(path.join(os.tmpdir(), "safetyraise-harness-browser-"));
 await fs.mkdir(output, { recursive: true });
+async function openArchive(target) {
+  if (!(await target.getByRole("dialog", { name: "档案导航" }).isVisible())) {
+    await target.getByRole("button", { name: "打开档案列表", exact: true }).click();
+  }
+}
 assert(process.env.REPORT_HARNESS_TEST_DSN, "必须显式提供独立测试库");
 
 async function requireFreePort(port) {
@@ -128,10 +133,11 @@ try {
     await fs.writeFile(path.join(output, "results.json"), JSON.stringify({ results }, null, 2));
     console.log(JSON.stringify({ passed: results.length, results, output }));
   } else {
+  await openArchive(page);
   await page.locator(`[data-session-id="${bootstrap.session_id}"] .session-item`).click();
   const primaryModeSave = page.waitForResponse((response) => response.url().endsWith(`/api/v1/chat-sessions/${bootstrap.session_id}`)
     && response.request().method() === "PUT");
-  await page.getByRole("tab", { name: "证据报告", exact: true }).click();
+  await page.getByLabel("报告模式").selectOption("report-harness");
   assert.equal((await primaryModeSave).status(), 200);
   const headers = { Authorization: `Bearer ${bootstrap.token}`, "Content-Type": "application/json" };
   const chatSessionUrl = `${api}/api/v1/chat-sessions/${bootstrap.session_id}`;
@@ -147,10 +153,11 @@ try {
     async (locator) => locator.click(),
   );
   await secondaryPage.goto(ui);
+  await openArchive(secondaryPage);
   await secondaryPage.locator(`[data-session-id="${bootstrap.session_id}"] .session-item`).click();
   const secondaryModeSave = secondaryPage.waitForResponse((response) => response.url().endsWith(`/api/v1/chat-sessions/${bootstrap.session_id}`)
     && response.request().method() === "PUT");
-  await secondaryPage.getByRole("tab", { name: "证据报告", exact: true }).click();
+  await secondaryPage.getByLabel("报告模式").selectOption("report-harness");
   assert.equal((await secondaryModeSave).status(), 200);
   await waitUntil(async () => (await secondaryPage.locator(".json-table-editor .value-input").count()) === 1);
   trackSessionTraffic(page, "client-a", chatSessionUrl);
@@ -158,10 +165,12 @@ try {
 
   const primaryRefresh = page.waitForResponse((response) => response.url().endsWith(`/api/v1/chat-sessions/${bootstrap.session_id}`)
     && response.request().method() === "GET");
+  await openArchive(page);
   await page.locator(`[data-session-id="${bootstrap.session_id}"] .session-item`).click();
   assert.equal((await primaryRefresh).status(), 200);
   const secondaryRefresh = secondaryPage.waitForResponse((response) => response.url().endsWith(`/api/v1/chat-sessions/${bootstrap.session_id}`)
     && response.request().method() === "GET");
+  await openArchive(secondaryPage);
   await secondaryPage.locator(`[data-session-id="${bootstrap.session_id}"] .session-item`).click();
   assert.equal((await secondaryRefresh).status(), 200);
 
@@ -188,8 +197,9 @@ try {
   assert.equal(storedAfterClientA.updated_at, clientASaved.updated_at);
 
   await page.reload();
+  await openArchive(page);
   await page.locator(`[data-session-id="${bootstrap.session_id}"] .session-item`).click();
-  await page.getByRole("tab", { name: "证据报告", exact: true }).click();
+  await page.getByLabel("报告模式").selectOption("report-harness");
   await waitUntil(async () => (await page.locator(".json-table-editor .value-input").first().inputValue()) === "客户端A保存");
   results.push("真实后端会话保存后刷新仍读取客户端A编辑");
 
@@ -355,7 +365,7 @@ try {
   await page.getByRole("button", { name: "保存补充证据", exact: true }).click();
   assert.equal((await saved).status(), 200);
   await page.reload();
-  await page.getByRole("tab", { name: "证据报告", exact: true }).click();
+  await page.getByLabel("报告模式").selectOption("report-harness");
   await waitUntil(async () => (await page.getByLabel("证据内容", { exact: true }).inputValue()).includes("合成案例"));
   results.push("证据保存与刷新保持");
 
@@ -382,7 +392,8 @@ try {
   await draftBeforeSwitch.fill("切换前保存A");
   const switchSave = page.waitForResponse((response) => response.url().endsWith(`/api/v1/chat-sessions/${bootstrap.session_id}`)
     && response.request().method() === "PUT");
-  await page.getByRole("button", { name: "新建对话", exact: true }).click();
+  await openArchive(page);
+  await page.getByRole("button", { name: "新建事故档案", exact: true }).click();
   assert.equal((await switchSave).status(), 200);
   const newSessionId = await waitUntil(async () => {
     const ids = await page.locator("[data-session-id]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-session-id")));
@@ -391,8 +402,9 @@ try {
   assert(newSessionId);
   const savedAfterSwitch = await request(chatSessionUrl, { headers });
   assert(savedAfterSwitch.draft_json.includes("切换前保存A"));
+  await openArchive(page);
   await page.locator(`[data-session-id="${bootstrap.session_id}"] .session-item`).click();
-  await page.getByRole("tab", { name: "证据报告", exact: true }).click();
+  await page.getByLabel("报告模式").selectOption("report-harness");
   await waitUntil(async () => (await page.locator(".json-table-editor .value-input").first().inputValue()) === "切换前保存A");
   results.push("聚焦编辑切换到新会话前先保存，返回原会话无串写");
 
@@ -461,10 +473,11 @@ try {
   await waitUntil(async () => (await page.locator(`[data-session-id="${bootstrap.session_id}"] .session-item`).count()) === 1);
   const reloadedSessionRefresh = page.waitForResponse((response) => response.url().endsWith(`/api/v1/chat-sessions/${bootstrap.session_id}`)
     && response.request().method() === "GET");
+  await openArchive(page);
   await page.locator(`[data-session-id="${bootstrap.session_id}"] .session-item`).click();
   assert.equal((await reloadedSessionRefresh).status(), 200);
   await waitUntil(async () => (await page.locator(`[data-session-id="${bootstrap.session_id}"] .session-item.active`).count()) === 1);
-  await page.getByRole("tab", { name: "证据报告", exact: true }).click();
+  await page.getByLabel("报告模式").selectOption("report-harness");
   await waitUntil(async () => (await page.locator(".report-harness-workspace").count()) === 1);
   await waitUntil(async () => (await page.locator(".harness-run-list-item").filter({ hasText: cancelTarget.run_id }).count()) === 1);
   await page.locator(".harness-run-list-item").filter({ hasText: cancelTarget.run_id }).click();
@@ -482,10 +495,11 @@ try {
   await waitUntil(async () => (await page.locator(`[data-session-id="${bootstrap.session_id}"] .session-item`).count()) === 1);
   const queuedSessionRefresh = page.waitForResponse((response) => response.url().endsWith(`/api/v1/chat-sessions/${bootstrap.session_id}`)
     && response.request().method() === "GET");
+  await openArchive(page);
   await page.locator(`[data-session-id="${bootstrap.session_id}"] .session-item`).click();
   assert.equal((await queuedSessionRefresh).status(), 200);
   await waitUntil(async () => (await page.locator(`[data-session-id="${bootstrap.session_id}"] .session-item.active`).count()) === 1);
-  await page.getByRole("tab", { name: "证据报告", exact: true }).click();
+  await page.getByLabel("报告模式").selectOption("report-harness");
   await waitUntil(async () => (await page.locator(".report-harness-workspace").count()) === 1);
   await waitUntil(async () => (await page.locator(".harness-run-list-item").filter({ hasText: queued.run_id }).count()) === 1);
   await page.locator(".harness-run-list-item").filter({ hasText: queued.run_id }).click();

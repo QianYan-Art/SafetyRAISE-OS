@@ -279,6 +279,7 @@ function isApiNotFound(error: unknown): boolean {
 
 export interface ReportHarnessPanelHandle {
   flushDraft: (expectedSessionId?: string) => Promise<void>;
+  isTransitionBlocked: () => boolean;
 }
 
 type ReportHarnessPanelProps = {
@@ -369,6 +370,11 @@ export const ReportHarnessPanel = forwardRef<ReportHarnessPanelHandle, ReportHar
   useImperativeHandle(
     ref,
     () => ({
+      isTransitionBlocked: () => Boolean(
+        streamAbortControllerRef.current || savingEvidence || creatingRun || authorizing
+        || (selectedRun && !RUN_TERMINAL_STATES.has(selectedRun.state)
+          && selectedRun.state !== "queued" && selectedRun.state !== "suspended"),
+      ),
       flushDraft: async (expectedSessionId) => {
         if (expectedSessionId && sessionIdRef.current !== expectedSessionId) {
           throw new Error("当前编辑不属于请求离开的会话。");
@@ -389,7 +395,7 @@ export const ReportHarnessPanel = forwardRef<ReportHarnessPanelHandle, ReportHar
         }
       },
     }),
-    [persistDraft],
+    [persistDraft, savingEvidence, creatingRun, authorizing, selectedRun],
   );
 
   const loadWorkspace = useCallback(async (append = false) => {

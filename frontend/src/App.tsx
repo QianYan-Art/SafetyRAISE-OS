@@ -1,6 +1,9 @@
 import { ChangeEvent, DragEvent, KeyboardEvent as ReactKeyboardEvent, MouseEvent, TouchEvent, useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { PanelLeft, X, Settings2, History, Pencil, ChevronRight, FileText, ClipboardList } from "lucide-react";
+import { MaterialsWorkspace } from "./MaterialsWorkspace";
+import { useDialogFocus } from "./useDialogFocus";
 
 import {
   ApiError,
@@ -699,6 +702,11 @@ function WorkspaceApp({
   const [uploadNoticeMessage, setUploadNoticeMessage] = useState("");
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
+  const [workspaceStage, setWorkspaceStage] = useState<"materials" | "facts" | "report">("materials");
+  const [isActivityOpen, setIsActivityOpen] = useState(false);
+  const archiveRef = useRef<HTMLElement>(null);
+  const archiveTriggerRef = useRef<HTMLButtonElement>(null);
+  const workspaceMainRef = useRef<HTMLElement>(null);
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
@@ -708,7 +716,6 @@ function WorkspaceApp({
   const [liveLinkedArtifacts, setLiveLinkedArtifacts] = useState<ChatSessionLinkedArtifact[] | null>(null);
 
   const [mobileActionMenuId, setMobileActionMenuId] = useState<string | null>(null);
-  const [mobileTab, setMobileTab] = useState<'chat' | 'review'>('chat');
   const mobileRenamePressTimerRef = useRef<number | null>(null);
   const mobileRenameTouchOriginRef = useRef<{ x: number; y: number } | null>(null);
   const mobileRenameTriggeredRef = useRef(false);
@@ -785,12 +792,14 @@ function WorkspaceApp({
   const [integratedReportCancelling, setIntegratedReportCancelling] = useState(false);
   const [integratedReportStatus, setIntegratedReportStatus] = useState("正在生成报告");
   const [publicConfigStatus, setPublicConfigStatus] = useState<"loading" | "ready" | "failed">("loading");
-  const harnessOnline = publicAppConfig.report_harness?.online_enabled === true;
+  const harnessEnabled = publicConfigStatus === "ready" && publicAppConfig.report_harness?.enabled === true;
+  const harnessOnline = harnessEnabled && publicAppConfig.report_harness?.online_enabled === true;
   const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
   const [artifactPreview, setArtifactPreview] = useState<ArtifactPreviewState | null>(null);
+  const artifactPreviewDialogRef = useRef<HTMLDivElement>(null);
+  useDialogFocus(artifactPreviewDialogRef, Boolean(artifactPreview));
   const [exportingFormat, setExportingFormat] = useState<ReportExportFormat | null>(null);
   const [isPdfStudioOpen, setIsPdfStudioOpen] = useState(false);
-  const [isUploadWorkbenchExpanded, setIsUploadWorkbenchExpanded] = useState(false);
   const [pdfCoverDraft, setPdfCoverDraft] = useState<PdfCoverDraft>(() => buildDefaultPdfCoverDraft(""));
   const [userModelConfigState, setUserModelConfigState] = useState<CapabilityConfigState | null>(null);
   const [isUserModelDrawerOpen, setIsUserModelDrawerOpen] = useState(false);
@@ -817,6 +826,40 @@ function WorkspaceApp({
   const isAdminUser = currentUser.role === "admin";
   const uploadDropzoneHintLines = buildUploadDropzoneHintLines(publicAppConfig.upload_limits);
   const shouldShowUploadWorkbench = Boolean(activeSession && !activeSession.draftJson && !activeSession.reportResult);
+
+  useEffect(() => {
+    setWorkspaceStage(activeSession?.reportResult ? "report" : activeSession?.draftJson ? "facts" : "materials");
+  }, [activeSessionId, Boolean(activeSession?.draftJson), Boolean(activeSession?.reportResult)]);
+
+  useEffect(() => {
+    if (!harnessEnabled) setWorkspaceMode("legacy");
+  }, [harnessEnabled]);
+
+  useEffect(() => {
+    if (!isMobileSidebarOpen) return;
+    const main = workspaceMainRef.current;
+    const previousFocus = document.activeElement as HTMLElement | null;
+    if (main) main.inert = true;
+    archiveRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { setIsMobileSidebarOpen(false); return; }
+      if (event.key !== "Tab") return;
+      const elements = Array.from(archiveRef.current?.querySelectorAll<HTMLElement>("button,input,a") ?? [])
+        .filter(node => !node.hasAttribute("disabled") && node.offsetParent !== null);
+      if (!elements.length) return;
+      if (event.shiftKey && document.activeElement === elements[0]) {
+        event.preventDefault(); elements[elements.length - 1]?.focus();
+      } else if (!event.shiftKey && document.activeElement === elements[elements.length - 1]) {
+        event.preventDefault(); elements[0].focus();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => {
+      if (main) main.inert = false;
+      document.removeEventListener("keydown", onKey);
+      if (previousFocus?.isConnected) previousFocus.focus();
+    };
+  }, [isMobileSidebarOpen]);
 
   useEffect(() => {
     sessionsRef.current = sessions;
@@ -956,7 +999,7 @@ function WorkspaceApp({
     }
     if (sessions.length === 0 && !activeSessionId) {
       createNewSession({
-        title: formatCurrentTime(),
+        title: "未命名事故",
         messages: [
           createMessage("system", "text", WELCOME_MESSAGE),
         ],
@@ -971,17 +1014,10 @@ function WorkspaceApp({
     setErrorMessage("");
     setUploadNoticeMessage("");
     setIsPdfStudioOpen(false);
-    setIsUploadWorkbenchExpanded(false);
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
   }, [activeSessionId]);
-
-  useEffect(() => {
-    if (!shouldShowUploadWorkbench) {
-      setIsUploadWorkbenchExpanded(false);
-    }
-  }, [shouldShowUploadWorkbench]);
 
   useEffect(() => {
     const sessionId = activeSession?.id;
@@ -1024,7 +1060,7 @@ function WorkspaceApp({
   ]);
 
   useEffect(() => {
-    if (!artifactPreview && !isUploadWorkbenchExpanded) {
+    if (!artifactPreview) {
       return;
     }
     const previousOverflow = document.body.style.overflow;
@@ -1032,10 +1068,10 @@ function WorkspaceApp({
     return () => {
       document.body.style.overflow = previousOverflow;
     };
-  }, [artifactPreview, isUploadWorkbenchExpanded]);
+  }, [artifactPreview]);
 
   useEffect(() => {
-    if (!artifactPreview && !isUploadWorkbenchExpanded) {
+    if (!artifactPreview) {
       return;
     }
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -1045,13 +1081,10 @@ function WorkspaceApp({
       if (artifactPreview) {
         setArtifactPreview(null);
       }
-      if (isUploadWorkbenchExpanded) {
-        setIsUploadWorkbenchExpanded(false);
-      }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [artifactPreview, isUploadWorkbenchExpanded]);
+  }, [artifactPreview]);
 
   useEffect(() => {
     const reportMarkdown = activeSession?.reportResult?.report.report_markdown;
@@ -1246,6 +1279,12 @@ function WorkspaceApp({
   );
 
   function beginSessionTransition(operation: (sequence: number) => Promise<void>): Promise<void> | null {
+    if (inputGeneratingSessionIdRef.current || reportGeneratingSessionIdRef.current
+      || integratedReportRef.current?.isTransitionBlocked()
+      || reportHarnessRef.current?.isTransitionBlocked()) {
+      setErrorMessage("当前档案正在生成，请等待完成或停止报告后再切换、新建、删除档案或退出登录。");
+      return null;
+    }
     if (sessionTransitionRef.current) {
       return null;
     }
@@ -1358,9 +1397,11 @@ function WorkspaceApp({
         return;
       }
       resetPendingUploadState();
+      setIsMobileSidebarOpen(false);
+      setAppView("workspace");
       setErrorMessage("");
       const nextSession = createNewSession({
-        title: formatCurrentTime(),
+        title: "未命名事故",
         messages: [
           createMessage("system", "text", WELCOME_MESSAGE),
         ],
@@ -1376,13 +1417,13 @@ function WorkspaceApp({
     setPendingUploadGroups(createInitialPendingUploadGroups());
     setPendingUploadTargetGroupId(null);
     setUploadNoticeMessage("");
-    setIsUploadWorkbenchExpanded(false);
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
   }
 
   function handleRemovePendingFile(groupId: string, itemId: string) {
+    if (isGeneratingInput) return;
     setPendingUploadGroups((current) => removePendingUploadItem(current, groupId, itemId));
     setErrorMessage("");
     setUploadNoticeMessage("");
@@ -1401,6 +1442,11 @@ function WorkspaceApp({
       return;
     }
 
+    handleAppendFiles(targetGroupId, files);
+  }
+
+  function handleAppendFiles(targetGroupId: string, files: File[]) {
+    if (isGeneratingInput || files.length === 0) return;
     const validationResult = validatePendingUploadSelection(
       pendingUploadGroups,
       targetGroupId,
@@ -1426,14 +1472,6 @@ function WorkspaceApp({
   function handleTriggerUploadClick(groupId: string) {
     setPendingUploadTargetGroupId(groupId);
     fileInputRef.current?.click();
-  }
-
-  function handleOpenUploadWorkbench() {
-    setIsUploadWorkbenchExpanded(true);
-  }
-
-  function handleCloseUploadWorkbench() {
-    setIsUploadWorkbenchExpanded(false);
   }
 
   async function handleOpenArtifactPreview(category: string) {
@@ -1495,7 +1533,6 @@ function WorkspaceApp({
     setErrorMessage("");
     setUploadNoticeMessage("");
     setIsGeneratingInput(true);
-    setIsUploadWorkbenchExpanded(false);
 
     const batchLabel = formatBatchMediaLabel(uploadPayload.files);
     const selectedNames = describePendingUploadGroups(pendingUploadGroups);
@@ -1603,7 +1640,6 @@ function WorkspaceApp({
       setUserModelConfigError("");
       const nextState = await updateUserModelConfigs(payload);
       setUserModelConfigState(nextState);
-      setIsUserModelDrawerOpen(false);
     } catch (error) {
       setUserModelConfigError(resolveUiErrorMessage(error, "保存个人模型配置失败。"));
       throw error;
@@ -1636,6 +1672,7 @@ function WorkspaceApp({
         setErrorMessage("报告区域尚未就绪，请稍后重试。");
         return;
       }
+      setWorkspaceStage("report");
       await integratedReportRef.current.generate(confirmedJsonString);
       return;
     }
@@ -1650,6 +1687,7 @@ function WorkspaceApp({
 
     setErrorMessage("");
     setIsGeneratingReport(true);
+    setWorkspaceStage("report");
     setReportingSessionId(sessionId);
 
     const currentSession = getSessionSnapshot(sessionId);
@@ -2095,6 +2133,7 @@ function WorkspaceApp({
         return;
       }
       setActiveSessionId(sessionId);
+      setAppView("workspace");
       activeSessionIdRef.current = sessionId;
       setMobileActionMenuId(null);
       if (isMobileSidebarOpen) {
@@ -2108,6 +2147,7 @@ function WorkspaceApp({
   }
 
   async function handleWorkspaceModeChange(nextMode: WorkspaceMode) {
+    if (nextMode === "report-harness" && (!harnessEnabled || harnessOnline)) return;
     if (workspaceMode === nextMode) {
       return;
     }
@@ -2306,6 +2346,7 @@ function WorkspaceApp({
           <span>{currentUser.username}</span>
         </div>
         <div className="account-popover-actions">
+          {renderThemeToggle()}
           {isAdminUser ? (
             <button
               type="button"
@@ -2313,6 +2354,7 @@ function WorkspaceApp({
               onClick={() => {
                 setIsUserModelDrawerOpen(true);
                 setIsAccountMenuOpen(false);
+                setIsMobileSidebarOpen(false);
               }}
             >
               模型配置调整
@@ -2324,6 +2366,7 @@ function WorkspaceApp({
               onClick={() => {
                 setIsUserModelDrawerOpen(true);
                 setIsAccountMenuOpen(false);
+                setIsMobileSidebarOpen(false);
               }}
             >
               模型配置调整
@@ -2481,247 +2524,13 @@ function WorkspaceApp({
     );
   }
 
-  function renderUploadWorkbenchSurface(fullscreen = false) {
-    const pendingStats = getPendingUploadStats(pendingUploadGroups);
-    const totalBufferedItems = pendingStats.totalImages + pendingStats.totalVideos;
-    return (
-      <div className={`upload-workbench ${fullscreen ? "is-fullscreen" : "is-inline"}`}>
-        {!fullscreen ? renderBrandWatermark("workspace-watermark is-inline") : null}
-        {fullscreen ? (
-          <div className="upload-workbench-toolbar">
-            <div className="upload-workbench-toolbar-main">
-              <div className="upload-workbench-topline">
-                <span className="upload-workbench-kicker">首传分组工作台</span>
-                <span className="upload-workbench-mode-badge">{pendingUploadGroups.length} 个固定分组</span>
-              </div>
-              <div className="upload-workbench-toolbar-titleline">
-                <h3>事故资料分组整理台</h3>
-                <p className="upload-workbench-toolbar-copy">
-                  <span>请先按分组上传首轮材料，确认无误后再开始生成事故信息；</span>
-                  <span>每组最多 20 张图片、5 个视频；</span>
-                  <span>生成前可随时删改。</span>
-                </p>
-              </div>
-            </div>
-            <div className="upload-workbench-toolbar-side">
-              <div className="upload-workbench-toolbar-stats">
-                <span>已整理 {pendingStats.activeGroupCount}/{pendingUploadGroups.length} 组</span>
-                <span>图片 {pendingStats.totalImages}</span>
-                <span>视频 {pendingStats.totalVideos}</span>
-                <span>{formatSizeLimit(pendingStats.totalBytes || 0)}</span>
-              </div>
-              <div className="upload-workbench-action-row">
-                <button
-                  type="button"
-                  className="upload-workbench-secondary"
-                  onClick={handleCloseUploadWorkbench}
-                  disabled={isGeneratingInput}
-                >
-                  <span className="upload-workbench-button-label">退出满屏</span>
-                </button>
-                <button
-                  className="upload-workbench-primary"
-                  type="button"
-                  onClick={() => void handleGenerateInput()}
-                  disabled={isGeneratingInput || !hasPendingUploads(pendingUploadGroups)}
-                >
-                  {isGeneratingInput ? (
-                    <span className="upload-workbench-button-content">
-                      <span className="spinner" />
-                      <span className="upload-workbench-button-label">事故信息生成中</span>
-                    </span>
-                  ) : (
-                    <span className="upload-workbench-button-label">生成事故信息</span>
-                  )}
-                </button>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div className="upload-workbench-hero">
-            <div className="upload-workbench-copy">
-              <div className="upload-workbench-topline">
-                <span className="upload-workbench-kicker">首传分组工作台</span>
-                <span className="upload-workbench-mode-badge">{pendingUploadGroups.length} 个固定分组</span>
-              </div>
-              <div className="upload-workbench-title-block">
-                <h3>事故资料分组整理</h3>
-                <p>请先按事故概况、视频、现场、车损与隐私材料完成分组上传，系统会按当前分组与顺序生成事故信息草稿。</p>
-              </div>
-              <div className="upload-workbench-summary-grid">
-                <div className="upload-workbench-summary-item">
-                  <span>已整理</span>
-                  <strong>{pendingStats.activeGroupCount}</strong>
-                </div>
-                <div className="upload-workbench-summary-item">
-                  <span>材料数</span>
-                  <strong>{totalBufferedItems}</strong>
-                </div>
-                <div className="upload-workbench-summary-item">
-                  <span>图 / 视频</span>
-                  <strong>{pendingStats.totalImages}/{pendingStats.totalVideos}</strong>
-                </div>
-                <div className="upload-workbench-summary-item">
-                  <span>缓冲体积</span>
-                  <strong>{formatSizeLimit(pendingStats.totalBytes || 0)}</strong>
-                </div>
-              </div>
-            </div>
-            <div className="upload-workbench-actions">
-              <div className="upload-workbench-stats">
-                <span className="upload-workbench-stats-label">当前整理状态</span>
-                <strong>{formatPendingUploadStatLine(pendingUploadGroups)}</strong>
-              </div>
-              <div className="upload-workbench-action-row">
-                <button
-                  type="button"
-                  className="upload-workbench-secondary"
-                  onClick={handleOpenUploadWorkbench}
-                  disabled={isGeneratingInput}
-                >
-                  <span className="upload-workbench-button-label">上传事故资料</span>
-                </button>
-                <button
-                  className="upload-workbench-primary"
-                  type="button"
-                  onClick={() => void handleGenerateInput()}
-                  disabled={isGeneratingInput || !hasPendingUploads(pendingUploadGroups)}
-                >
-                  {isGeneratingInput ? (
-                    <span className="upload-workbench-button-content">
-                      <span className="spinner" />
-                      <span className="upload-workbench-button-label">事故信息生成中</span>
-                    </span>
-                  ) : (
-                    <span className="upload-workbench-button-label">生成事故信息</span>
-                  )}
-                </button>
-              </div>
-                <div className="upload-workbench-guidelines">
-                  <div className="upload-workbench-guideline">
-                    <span>上传限制</span>
-                    <strong>支持 JPG/PNG 图片与 MP4 视频，每组可多次追加。</strong>
-                  </div>
-                  <div className="upload-workbench-guideline">
-                    <span>缓冲规则</span>
-                    <strong>{`图片≤${formatSizeLimit(publicAppConfig.upload_limits.max_image_bytes)}，视频≤${formatSizeLimit(publicAppConfig.upload_limits.max_video_bytes)}，总量≤${formatSizeLimit(publicAppConfig.upload_limits.max_total_bytes)}。`}</strong>
-                  </div>
-                </div>
-            </div>
-          </div>
-        )}
-        {fullscreen && (
-          <div className="upload-workbench-grid-shell">
-            <div className="upload-workbench-boardhead">
-              <div className="upload-workbench-boardcopy">
-                <span className="upload-workbench-boardkicker">分组台面</span>
-                <p>每个分组都可以多次追加。空分组会被自动跳过，已加入缓冲区的文件在生成前都可以删除。</p>
-              </div>
-              <span className="upload-workbench-boardmode">满屏整理模式</span>
-            </div>
-            <div className="upload-group-grid">
-              {pendingUploadGroups.map((group) => {
-                const imageCount = group.items.filter((item) => item.mediaType === "image").length;
-                const videoCount = group.items.filter((item) => item.mediaType === "video").length;
-                return (
-                  <section key={group.id} className={`upload-group-panel ${group.items.length > 0 ? "has-files" : ""}`}>
-                    <div className="upload-group-panel-top">
-                      <div className="upload-group-heading">
-                        <div className="upload-group-heading-topline">
-                          <span className="upload-group-seq">分组 {group.sequence}</span>
-                          <span className={`upload-group-state ${group.items.length > 0 ? "is-ready" : "is-empty"}`}>
-                            {group.items.length > 0 ? "已缓冲" : "待添加"}
-                          </span>
-                        </div>
-                        <h4 className={getUploadGroupTitleClassName(group.label)}>{group.label}</h4>
-                        <p className={`upload-group-description ${group.subtitle ? "" : "is-blank"}`}>
-                          {group.subtitle || "\u00A0"}
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        className="upload-group-trigger"
-                        onClick={() => handleTriggerUploadClick(group.id)}
-                        disabled={isGeneratingInput}
-                      >
-                        {group.items.length > 0 ? "继续添加" : "上传资料"}
-                      </button>
-                    </div>
-                    <div className="upload-group-metrics">
-                      <span>{imageCount} 张图片</span>
-                      <span>{videoCount} 个视频</span>
-                      <span>{formatSizeLimit(group.items.reduce((sum, item) => sum + item.sizeBytes, 0))}</span>
-                    </div>
-                    <div className="upload-group-stage">
-                      {group.items.length > 0 ? (
-                        <div className="upload-group-stage-filled">
-                          <div className="upload-group-stage-head">
-                            <span>缓冲区清单</span>
-                            <strong>{group.items.length} 项</strong>
-                          </div>
-                          <div className="upload-buffer-list">
-                            {group.items.map((item, index) => (
-                              <div key={item.id} className="upload-buffer-item">
-                                <div className="upload-buffer-copy">
-                                  <span>{item.mediaType === "video" ? "视频" : "图片"} {index + 1}</span>
-                                  <strong>{item.file.name}</strong>
-                                  <p>{formatSizeLimit(item.sizeBytes)}</p>
-                                </div>
-                                <button
-                                  type="button"
-                                  className="upload-buffer-delete"
-                                  onClick={() => handleRemovePendingFile(group.id, item.id)}
-                                  disabled={isGeneratingInput}
-                                >
-                                  删除
-                                </button>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="upload-group-empty">
-                          <strong>当前暂无材料</strong>
-                          <span>点击上方上传，将该类图片或视频加入缓冲区。</span>
-                        </div>
-                      )}
-                    </div>
-                  </section>
-                );
-              })}
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  function renderUploadWorkbenchDialog() {
-    if (!shouldShowUploadWorkbench || !isUploadWorkbenchExpanded) {
-      return null;
-    }
-    return (
-      <div className="upload-workbench-overlay" onClick={handleCloseUploadWorkbench}>
-        <div
-          className="upload-workbench-shell"
-          role="dialog"
-          aria-modal="true"
-          aria-label="上传工作台"
-          onClick={(event) => event.stopPropagation()}
-        >
-          {renderUploadWorkbenchSurface(true)}
-        </div>
-      </div>
-    );
-  }
-
   function renderArtifactPreviewDialog() {
     if (!artifactPreview) {
       return null;
     }
     return (
       <div className="artifact-preview-overlay" onClick={handleCloseArtifactPreview}>
-        <div className="artifact-preview-shell" onClick={(event) => event.stopPropagation()}>
+        <div ref={artifactPreviewDialogRef} className="artifact-preview-shell" role="dialog" aria-modal="true" aria-label="关联产物预览" onClick={(event) => event.stopPropagation()}>
           <div className="artifact-preview-header">
             <div>
               <span className="artifact-preview-kicker">本会话关联产物预览</span>
@@ -2784,38 +2593,32 @@ function WorkspaceApp({
   }
 
   return (
-    <div className={`app-container safety-workbench theme-${themeMode}`}>
+    <div className={`app-container safety-workbench evidence-workspace theme-${themeMode}`}>
       {isMobileSidebarOpen && (
         <div className="mobile-overlay" onClick={() => setIsMobileSidebarOpen(false)} />
       )}
-      <aside className={`sidebar ${isSidebarOpen ? "" : "collapsed"} ${isMobileSidebarOpen ? "mobile-open" : ""}`}>
+      <aside ref={archiveRef} hidden={!isMobileSidebarOpen} role="dialog" aria-modal="true" aria-label="档案导航" className="sidebar archive-drawer">
         <div className="sidebar-header">
           {isSidebarOpen && (
             <div className="sidebar-logo">
-              <img src="/logo.png" alt="Logo" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+              <img src="/logo.png" alt="" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+              <span>SafetyRAISE<small>事故分析</small></span>
             </div>
           )}
           <button 
-            className="toggle-sidebar-btn desktop-only" 
-            onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-            title={isSidebarOpen ? "收起侧边栏" : "展开侧边栏"}
-          >
-            <SidebarIcon isOpen={isSidebarOpen} />
-          </button>
-          <button 
-            className="toggle-sidebar-btn mobile-only" 
+            className="toggle-sidebar-btn"
             onClick={() => setIsMobileSidebarOpen(false)}
-            title="收起侧边栏"
+            title="关闭档案导航"
           >
-            <MenuIcon />
+            <X size={18} />
           </button>
         </div>
 
         <>
           <div className="sidebar-menu">
-            <button className="sidebar-menu-btn" onClick={handleAddSession} title="新建对话">
+            <button className="sidebar-menu-btn" onClick={handleAddSession} title="新建事故档案">
               <ChatPlusIcon />
-              {isSidebarOpen && <span>新建对话</span>}
+              {isSidebarOpen && <span>新建事故档案</span>}
             </button>
             
             <div className="search-container">
@@ -2825,12 +2628,12 @@ function WorkspaceApp({
                   setIsSearchActive(!isSearchActive);
                   if (!isSidebarOpen) setIsSidebarOpen(true);
                 }}
-                title="搜索对话"
+                title="搜索档案"
               >
                 <SearchIcon />
                 {isSidebarOpen && (
                   !isSearchActive ? (
-                    <span>搜索对话</span>
+                    <span>搜索档案</span>
                   ) : (
                     <input 
                       autoFocus
@@ -2850,7 +2653,7 @@ function WorkspaceApp({
           {isSidebarOpen && (
             <>
               <div className="session-list-header">
-                所有对话
+                最近档案
               </div>
 
               <div className="session-list">
@@ -2941,6 +2744,7 @@ function WorkspaceApp({
                         })()}
                       </div>
                       <div className="session-item-right">
+                        <button type="button" className="session-rename-button" title={`重命名 ${session.title}`} onClick={event => handleStartRename(session, event)}><Pencil size={14} /></button>
                         <span className="session-date">
                           {formatSessionCardDate(session.createdAt)}
                         </span>
@@ -3010,8 +2814,8 @@ function WorkspaceApp({
               <span className="brand-avatar">{currentUser.username.slice(0, 1).toUpperCase()}</span>
               {isSidebarOpen && (
                 <div className="sidebar-account-copy">
-                  <strong>{isAdminUser ? currentUser.username : (currentUser.display_name || currentUser.username)}</strong>
-                  <span>{isAdminUser ? "管理员账号" : currentUser.username}</span>
+                  <strong title={currentUser.username}>{currentUser.username}</strong>
+                  <span>{isAdminUser ? "管理员" : "普通用户"}</span>
                 </div>
               )}
             </button>
@@ -3020,57 +2824,49 @@ function WorkspaceApp({
         </div>
       </aside>
 
-      <main className="main-content">
+      <main ref={workspaceMainRef} className="main-content">
         <header className={`page-header ${appView === "admin" ? "is-admin-header" : ""}`}>
           <div className="page-header-title-group">
             <button
-              className="mobile-menu-btn"
+              ref={archiveTriggerRef}
+              className="archive-trigger"
               onClick={() => setIsMobileSidebarOpen(true)}
-              title="打开侧边栏"
-              aria-label="打开侧边栏"
+              title="打开档案列表"
+              aria-label="打开档案列表"
+              aria-expanded={isMobileSidebarOpen}
             >
-              <MenuIcon />
+              <PanelLeft size={18} />
             </button>
             {appView === "admin" ? (
               renderAdminHeaderTabs()
             ) : (
               <div>
-                <h1>SafetyRAISE <span className="workbench-title-divider">/</span> <span className="workbench-title-category">事故分析</span></h1>
+                <h1 title={activeSession.title}>{activeSession.title}</h1>
               </div>
             )}
           </div>
+          {appView === "workspace" && workspaceMode === "legacy" && (
+            <nav className="workspace-stages" aria-label="事故处理阶段">
+              {([{ id: "materials", label: "整理资料" }, { id: "facts", label: "核对事实" }, { id: "report", label: "查看报告" }] as const).map((step, index) => (
+                <button type="button" key={step.id} aria-current={workspaceStage === step.id ? "step" : undefined} onClick={() => setWorkspaceStage(step.id)}>
+                  <span>{index + 1}</span>{step.label}{index < 2 && <ChevronRight size={12} />}
+                </button>
+              ))}
+            </nav>
+          )}
           <div className="page-header-actions">
+            {appView === "workspace" && <button type="button" className="workspace-icon" title="处理记录" aria-pressed={isActivityOpen} onClick={() => setIsActivityOpen(value => !value)}><History size={18} /></button>}
+            <button type="button" className="workspace-icon" title="模型配置调整" onClick={() => setIsUserModelDrawerOpen(true)}><Settings2 size={18} /></button>
             {renderHeaderAdminToggle()}
-            {renderThemeToggle()}
+            <span className="workspace-username" title={`${currentUser.username} · ${isAdminUser ? "管理员" : "普通用户"}`}>{currentUser.username}</span>
+            {harnessEnabled && !harnessOnline && appView === "workspace" && <select aria-label="报告模式" value={workspaceMode} onChange={event => void handleWorkspaceModeChange(event.target.value as WorkspaceMode)}><option value="legacy">分析报告</option><option value="report-harness">增强审查</option></select>}
           </div>
         </header>
         {appView === "admin" && isAdminUser ? (
           <AdminConsole currentUser={currentUser} activeTab={adminTab} />
         ) : (
           <>
-            {!harnessOnline && <div className="workspace-mode-switch" role="tablist" aria-label="报告模式">
-              <span className="workspace-mode-label">报告模式</span>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={workspaceMode === "legacy"}
-                className={`workspace-mode-tab ${workspaceMode === "legacy" ? "is-active" : ""}`}
-                 onClick={() => void handleWorkspaceModeChange("legacy")}
-              >
-                旧报告
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={workspaceMode === "report-harness"}
-                className={`workspace-mode-tab ${workspaceMode === "report-harness" ? "is-active" : ""}`}
-                 onClick={() => void handleWorkspaceModeChange("report-harness")}
-              >
-                证据报告
-              </button>
-            </div>}
-
-            {workspaceMode === "report-harness" && !harnessOnline ? (
+            {harnessEnabled && workspaceMode === "report-harness" && !harnessOnline ? (
               <div className="workspace report-harness-workspace">
                 <ReportHarnessPanel
                   ref={reportHarnessRef}
@@ -3082,27 +2878,11 @@ function WorkspaceApp({
               </div>
             ) : (
               <>
-            <div className="mobile-tabs mobile-only">
-              <button 
-                className={`mobile-tab-btn ${mobileTab === 'chat' ? 'active' : ''}`}
-                aria-pressed={mobileTab === "chat"}
-                onClick={() => setMobileTab('chat')}
-              >
-                对话交互
-              </button>
-              <button 
-                className={`mobile-tab-btn ${mobileTab === 'review' ? 'active' : ''}`}
-                aria-pressed={mobileTab === "review"}
-                onClick={() => setMobileTab('review')}
-              >
-                分析与审阅
-              </button>
-            </div>
-
             <div className="workspace workspace-grid">
-              <section className={`panel conversation-panel ${mobileTab !== 'chat' ? 'mobile-hidden' : ''}`}>
+              <section className="panel conversation-panel" hidden={!isActivityOpen} aria-label="处理记录">
                 <div className="panel-header">
-                  <h2>聊天与记录</h2>
+                  <h2>处理记录</h2>
+                  <button type="button" className="workspace-icon" title="关闭处理记录" onClick={() => setIsActivityOpen(false)}><X size={18} /></button>
                 </div>
                 <div className="panel-body chat-list" ref={chatListRef}>
                   {activeSession.messages.length === 0 && (
@@ -3158,11 +2938,8 @@ function WorkspaceApp({
                 </div>
               </section>
 
-              <section className={`panel review-panel ${mobileTab !== 'review' ? 'mobile-hidden' : ''}`}>
-                <div className="panel-header">
-                  <h2>操作与审阅区</h2>
-                </div>
-                <div className="panel-body">
+              <section className={`panel review-panel stage-${workspaceStage}`}>
+                <div className="panel-body stage-body">
                   {publicConfigStatus === "failed" && (
                     <div className="error-text" role="alert">读取报告服务配置失败，暂不能生成报告，请刷新页面重试。</div>
                   )}
@@ -3175,7 +2952,7 @@ function WorkspaceApp({
                   {syncError && <div className="error-text" role="alert">会话记录同步提醒：{syncError}</div>}
 
                   {activeLinkedArtifacts.length > 0 && (
-                    <div className="artifact-wall-panel">
+                    <div className="artifact-wall-panel" hidden={workspaceStage !== "materials"}>
                       <div className="artifact-wall-header">
                         <h3>本会话关联文件</h3>
                         <span>{activeLinkedArtifacts.length} 项</span>
@@ -3213,10 +2990,22 @@ function WorkspaceApp({
                     onChange={handleFileChange}
                   />
 
-                  {shouldShowUploadWorkbench && renderUploadWorkbenchSurface()}
+                  <div className="materials-stage-host" hidden={workspaceStage !== "materials"}>
+                    {shouldShowUploadWorkbench ? <MaterialsWorkspace
+                      key={activeSession.id}
+                      groups={pendingUploadGroups}
+                      limits={publicAppConfig.upload_limits}
+                      busy={isGeneratingInput}
+                      onAdd={handleTriggerUploadClick}
+                      onDropFiles={handleAppendFiles}
+                      onRemove={handleRemovePendingFile}
+                      onGenerate={() => void handleGenerateInput()}
+                    /> : <div className="saved-material-note">当前档案的资料已处理，可查看关联资料或继续核对事实。<button type="button" className="btn-secondary" onClick={() => setWorkspaceStage("facts")}>核对事实</button></div>}
+                  </div>
 
-                  {activeSession.draftJson && (harnessOnline || !activeSession.reportResult) && (
-                    <div>
+                  {!activeSession.draftJson && workspaceStage === "facts" && <div className="stage-empty"><ClipboardList size={40} /><h2>尚未生成事故事实</h2><button type="button" className="btn-secondary" onClick={() => setWorkspaceStage("materials")}>整理资料</button></div>}
+                  {activeSession.draftJson && (
+                    <div className="facts-stage-host" hidden={workspaceStage !== "facts"}>
                        <div className="accident-section-heading">
                           <h3>事故信息</h3>
                           {activeSession.draftMeta?.media_type && (
@@ -3229,12 +3018,13 @@ function WorkspaceApp({
                             </span>
                           )}
                        </div>
+                       {activeSession.reportResult && !harnessOnline && <p className="facts-readonly-note">这是本报告使用的事故事实，当前只读。</p>}
                        <JsonTableEditor 
                           initialJson={activeSession.draftJson}
                           resetKey={activeSession.id}
                           onAutoSave={handleAutoSaveDraft}
                           onConfirm={handleConfirmAndGenerateReport}
-                          disabled={publicConfigStatus !== "ready"
+                          disabled={Boolean(activeSession.reportResult && !harnessOnline) || publicConfigStatus !== "ready"
                             || (harnessOnline && publicAppConfig.report_harness?.available === false)
                             || (harnessOnline ? integratedReportBusy : isGeneratingReport)}
                           isGeneratingReport={harnessOnline ? integratedReportActive : isGeneratingReport && activeSession.id === reportingSessionId}
@@ -3245,6 +3035,7 @@ function WorkspaceApp({
                     </div>
                   )}
 
+                  <div className="report-stage-host" hidden={workspaceStage !== "report"}>
                   {harnessOnline && <IntegratedReport
                     key={activeSession.id}
                     ref={integratedReportRef}
@@ -3256,17 +3047,17 @@ function WorkspaceApp({
                     onStatusChange={setIntegratedReportStatus}
                   />}
 
+                  {!harnessOnline && !activeSession.reportResult && <div className="stage-empty"><FileText size={40} /><h2>{isGeneratingReport ? "正在生成分析报告" : "尚无分析报告"}</h2>{isGeneratingReport ? <><p>专家意见与报告生成可能需要一些时间，处理记录会持续更新。</p><button type="button" className="btn-danger" onClick={handleStopReportGeneration}>停止生成</button></> : <button type="button" className="btn-secondary" onClick={() => setWorkspaceStage("facts")}>核对事实</button>}</div>}
                   {activeSession.reportResult && !harnessOnline && (
-                    <div>
+                <div>
                   <div className="report-export-ribbon">
                     <div className="report-export-ribbon-top">
                       <div className="report-export-heading">
                         <span className="report-export-kicker">
                           <ExportRibbonIcon />
-                          文书级导出工具带
+                          报告下载
                         </span>
-                        <h3>报告导出与下载</h3>
-                        <p>当前报告已写入本地输出目录，可直接下载 `report.md`，也可生成更适合流转与归档的 Word 版本，或先编排 PDF 封面后再输出固定版文书。</p>
+                        <h3>事故分析报告</h3>
                       </div>
                       <div className="report-export-status">
                         <span className="report-export-status-label">当前 trace_id</span>
@@ -3475,6 +3266,7 @@ function WorkspaceApp({
                   </div>
                 </div>
               )}
+                  </div>
                 </div>
               </section>
             </div>
@@ -3483,9 +3275,10 @@ function WorkspaceApp({
           </>
         )}
       </main>
-      {renderUploadWorkbenchDialog()}
       {renderArtifactPreviewDialog()}
       <UserModelConfigDrawer
+        username={currentUser.username}
+        returnLabel={appView === "admin" ? "返回管理中心" : "返回工作区"}
         open={isUserModelDrawerOpen}
         saving={isSavingUserModelConfig}
         state={userModelConfigState}

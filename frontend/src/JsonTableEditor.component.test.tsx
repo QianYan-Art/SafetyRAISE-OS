@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -12,6 +12,58 @@ afterEach(() => {
 });
 
 describe("JsonTableEditor 真实组件交互", () => {
+  it("保存等待期间连续确认只触发一次报告", async () => {
+    let finish!: () => void;
+    const saving = new Promise<void>(resolve => { finish = resolve; });
+    const onConfirm = vi.fn();
+    render(<JsonTableEditor resetKey="one" initialJson='{"事故类型":"追尾"}' onAutoSave={() => saving} onConfirm={onConfirm} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "事故类型" }), { target: { value: "侧碰" } });
+    const confirm = screen.getByRole("button", { name: "确认事故信息并生成报告" });
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
+    expect((confirm as HTMLButtonElement).disabled).toBe(true);
+    expect(onConfirm).not.toHaveBeenCalled();
+    await act(async () => { finish(); await saving; });
+    await waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1));
+  });
+
+  it("等待保存时切换档案，不把旧确认应用到新档案", async () => {
+    let finish!: () => void;
+    const saving = new Promise<void>(resolve => { finish = resolve; });
+    const onConfirm = vi.fn();
+    const { rerender } = render(<JsonTableEditor resetKey="one" initialJson='{"事故类型":"追尾"}' onAutoSave={() => saving} onConfirm={onConfirm} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "事故类型" }), { target: { value: "侧碰" } });
+    fireEvent.click(screen.getByRole("button", { name: "确认事故信息并生成报告" }));
+    rerender(<JsonTableEditor resetKey="two" initialJson='{"事故类型":"新档案"}' onAutoSave={() => saving} onConfirm={onConfirm} />);
+    await act(async () => { finish(); await saving; });
+    expect(onConfirm).not.toHaveBeenCalled();
+    expect((screen.getByRole("textbox", { name: "事故类型" }) as HTMLTextAreaElement).value).toBe("新档案");
+  });
+  it("保存失败保留修改，显式重试后确认才继续", async () => {
+    const user = userEvent.setup();
+    const onAutoSave = vi.fn().mockRejectedValueOnce(new Error("保存冲突")).mockResolvedValue(undefined);
+    const onConfirm = vi.fn();
+    render(<JsonTableEditor initialJson='{"事故类型":"追尾"}' onAutoSave={onAutoSave} onConfirm={onConfirm} />);
+    await user.clear(screen.getByRole("textbox", { name: "事故类型" }));
+    await user.type(screen.getByRole("textbox", { name: "事故类型" }), "侧碰");
+    await user.tab();
+    await screen.findByText("保存失败，修改已保留");
+    expect((screen.getByRole("textbox", { name: "事故类型" }) as HTMLTextAreaElement).value).toBe("侧碰");
+    await user.click(screen.getByRole("button", { name: "保存修改" }));
+    await screen.findByText("已保存");
+    await user.click(screen.getByRole("button", { name: "确认事故信息并生成报告" }));
+    expect(onConfirm).toHaveBeenCalledWith(JSON.stringify({ 事故类型: "侧碰" }, null, 2));
+  });
+
+  it("确认时保存仍失败则不启动报告", async () => {
+    const user = userEvent.setup();
+    const onConfirm = vi.fn();
+    render(<JsonTableEditor initialJson='{"事故类型":"追尾"}' onAutoSave={vi.fn().mockRejectedValue(new Error("保存冲突"))} onConfirm={onConfirm} />);
+    await user.type(screen.getByRole("textbox", { name: "事故类型" }), "待核实");
+    await user.click(screen.getByRole("button", { name: "确认事故信息并生成报告" }));
+    await screen.findByRole("alert");
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
   it("非法 JSON 显示可访问错误，而不是渲染表格", async () => {
     render(
       <JsonTableEditor

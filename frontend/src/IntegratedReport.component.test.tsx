@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { useRef, useState } from "react";
+import { createRef, useRef, useState } from "react";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -511,6 +511,14 @@ describe("IntegratedReport 真实组件交互", () => {
     await user.click(screen.getByRole("button", { name: "停止生成" }));
     await waitFor(() => expect(screen.getByRole("status").textContent).toBe("已停止"));
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("报告记录读取失败不阻止离开档案", async () => {
+    const ref = createRef<IntegratedReportHandle>();
+    api.listReportRuns.mockRejectedValueOnce(new Error("暂时无法读取记录"));
+    render(<IntegratedReport ref={ref} sessionId="session-1" onPersistDraft={vi.fn()} onBusyChange={vi.fn()} />);
+    await screen.findByRole("alert");
+    expect(ref.current?.isTransitionBlocked()).toBe(false);
   });
 
   it.each(["listReportRuns", "fetchReportEvidence"] as const)("初载%s失败不显示空报告，可显式重新读取", async (method) => {

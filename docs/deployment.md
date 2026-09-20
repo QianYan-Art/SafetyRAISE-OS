@@ -484,6 +484,12 @@ sh deployment/docker/setup-https.sh
 
 ## 部署后第一组检查
 
+前端发布前先在`frontend`目录运行`npm test`、`npm run build`。
+启动开发服务器后可运行`node tests/workspace-browser.mjs`：
+`WORKSPACE_TEST_URL`指定开发页面地址（默认`http://127.0.0.1:15175`），
+`WORKSPACE_TEST_OUTPUT`指定截图及结果目录。该测试拦截API返回合成样例，
+不连接生产数据库、不调用模型，不能替代部署后的真实接口检查。
+
 建议按以下顺序检查：
 
 1. `docker ps`

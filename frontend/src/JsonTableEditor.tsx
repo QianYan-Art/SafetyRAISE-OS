@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { TextareaHTMLAttributes } from "react";
+import { Save } from "lucide-react";
 
 interface JsonTableEditorProps {
   initialJson: string;
@@ -90,6 +91,10 @@ export function JsonTableEditor({
 }: JsonTableEditorProps) {
   const [data, setData] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
+  const [saveStatus, setSaveStatus] = useState<"saved" | "dirty" | "saving" | "failed">("saved");
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const confirmingRef = useRef(false);
+  const [isConfirming, setIsConfirming] = useState(false);
   const lastSavedJsonRef = useRef("");
   const initializedRef = useRef(false);
   const currentJsonRef = useRef("");
@@ -101,6 +106,8 @@ export function JsonTableEditor({
       if (resetKeyChanged) {
         resetKeyRef.current = resetKey;
         initializedRef.current = false;
+        saveQueueRef.current = Promise.resolve();
+        setSaveStatus("saved");
       }
       if (!resetKeyChanged && initializedRef.current && buildJsonString(data) !== lastSavedJsonRef.current) {
         return;
@@ -132,6 +139,7 @@ export function JsonTableEditor({
     setData(nextData);
     setError("");
     const nextJsonString = buildJsonString(nextData);
+    setSaveStatus(nextJsonString === lastSavedJsonRef.current ? "saved" : "dirty");
     currentJsonRef.current = nextJsonString;
     onDraftChange?.(nextJsonString);
   };
@@ -139,7 +147,7 @@ export function JsonTableEditor({
   const currentJsonString = useMemo(() => buildJsonString(data), [data]);
   currentJsonRef.current = currentJsonString;
 
-  const handleBlur = async () => {
+  const saveCurrentDraft = async () => {
     if (!onAutoSave) {
       return;
     }
@@ -147,22 +155,47 @@ export function JsonTableEditor({
       return;
     }
 
-    try {
+    const sessionKey = resetKeyRef.current;
+    setSaveStatus("saving");
+    const task = saveQueueRef.current.catch(() => undefined).then(async () => {
+      if (sessionKey !== resetKeyRef.current || currentJsonString === lastSavedJsonRef.current) return;
       await onAutoSave(currentJsonString);
-      if (currentJsonRef.current === currentJsonString) {
+      if (sessionKey === resetKeyRef.current && currentJsonRef.current === currentJsonString) {
         lastSavedJsonRef.current = currentJsonString;
+        setSaveStatus("saved");
+        setError("");
       }
-      setError("");
-    } catch (err) {
+    });
+    saveQueueRef.current = task;
+    await task;
+  };
+
+  const handleBlur = async () => {
+    const sessionKey = resetKeyRef.current;
+    try { await saveCurrentDraft(); }
+    catch (err) {
+      if (sessionKey !== resetKeyRef.current) return;
+      setSaveStatus("failed");
       setError("自动保存失败：" + (err instanceof Error ? err.message : String(err)));
     }
   };
 
   const handleConfirm = async () => {
+    if (confirmingRef.current || disabled) return;
+    confirmingRef.current = true;
+    setIsConfirming(true);
+    const sessionKey = resetKeyRef.current;
     try {
+      await saveCurrentDraft();
+      if (sessionKey !== resetKeyRef.current) return;
       await onConfirm(currentJsonString);
     } catch (err) {
+      if (sessionKey !== resetKeyRef.current) return;
+      if (currentJsonString !== lastSavedJsonRef.current) setSaveStatus("failed");
       setError("无法生成有效的确认数据：" + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      confirmingRef.current = false;
+      setIsConfirming(false);
     }
   };
 
@@ -209,7 +242,7 @@ export function JsonTableEditor({
                   value={val}
                   onChange={(e) => handleChange(key, e.target.value)}
                   onBlur={handleBlur}
-                  disabled={disabled}
+                  disabled={disabled || isConfirming}
                   placeholder="[空]"
                 />
               </td>
@@ -218,6 +251,10 @@ export function JsonTableEditor({
         </tbody>
       </table>
       <div className={`report-action-dock ${isGeneratingReport ? "is-generating" : ""}`}>
+        {onAutoSave && <div className="draft-save-controls">
+          <span role="status">{saveStatus === "saved" ? "已保存" : saveStatus === "saving" ? "正在保存" : saveStatus === "failed" ? "保存失败，修改已保留" : "有未保存修改"}</span>
+          <button type="button" className="btn-secondary" disabled={disabled || isConfirming || saveStatus === "saving" || saveStatus === "saved"} onClick={() => void handleBlur()}><Save size={15} />保存修改</button>
+        </div>}
         <button
           type="button"
           className="btn-danger report-stop-btn"
@@ -233,7 +270,7 @@ export function JsonTableEditor({
           type="button"
           className={`btn-primary report-submit-btn ${isGeneratingReport ? "is-generating" : ""}`}
           onClick={() => void handleConfirm()}
-          disabled={disabled}
+          disabled={disabled || isConfirming}
         >
           {isGeneratingReport ? (
             <>
