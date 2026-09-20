@@ -21,7 +21,7 @@ from app.report_harness.execution import ReportExecutionDependencies
 from app.report_harness.controlled_tools import ControlledTools
 from app.report_harness.role_loop import RoleLoop, role_context, tool_schemas
 from app.report_harness.journal import ExecutionJournal, JOURNAL_VERSION
-from app.report_harness.recovery import RunRecovery
+from app.report_harness.recovery import RunRecovery, can_resume_protocol
 from app.report_harness.review_ledger import IssueLedger
 from app.report_harness.prompts import load_role_prompts
 from app.report_harness.request_ledger import RequestLedger
@@ -99,6 +99,9 @@ class ReportRunService:
         result = {key: document[key] for key in keys}
         result["execution_profile"] = document.get("execution_profile", "outbound")
         result["budget_policy"] = document.get("budget_policy", {})
+        result["can_resume_protocol"] = can_resume_protocol(
+            document, unknown_requests=document.get("budget", {}).get("unknown_requests"),
+        )
         if document["state"] == "published":
             result["report"] = document["report"]
         return result
@@ -126,6 +129,9 @@ class ReportRunService:
                 **RequestLedger(self.store).view(owner, record["run_id"]),
                 "active_seconds": record.get("active_seconds", 0),
             }
+        result["can_resume_protocol"] = can_resume_protocol(
+            record, unknown_requests=result["budget"].get("unknown_requests"),
+        )
         return result
 
     def candidate(self, owner: str, run_id: str) -> dict:
@@ -156,8 +162,17 @@ class ReportRunService:
 
     def authorize(self, owner: str, run_id: str, request: AuthorizationRequest) -> dict:
         with self.store.locked(owner, run_id) as (conn, row):
-            if row["state"] not in {"queued", "suspended"}:
+            protocol_resume = can_resume_protocol(
+                {**row["document"], "state": row["state"]}, unknown_requests=0,
+            )
+            if row["state"] not in {"queued", "suspended"} and not protocol_resume:
                 raise HarnessError("authorization_state_conflict")
+            if protocol_resume and conn.execute(
+                "SELECT 1 FROM report_run_requests WHERE run_id=%s AND "
+                "(status IN ('intent','dispatched','completion_unknown') OR "
+                "(status='committed' AND actual_tokens IS NULL)) LIMIT 1", (row["run_id"],),
+            ).fetchone():
+                raise HarnessError("completion_unknown")
             catalog = self.dependencies.authorization_catalog
             if catalog is None:
                 raise HarnessError("authorization_profile_unavailable")
@@ -167,6 +182,9 @@ class ReportRunService:
             if previous and all(previous.get(key) == value for key, value in approval.items()):
                 updated = self.store._view(row)
             else:
+                if protocol_resume:
+                    # 只复核原授权；权限或上下文变化不能借协议兼容恢复改写历史合同。
+                    raise HarnessError("authorization_stale")
                 approval["approved_at"] = datetime.now(timezone.utc).isoformat()
                 updated = self.store.save(
                     conn, row, row["state"], {**row["document"], "approval": approval},

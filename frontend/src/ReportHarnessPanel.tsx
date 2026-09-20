@@ -817,7 +817,7 @@ export const ReportHarnessPanel = forwardRef<ReportHarnessPanelHandle, ReportHar
         await resumeReportRunStream(
           selectedRun.run_id,
           selectedRun.state_version,
-          retryUnknownRequests,
+          selectedRun.can_resume_protocol ? false : retryUnknownRequests,
           handlers,
           controller.signal,
         );
@@ -1178,7 +1178,7 @@ export const ReportHarnessPanel = forwardRef<ReportHarnessPanelHandle, ReportHar
         </section>
       );
     }
-    const canResume = selectedRun.state === "suspended";
+    const canResume = selectedRun.state === "suspended" || selectedRun.can_resume_protocol === true;
     const canCancel = !RUN_TERMINAL_STATES.has(selectedRun.state);
     const candidateMarkdown = selectedRun.report?.report_markdown
       || candidate?.candidate_report.report_markdown
@@ -1257,7 +1257,7 @@ export const ReportHarnessPanel = forwardRef<ReportHarnessPanelHandle, ReportHar
           )}
         </div>
 
-        {canResume && (
+        {selectedRun.state === "suspended" && (
           <label className="harness-risk-row">
             <input
               type="checkbox"

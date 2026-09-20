@@ -4,15 +4,94 @@ from copy import deepcopy
 from datetime import datetime
 from typing import Any, Callable
 
+from pydantic import ValidationError
+from psycopg.errors import UniqueViolation
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
+from app.report_harness.contracts import canonical_digest
 from app.report_harness.errors import HarnessError
+from app.report_harness.journal import JOURNAL_VERSION
 from app.report_harness.resources import assert_run_capacity
 from app.report_harness.request_ledger import RequestLedger
+from app.report_harness.role_loop import ToolCall
 from app.report_harness.store import RunStore
 
 _RECOVERABLE_STATES = frozenset({"preparing", "generating", "checking", "revising"})
+
+
+def can_resume_protocol(document: object, *, unknown_requests: object = None) -> bool:
+    """只识别已保存的生成者单工具响应故障，不放宽一般复核终态。"""
+    if not isinstance(document, dict):
+        return False
+    if (document.get("state") != "needs_review"
+            or document.get("terminal_reason") != "invalid_review_or_candidate"
+            or type(document.get("candidate_version")) is not int
+            or document["candidate_version"] != 0
+            or document.get("candidate") is not None
+            or document.get("candidate_history") not in (None, [])):
+        return False
+    if type(unknown_requests) is not int or unknown_requests != 0:
+        return False
+
+    journal = document.get("execution_journal")
+    if not isinstance(journal, dict) or journal.get("version") != JOURNAL_VERSION:
+        return False
+    attempts = journal.get("attempts")
+    entries = journal.get("entries")
+    if (not isinstance(attempts, dict) or not isinstance(entries, dict)
+            or not {"model", "tool"} <= attempts.keys()
+            or not attempts.keys() <= {"model", "tool", "prepare"}
+            or any(type(value) is not int or value < 0 for value in attempts.values())):
+        return False
+
+    model_entries = []
+    category_counts = {"model": 0, "tool": 0, "prepare": 0}
+    try:
+        for key, entry in entries.items():
+            if (not isinstance(key, str) or len(key) != 64
+                    or any(char not in "0123456789abcdef" for char in key)
+                    or not isinstance(entry, dict)
+                    or entry.get("category") not in category_counts
+                    or type(entry.get("fencing_token")) is not int
+                    or entry["fencing_token"] <= 0
+                    or entry.get("status") not in {"intent", "committed", "denied"}
+                    or canonical_digest({
+                        "category": entry["category"], "identity": entry["identity"],
+                    }) != key):
+                return False
+            category_counts[entry["category"]] += 1
+            if entry["status"] != "committed":
+                return False
+            result = entry.get("result")
+            if (not isinstance(result, dict)
+                    or canonical_digest(result) != entry.get("result_digest")):
+                return False
+            if entry["category"] == "model":
+                model_entries.append(entry)
+    except (KeyError, TypeError, ValueError):
+        return False
+    if any(category_counts[key] > attempts.get(key, 0) for key in category_counts):
+        return False
+    # JSONB对象不保留插入时序；此兼容恢复仅接受第一份模型响应，不猜测“最后一项”。
+    if len(model_entries) != 1:
+        return False
+
+    last = model_entries[0]
+    identity = last.get("identity")
+    result = last.get("result")
+    if (not isinstance(identity, dict)
+            or identity.get("role") != "generator"
+            or not isinstance(identity.get("context"), dict)
+            or identity["context"].get("candidate_version") != 1
+            or not isinstance(result, dict)
+            or set(result) != {"call_id", "name", "arguments"}):
+        return False
+    try:
+        call = ToolCall.model_validate(result)
+    except (ValidationError, TypeError, ValueError):
+        return False
+    return call.model_dump(mode="json") == result
 
 
 def _active_document_until(row: dict, end_at: datetime, reason: str) -> dict:
@@ -154,10 +233,15 @@ class RunRecovery:
         with self.store.locked(
             owner, run_id, expected_version=expected_version,
         ) as (conn, row):
-            if row["state"] != "suspended":
+            protocol_resume = can_resume_protocol(
+                self.store._view(row), unknown_requests=0,
+            )
+            if row["state"] != "suspended" and not protocol_resume:
                 raise HarnessError(
                     "not_resumable", 409, {"state": row["state"]},
                 )
+            if protocol_resume and retry_unknown_requests:
+                raise HarnessError("invalid_resume_request", 422)
             document = deepcopy(row["document"] or {})
             if not isinstance(document, dict):
                 raise HarnessError("document_invalid", 422)
@@ -166,7 +250,7 @@ class RunRecovery:
 
             unknown_rows = conn.execute(
                 "SELECT request_id FROM report_run_requests WHERE run_id=%s "
-                "AND (status='completion_unknown' OR "
+                "AND (status IN ('intent','dispatched','completion_unknown') OR "
                 "(status='committed' AND actual_tokens IS NULL)) "
                 "ORDER BY request_id",
                 (row["run_id"],),
@@ -226,6 +310,38 @@ class RunRecovery:
             document["recovery_count"] = document.get("recovery_count", 0) + 1
             document["active_started_at"] = resume_now.isoformat()
             document["terminal_reason"] = None
+            event = {
+                "reason": "resume",
+                "from_state": row["state"],
+                "retry_unknown_requests": retry_unknown_requests,
+                "approved_unknown_request_ids": unknown_request_ids,
+            }
+            if protocol_resume:
+                # 专用恢复操作原子推进终态，不放宽通用状态机的终态转换规则。
+                document["review_status"] = "pending"
+                event["recovery_kind"] = "single_tool_envelope"
+                next_version, next_seq = row["state_version"] + 1, row["last_event_seq"] + 1
+                try:
+                    updated = conn.execute(
+                        "UPDATE report_runs SET state='preparing',state_version=%s,"
+                        "document=%s,last_event_seq=%s,fencing_token=%s,lease_owner=%s,"
+                        "lease_expires_at=clock_timestamp()+interval '30 seconds' "
+                        "WHERE run_id=%s AND state_version=%s AND deleted_at IS NULL RETURNING run_id",
+                        (next_version, Jsonb(document), next_seq, next_token, worker,
+                         row["run_id"], row["state_version"]),
+                    ).fetchone()
+                except UniqueViolation as exc:
+                    if exc.diag.constraint_name == "report_runs_active_session":
+                        raise HarnessError("active_run_conflict") from exc
+                    raise
+                if updated is None:
+                    raise HarnessError("version_conflict")
+                conn.execute(
+                    "INSERT INTO report_run_events(run_id,seq,type,state_version,data) "
+                    "VALUES (%s,%s,'checkpoint',%s,%s)",
+                    (row["run_id"], next_seq, next_version, Jsonb(event)),
+                )
+                return next_token
             conn.execute(
                 "UPDATE report_runs SET fencing_token=%s,lease_owner=%s,"
                 "lease_expires_at=clock_timestamp()+interval '30 seconds' "
@@ -238,11 +354,6 @@ class RunRecovery:
                 "preparing",
                 document,
                 "checkpoint",
-                {
-                    "reason": "resume",
-                    "from_state": "suspended",
-                    "retry_unknown_requests": retry_unknown_requests,
-                    "approved_unknown_request_ids": unknown_request_ids,
-                },
+                event,
             )
             return next_token

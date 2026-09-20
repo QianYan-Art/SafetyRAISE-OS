@@ -47,6 +47,14 @@ class ToolTurn(StrictModel):
         return self
 
 
+def normalize_tool_response(response: dict) -> dict:
+    """只兼容精确的单工具对象；仍由原工具白名单和参数校验决定是否执行。"""
+    if set(response) == {"call_id", "name", "arguments"}:
+        call = ToolCall.model_validate(response)
+        return {"tool_calls": [call.model_dump(mode="json")]}
+    return response
+
+
 class RoleLoop:
     """有界的角色/工具交互；逻辑轮次计数不是物理请求计费账本。"""
 
@@ -116,6 +124,8 @@ class RoleLoop:
                 raise HarnessError("invalid_role_response") from exc
             if size > 256 * 1024:
                 raise HarnessError("role_response_too_large")
+            # 也处理已提交的历史响应，恢复时不必再次请求模型。
+            response = normalize_tool_response(response)
             if "tool_calls" not in response:
                 return response
             turn = ToolTurn.model_validate(response)

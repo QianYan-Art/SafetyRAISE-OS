@@ -200,6 +200,47 @@ afterEach(() => {
 });
 
 describe("IntegratedReport 真实组件交互", () => {
+  it("只对服务端确认的协议故障展示继续按钮，复用恢复接口且不允许未知重试", async () => {
+    const user = userEvent.setup();
+    const stopped = run({
+      state: "needs_review", review_status: "failed", report: null,
+      terminal_reason: "invalid_review_or_candidate", can_resume_protocol: true,
+      budget: { unknown_requests: 0, remaining: 100 }, state_version: 21,
+    });
+    api.listReportRuns.mockResolvedValue({ runs: [stopped], next_cursor: null });
+    api.fetchReportRun.mockResolvedValue(stopped);
+    api.authorizeReportRun.mockResolvedValue(stopped);
+    const stream = deferred<void>();
+    api.resumeReportRunStream.mockReturnValue(stream.promise);
+    render(<IntegratedReport sessionId="session-1" onPersistDraft={vi.fn()} onBusyChange={vi.fn()} />);
+    await waitForInitialLoad();
+    expect(screen.queryByText(/确认重试未收到结果的请求/)).toBeNull();
+    await user.click(screen.getByRole("button", { name: "继续生成" }));
+    await waitFor(() => expect(api.resumeReportRunStream).toHaveBeenCalledTimes(1));
+    expect(api.resumeReportRunStream.mock.calls[0].slice(0, 3)).toEqual(["run-1", 21, false]);
+    expect(api.createReportRun).not.toHaveBeenCalled();
+    expect(api.executeReportRunStream).not.toHaveBeenCalled();
+    const beforePoll = api.fetchReportRun.mock.calls.length;
+    await waitFor(() => expect(api.fetchReportRun.mock.calls.length).toBeGreaterThan(beforePoll), {
+      timeout: 3500,
+    });
+    stream.resolve();
+    await waitFor(() => expect(screen.getByRole("button", { name: "继续生成" })).toBeDefined());
+  });
+
+  it("普通待复核终态和未获服务端资格的格式失败不能恢复", async () => {
+    const stopped = run({
+      state: "needs_review", review_status: "failed", report: null,
+      terminal_reason: "invalid_review_or_candidate", can_resume_protocol: false,
+    });
+    api.listReportRuns.mockResolvedValue({ runs: [stopped], next_cursor: null });
+    api.fetchReportRun.mockResolvedValue(stopped);
+    render(<IntegratedReport sessionId="session-1" onPersistDraft={vi.fn()} onBusyChange={vi.fn()} />);
+    await waitForInitialLoad();
+    expect(screen.queryByRole("button", { name: "继续生成" })).toBeNull();
+    expect(api.resumeReportRunStream).not.toHaveBeenCalled();
+  });
+
   it("补证支持新增、编辑、删除，并阻止空必填提交", async () => {
     const user = userEvent.setup();
     const initial = evidence();

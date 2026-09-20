@@ -126,7 +126,7 @@ export const IntegratedReport = forwardRef<IntegratedReportHandle, {
   }, [sessionId, reloadVersion]);
 
   useEffect(() => {
-    if (!run || RUN_TERMINAL_STATES.has(run.state) || run.state === "suspended") return;
+    if (!run || (!busy && (RUN_TERMINAL_STATES.has(run.state) || run.state === "suspended"))) return;
     const id = run.run_id;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
@@ -139,10 +139,10 @@ export const IntegratedReport = forwardRef<IntegratedReportHandle, {
     }
     timer = setTimeout(() => void poll(), 2000);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [run?.run_id, run?.state]);
+  }, [run?.run_id, run?.state, busy]);
 
   async function execute(value: ReportRunView, resume = false) {
-    const acknowledged = retryUnknown;
+    const acknowledged = value.can_resume_protocol ? false : retryUnknown;
     setRetryUnknown(false);
     const controller = new AbortController();
     stream.current = controller;
@@ -334,8 +334,8 @@ export const IntegratedReport = forwardRef<IntegratedReportHandle, {
           </option>)}
         </select>}
         {active && <button type="button" className="report-danger" disabled={cancelling} aria-busy={cancelling} onClick={() => void cancel()}><Square size={14} aria-hidden="true" />{cancelling ? "正在停止" : "停止生成"}</button>}
-        {(run.state === "suspended" || run.state === "queued") && !busy && !cancelling && <>
-          {Number(run.budget.unknown_requests ?? 0) > 0 && <label className="report-checkbox report-retry-confirmation">
+        {(run.state === "suspended" || run.state === "queued" || run.can_resume_protocol === true) && !busy && !cancelling && <>
+          {!run.can_resume_protocol && Number(run.budget.unknown_requests ?? 0) > 0 && <label className="report-checkbox report-retry-confirmation">
             <input type="checkbox" checked={retryUnknown} onChange={(event) => setRetryUnknown(event.target.checked)} />
             确认重试未收到结果的请求，可能重复计费
           </label>}
@@ -347,7 +347,7 @@ export const IntegratedReport = forwardRef<IntegratedReportHandle, {
               const value = await authorizeReportRun(run.run_id, buildAuthorizationPayload(preview));
               if (!alive.current) return;
               updateRun(value);
-              await execute(value, value.state === "suspended");
+              await execute(value, value.state === "suspended" || value.can_resume_protocol === true);
             })}><Play size={15} aria-hidden="true" />继续生成</button>
         </>}
         {run.formal_export_eligible && (["docx", "pdf", "md"] as const).map((format) =>

@@ -475,6 +475,7 @@ export interface ReportRunView {
   candidate_version: number;
   review_status: string;
   terminal_reason?: string | null;
+  can_resume_protocol?: boolean;
   budget: ReportBudgetView;
   last_event_seq: number;
   quality_gate: "engineering_only" | "quality_validated" | string;
