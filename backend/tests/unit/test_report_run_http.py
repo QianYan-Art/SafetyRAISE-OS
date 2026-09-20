@@ -113,6 +113,90 @@ def test_production_dependency_stays_disabled(monkeypatch):
         assert response.status_code == 503
 
 
+def test_online_dependency_requires_initialized_runtime(monkeypatch):
+    from types import SimpleNamespace
+    from app.api import deps
+    from app.report_harness.config import ReportHarnessSettings
+
+    app, _, _ = http_app()
+    app.dependency_overrides.pop(get_report_run_service)
+    app.dependency_overrides[deps.get_database_service] = lambda: object()
+    config = ReportHarnessSettings(enabled=True, online_enabled=True)
+    monkeypatch.setattr(deps, "get_settings", lambda: SimpleNamespace(report_harness=config))
+    with TestClient(app) as client:
+        response = client.post("/api/v1/report-runs", json=payload(),
+                               headers={"Authorization": "Bearer owner"})
+        assert response.status_code == 503
+        assert response.json()["error"]["code"] == "outbound_transport_unavailable"
+
+
+def test_online_dependency_keeps_reads_and_cancellation_available_under_resource_pressure(monkeypatch):
+    from types import SimpleNamespace
+    from app.api import deps, routes_report_runs
+    from app.report_harness.config import ReportHarnessSettings
+    from app.report_harness.errors import HarnessError
+
+    app, service, _ = http_app()
+    app.dependency_overrides.pop(get_report_run_service)
+    app.dependency_overrides[deps.get_database_service] = lambda: SimpleNamespace(connection=None)
+    config = ReportHarnessSettings(enabled=True, online_enabled=True)
+    monkeypatch.setattr(deps, "get_settings", lambda: SimpleNamespace(report_harness=config))
+    checked = []
+    store = service.store
+    monkeypatch.setattr(type(store), "check_schema", lambda self: checked.append("schema"), raising=False)
+    monkeypatch.setattr(routes_report_runs, "RunStore", lambda connection: store)
+
+    # 此处仅验证 HTTP 依赖接线，合成角色不代表真实外发或发布验收。
+    def reject():
+        raise HarnessError("storage_capacity_insufficient", 503)
+
+    runtime = SimpleNamespace(production_outbound_enabled=True, resource_check=reject)
+    app.state.report_harness_runtime = runtime
+    monkeypatch.setattr(routes_report_runs, "ReportRunService",
+                        lambda selected_store, selected_runtime:
+                        service if selected_store is store and selected_runtime is runtime else None)
+    with TestClient(app) as client:
+        response = client.post("/api/v1/report-runs", json=payload(),
+                               headers={"Authorization": "Bearer owner"})
+        assert response.status_code == 201
+        assert checked and set(checked) == {"schema"}
+        run_id = response.json()["run_id"]
+        headers = {"Authorization": "Bearer owner"}
+        assert client.get(f"/api/v1/report-runs/{run_id}", headers=headers).status_code == 200
+        stopped = client.post(f"/api/v1/report-runs/{run_id}/cancel", headers=headers)
+        assert stopped.status_code == 200
+        assert stopped.json()["state"] == "cancelled"
+
+
+def test_startup_resource_failure_allows_history_and_cancel_but_no_new_work(monkeypatch):
+    from types import SimpleNamespace
+    from app.api import deps, routes_report_runs
+    from app.report_harness.config import ReportHarnessSettings
+
+    app, service, _ = http_app()
+    from app.schemas.report_run import CreateRunRequest
+    run = service.create("owner", CreateRunRequest.model_validate(payload()))
+    app.dependency_overrides.pop(get_report_run_service)
+    app.dependency_overrides[deps.get_database_service] = lambda: SimpleNamespace(connection=None)
+    monkeypatch.setattr(deps, "get_settings", lambda: SimpleNamespace(
+        report_harness=ReportHarnessSettings(enabled=True, online_enabled=True),
+    ))
+    monkeypatch.setattr(type(service.store), "check_schema", lambda self: None, raising=False)
+    monkeypatch.setattr(routes_report_runs, "RunStore", lambda connection: service.store)
+    app.state.report_harness_runtime = None
+    app.state.report_harness_blocked_reason = "resource_pressure"
+    headers = {"Authorization": "Bearer owner"}
+    base = f"/api/v1/report-runs/{run['run_id']}"
+    with TestClient(app) as client:
+        assert client.get(base, headers=headers).status_code == 200
+        assert client.post("/api/v1/report-runs", json=payload(), headers=headers).status_code == 503
+        assert client.post(f"{base}/execute/stream", json={"expected_version": 0},
+                           headers=headers).status_code == 503
+        stopped = client.post(f"{base}/cancel", headers=headers)
+        assert stopped.status_code == 200
+        assert stopped.json()["state"] == "cancelled"
+
+
 def test_asgi_stream_disconnect_persists_cancellation():
     class WaitingRoles(SyntheticRoles):
         async def generate(self, context):

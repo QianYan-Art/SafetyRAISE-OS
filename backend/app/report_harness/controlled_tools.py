@@ -81,6 +81,10 @@ class ControlledTools:
             "generator": set(),
             "reviewer": set(),
         }
+        self._knowledge_read_ranges: dict[str, dict[str, list[list[int]]]] = {
+            "generator": {},
+            "reviewer": {},
+        }
 
         self._evidence_by_id, self._evidence_order = self._build_evidence_index()
         self._evidence_catalog = {
@@ -93,6 +97,7 @@ class ControlledTools:
         self._validate_role(role)
         self._accessed_evidence[role].clear()
         self._accessed_knowledge[role].clear()
+        self._knowledge_read_ranges[role].clear()
         self._issued_read_cursors = {
             cursor: binding for cursor, binding in self._issued_read_cursors.items()
             if binding["role"] != role
@@ -107,6 +112,7 @@ class ControlledTools:
             "cursors": deepcopy(self._issued_read_cursors),
             "evidence": {role: sorted(ids) for role, ids in self._accessed_evidence.items()},
             "knowledge": {role: sorted(ids) for role, ids in self._accessed_knowledge.items()},
+            "knowledge_read_ranges": deepcopy(self._knowledge_read_ranges),
             "retrieval_counts": dict(self._retrieval_counts),
             "retrieved_ids": {role: sorted(ids) for role, ids in self._retrieved_ids.items()},
         }
@@ -128,13 +134,49 @@ class ControlledTools:
             approved = self._knowledge_by_id.get(identifier)
             if approved is None or item != approved:
                 raise HarnessError("checkpoint_knowledge_mismatch")
-        evidence, knowledge = {}, {}
+        evidence, knowledge, knowledge_read_ranges = {}, {}, {}
+        raw_knowledge_ranges = state.get("knowledge_read_ranges")
+        if raw_knowledge_ranges is not None and not isinstance(raw_knowledge_ranges, dict):
+            raise HarnessError("checkpoint_invalid")
         for role in ("generator", "reviewer"):
             evidence[role] = set(state["evidence"][role])
-            knowledge[role] = set(state["knowledge"][role])
-            if (not evidence[role] <= self._evidence_by_id.keys()
-                    or not knowledge[role] <= self._knowledge_by_id.keys()):
+            claimed_knowledge = set(state["knowledge"][role])
+            if not evidence[role] <= self._evidence_by_id.keys():
                 raise HarnessError("checkpoint_source_mismatch")
+            if not claimed_knowledge <= self._knowledge_by_id.keys():
+                raise HarnessError("checkpoint_source_mismatch")
+
+            if raw_knowledge_ranges is None:
+                # 兼容旧日志：旧实现只在完整原文读完后记录 knowledge ID。
+                role_ranges = {
+                    chunk_id: [[0, len(self._knowledge_by_id[chunk_id]["text"])]]
+                    for chunk_id in claimed_knowledge
+                }
+            else:
+                raw_role_ranges = raw_knowledge_ranges.get(role)
+                if not isinstance(raw_role_ranges, dict):
+                    raise HarnessError("checkpoint_invalid")
+                role_ranges = {}
+                for chunk_id, raw_ranges in raw_role_ranges.items():
+                    if chunk_id not in self._knowledge_by_id or not isinstance(raw_ranges, list):
+                        raise HarnessError("checkpoint_source_mismatch")
+                    normalized_ranges = []
+                    for raw_range in raw_ranges:
+                        if (not isinstance(raw_range, list) or len(raw_range) != 2
+                                or type(raw_range[0]) is not int
+                                or type(raw_range[1]) is not int):
+                            raise HarnessError("checkpoint_invalid")
+                        start, end = raw_range
+                        text_length = len(self._knowledge_by_id[chunk_id]["text"])
+                        if not 0 <= start < end <= text_length:
+                            raise HarnessError("checkpoint_source_mismatch")
+                        normalized_ranges.append([start, end])
+                    if normalized_ranges:
+                        role_ranges[chunk_id] = self._merge_read_ranges(normalized_ranges)
+                if claimed_knowledge != self._complete_knowledge_ids(role_ranges):
+                    raise HarnessError("checkpoint_source_mismatch")
+            knowledge_read_ranges[role] = role_ranges
+            knowledge[role] = claimed_knowledge
         cursors = deepcopy(state["cursors"])
         for binding in cursors.values():
             self._validate_role(binding["role"])
@@ -144,6 +186,7 @@ class ControlledTools:
         self._search_registry = registry
         self._issued_read_cursors = cursors
         self._accessed_evidence, self._accessed_knowledge = evidence, knowledge
+        self._knowledge_read_ranges = knowledge_read_ranges
         counts = state.get("retrieval_counts", {"generator": 0, "reviewer": 0})
         retrieved = state.get("retrieved_ids", {"generator": [], "reviewer": []})
         for role in ("generator", "reviewer"):
@@ -160,7 +203,7 @@ class ControlledTools:
         for item in items:
             if item != self._knowledge_by_id.get(item.get("id")):
                 raise HarnessError("checkpoint_knowledge_mismatch")
-            self._accessed_knowledge[role].add(item["id"])
+            self._record_knowledge_range(role, item["id"], 0, len(item["text"]))
 
     def initial_retrieval(self, query: str, top_k: int) -> dict:
         return self._search_knowledge(
@@ -211,6 +254,43 @@ class ControlledTools:
     def accessed_knowledge(self, role: str) -> set[str]:
         self._validate_role(role)
         return set(self._accessed_knowledge[role])
+
+    @staticmethod
+    def _merge_read_ranges(ranges: list[list[int]]) -> list[list[int]]:
+        merged: list[list[int]] = []
+        for start, end in sorted(ranges):
+            if merged and start <= merged[-1][1]:
+                merged[-1][1] = max(merged[-1][1], end)
+            else:
+                merged.append([start, end])
+        return merged
+
+    def _complete_knowledge_ids(self, ranges: dict[str, list[list[int]]]) -> set[str]:
+        complete = set()
+        for chunk_id, chunk_ranges in ranges.items():
+            text_length = len(self._knowledge_by_id[chunk_id]["text"])
+            if len(chunk_ranges) == 1 and chunk_ranges[0] == [0, text_length]:
+                complete.add(chunk_id)
+        return complete
+
+    def _record_knowledge_range(self, role: str, chunk_id: str, start: int, end: int) -> None:
+        self._validate_role(role)
+        item = self._knowledge_by_id.get(chunk_id)
+        if item is None:
+            raise HarnessError("knowledge_not_authorized")
+        text_length = len(item["text"])
+        if type(start) is not int or type(end) is not int or not 0 <= start < end <= text_length:
+            raise HarnessError("knowledge_read_audit_invalid")
+        ranges = self._knowledge_read_ranges[role].setdefault(chunk_id, [])
+        ranges[:] = self._merge_read_ranges([*ranges, [start, end]])
+        if chunk_id in self._complete_knowledge_ids({chunk_id: ranges}):
+            self._accessed_knowledge[role].add(chunk_id)
+
+    def _record_knowledge_page(self, role: str, items: list[dict]) -> None:
+        for item in items:
+            self._record_knowledge_range(
+                role, item["id"], item["text_start"], item["text_end"],
+            )
 
     @staticmethod
     def _raise_invalid(reason: str, *, tool: str | None = None, **details: Any) -> None:
@@ -904,7 +984,8 @@ class ControlledTools:
                 "truncated": True,
             })
             return payload
-        self._accessed_knowledge[role].update(item["id"] for item in validated)
+        for item in validated:
+            self._record_knowledge_range(role, item["id"], 0, len(item["text"]))
         return payload
 
     def _read_knowledge(self, role: str, args: dict) -> dict:
@@ -975,8 +1056,10 @@ class ControlledTools:
                 "request_ids": tuple(request_ids),
                 "bindings": deepcopy(bindings),
             }
-        accessed = self._accessed_evidence if kind == "evidence" else self._accessed_knowledge
-        accessed[role].update(completed_ids)
+        if kind == "evidence":
+            self._accessed_evidence[role].update(completed_ids)
+        else:
+            self._record_knowledge_page(role, result["items"])
         return result
 
     def _build_read_page(

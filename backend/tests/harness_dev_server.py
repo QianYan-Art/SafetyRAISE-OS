@@ -11,6 +11,7 @@ from contextlib import ExitStack
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from uuid import uuid4
 
 import psycopg
@@ -24,6 +25,8 @@ from app.core.security import create_access_token
 from app.core.settings import Settings
 from app.main import app
 from app.report_harness.release_registry import ReleaseBinding, binding_status
+from app.report_harness.authorization import AuthorizationCatalog, EndpointDescription
+from app.report_harness.contracts import canonical_digest
 from app.report_harness.request_ledger import RequestLedger
 from app.report_harness.store import RunStore
 from app.report_harness.test_database import migrate_test_database, validate_test_dsn
@@ -157,6 +160,19 @@ def main():
             dependencies(SlowSyntheticRoles()), roles_factory=SlowSyntheticRoles,
             release_registry=registry, force_engineering_exports=True,
         )
+        integrated_ui = os.environ.get("HARNESS_INTEGRATED_UI_TEST") == "1"
+        if integrated_ui:
+            catalog = AuthorizationCatalog([
+                EndpointDescription(role=role, label="本机合成角色",
+                                    base_url="http://127.0.0.1:9",
+                                    model="synthetic", version="v1")
+                for role in ("generator", "reviewer")
+            ], [], frozenset({canonical_digest([])}))
+            run_dependencies = replace(
+                run_dependencies, authorization_catalog=catalog,
+                endpoint_profile_digest=catalog.endpoint_digest,
+                knowledge_manifest_digest=catalog.knowledge_digest,
+            )
         service = ReportRunService(store, run_dependencies)
         with database.connection() as conn:
             conn.execute(
@@ -192,6 +208,9 @@ def main():
         def bootstrap(request: Request):
             if request.client is None or request.client.host not in {"127.0.0.1", "::1"}:
                 raise HTTPException(403)
+            if integrated_ui:
+                # 只打开原页面接入分支；报告服务仍是禁止外联的合成测试依赖。
+                app.state.report_harness_runtime = SimpleNamespace(production_outbound_enabled=True)
             return {"token": token, "session_id": session, "control_token": control_token,
                     "quality_gate": "engineering_only"}
 

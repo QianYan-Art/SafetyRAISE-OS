@@ -33,6 +33,8 @@ RUN if [ "${INSTALL_VIDEO_DEPS}" = "true" ]; then \
     fi
 
 COPY backend /app/backend
+COPY frontend/src /app/frontend/src
+COPY frontend/package.json frontend/package-lock.json /app/frontend/
 COPY --from=rust-token-accel-builder /build/query_token_accel/target/release/libquery_token_accel.so /app/backend/native/query_token_accel/libquery_token_accel.so
 COPY deployment/docker/backend-entrypoint.sh /usr/local/bin/backend-entrypoint.sh
 

@@ -37,6 +37,7 @@ class ReportExecutionDependencies:
     force_engineering_exports: bool = False
     code_digest: str | None = None
     development_outbound_enabled: bool = False
+    production_outbound_enabled: bool = False
     business_workflow: BusinessWorkflow | None = None
     external_knowledge_source: bool = False
     max_active_runs: int | None = None
@@ -51,6 +52,19 @@ class ReportExecutionDependencies:
             raise TypeError("资源检查必须可调用。")
         if type(self.development_outbound_enabled) is not bool:
             raise TypeError("development_outbound_enabled 必须是严格布尔值。")
+        if type(self.production_outbound_enabled) is not bool:
+            raise TypeError("production_outbound_enabled 必须是严格布尔值。")
+        if self.production_outbound_enabled:
+            if (self.development_outbound_enabled or self.force_engineering_exports
+                    or self.execution_profile != "outbound"
+                    or self.runtime_roles_factory is None
+                    or self.business_workflow is None
+                    or self.authorization_catalog is None
+                    or self.release_registry is None or not self.code_digest
+                    or len(self.code_digest) != 64
+                    or any(c not in "0123456789abcdef" for c in self.code_digest)
+                    or self.resource_check is None):
+                raise ValueError("正式运行必须具备完整业务、资源检查和有效发布绑定，不得混用开发模式。")
         if self.max_active_seconds <= 0:
             raise ValueError("运行时间预算必须为正。")
         if self.development_outbound_enabled:
@@ -67,9 +81,12 @@ class ReportExecutionDependencies:
 
 
 def production_dependencies(config: dict) -> None:
-    """数据接口可显式启用；在线 transport 未验收前保持关闭。"""
+    """正式入口只接受服务端运行配置，不接受测试执行器或客户端批准表。"""
     if config.get("execution_profile") == "synthetic_test" or config.get("test_release_bindings"):
         raise ValueError("生产配置禁止测试执行器或测试批准表。")
-    if config.get("online_enabled"):
-        raise ValueError("报告运行尚未完成在线能力与质量验收。")
+    if config.get("online_enabled") and (
+        not config.get("enabled") or not config.get("runtime_manifest_path")
+        or not config.get("resource_paths")
+    ):
+        raise ValueError("正式运行缺少服务端配置或资源检查路径。")
     return None

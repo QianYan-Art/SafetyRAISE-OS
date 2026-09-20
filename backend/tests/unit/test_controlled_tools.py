@@ -329,6 +329,42 @@ def test_read_knowledge_rejects_oversize_without_silent_truncation():
     assert tools.accessed_knowledge("reviewer") == {large["id"]}
 
 
+def test_partial_knowledge_checkpoint_cannot_claim_complete_read():
+    large = chunk(text="K" * 33000)
+    tools, _ = make_tools(chunks=[large])
+    first = tools.execute("reviewer", "read_knowledge", {"chunk_ids": [large["id"]]})
+    assert first["next_cursor"] is not None
+    state = tools.checkpoint_state()
+    assert state["knowledge"]["reviewer"] == []
+    first_range = state["knowledge_read_ranges"]["reviewer"][large["id"]]
+    assert first_range[0][0] == 0
+    assert 0 < first_range[0][1] < len(large["text"])
+
+    tampered = deepcopy(state)
+    tampered["knowledge"]["reviewer"] = [large["id"]]
+    restored, _ = make_tools(chunks=[large])
+    with pytest.raises(HarnessError) as error:
+        restored.restore_checkpoint_state(tampered)
+    assert error.value.code == "checkpoint_source_mismatch"
+
+
+def test_disconnected_knowledge_ranges_do_not_cover_missing_middle():
+    large = chunk(text="K" * 33000)
+    tools, _ = make_tools(chunks=[large])
+    state = tools.checkpoint_state()
+    state["knowledge_read_ranges"]["reviewer"] = {
+        large["id"]: [[0, 100], [200, len(large["text"])]],
+    }
+    state["knowledge"]["reviewer"] = [large["id"]]
+    with pytest.raises(HarnessError, match="checkpoint_source_mismatch"):
+        tools.restore_checkpoint_state(state)
+    state["knowledge"]["reviewer"] = []
+    tools.restore_checkpoint_state(state)
+    assert tools.accessed_knowledge("reviewer") == set()
+    tools._record_knowledge_range("reviewer", large["id"], 100, 200)
+    assert tools.accessed_knowledge("reviewer") == {large["id"]}
+
+
 def test_single_oversize_search_result_returns_directory_without_access():
     large = chunk(text="R" * 33000)
     tools, _ = make_tools(chunks=[large])

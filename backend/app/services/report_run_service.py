@@ -111,7 +111,7 @@ class ReportRunService:
     @staticmethod
     def _contract_digest() -> str:
         return canonical_digest({
-            "controller_version": 3, "journal_version": JOURNAL_VERSION,
+            "controller_version": 4, "journal_version": JOURNAL_VERSION,
             "candidate": CandidateReport.model_json_schema(),
             "review": ReviewResult.model_json_schema(), "tools": tool_schemas(),
         })
@@ -191,15 +191,19 @@ class ReportRunService:
                 != self.dependencies.external_knowledge_source):
             raise HarnessError("authorization_stale")
         profile = record.get("execution_profile")
-        if profile == "outbound" and not self.dependencies.development_outbound_enabled:
-            # 授权和计费边界完成前，在线执行始终关闭，不能借工程标记外发。
+        production = self.dependencies.production_outbound_enabled
+        if profile == "outbound" and not (
+            self.dependencies.development_outbound_enabled or production
+        ):
             if record.get("approval"):
                 raise HarnessError("outbound_transport_unavailable", 503)
             raise HarnessError("authorization_required")
         if profile not in {"synthetic_test", "outbound"}:
             raise HarnessError("authorization_stale")
         if (self.dependencies.execution_profile != profile
-                or record.get("quality_gate") != "engineering_only"
+                or record.get("quality_gate") != (
+                    "quality_validated" if production else "engineering_only"
+                )
                 or record["endpoint_profile_digest"] != self.dependencies.endpoint_profile_digest
                 or record["policy_digest"] != self.dependencies.policy_digest
                 or record["snapshot"]["knowledge_manifest_digest"]
@@ -214,10 +218,23 @@ class ReportRunService:
                 or canonical_digest(record["snapshot"]) != record["snapshot_digest"]):
             raise HarnessError("checkpoint_version_mismatch")
         if profile == "outbound":
-            self._validate_development_outbound(record, owner)
+            self._validate_outbound_authorization(record, owner)
 
-    def _validate_development_outbound(self, record: dict, owner: str | None) -> None:
-        if record.get("release_binding") is not None or record.get("formal_export_eligible", False):
+    def _validate_outbound_authorization(self, record: dict, owner: str | None) -> None:
+        if self.dependencies.production_outbound_enabled:
+            registry = self.dependencies.release_registry
+            binding = record.get("release_binding")
+            expected_binding = registry.binding_for({
+                "code_digest": self.dependencies.code_digest,
+                "policy_digest": self.dependencies.policy_digest,
+                "model_endpoint_digest": self.dependencies.endpoint_profile_digest,
+                "knowledge_manifest_digest": self.dependencies.knowledge_manifest_digest,
+            })
+            if (not binding or binding != expected_binding
+                    or registry.status(binding) != "approved"):
+                raise HarnessError("release_not_approved")
+            self.dependencies.resource_check()
+        elif record.get("release_binding") is not None or record.get("formal_export_eligible", False):
             raise HarnessError("authorization_stale")
         catalog = self.dependencies.authorization_catalog
         if catalog is None or not catalog.preview(record)["available"]:
@@ -532,15 +549,21 @@ class ReportRunService:
         review = ledger.apply(enforce_semantic_severity(review))
         obligations = snapshot["fact_obligations"]
         reviewer_evidence = inline_evidence | tools.accessed_evidence("reviewer")
+        reviewer_knowledge = tools.accessed_knowledge("reviewer")
         for claim in candidate.claims:
             if (not set(claim.evidence_refs) <= generator_evidence
                     or not set(claim.knowledge_refs) <= tools.accessed_knowledge("generator")):
                 raise ValueError("生成者引用了未取得原文的来源。")
         if not {ref for item in obligations for ref in item["source_refs"]} <= reviewer_evidence:
             raise ValueError("审查者尚未取得全部必要事实原文。")
+        candidate_knowledge_refs = {
+            ref for claim in candidate.claims for ref in claim.knowledge_refs
+        }
+        if not candidate_knowledge_refs <= reviewer_knowledge:
+            raise ValueError("审查者尚未完整读取候选引用的知识原文。")
         check_args = (
             record["snapshot_digest"], {item["obligation_id"] for item in obligations},
-            reviewer_evidence, tools.accessed_knowledge("reviewer"),
+            reviewer_evidence, reviewer_knowledge,
         )
         validate_review_structure(candidate, review, *check_args,
                                   resolved_issue_ids=frozenset(ledger.resolved_ids()))
@@ -569,9 +592,13 @@ class ReportRunService:
 
     def _publish(self, owner: str, run_id: str, token: int, patch: dict) -> dict:
         if not hasattr(self.store, "connection"):
+            if self.dependencies.production_outbound_enabled:
+                self._validate_outbound_authorization(self.store.get(owner, run_id), owner)
             return self.store.transition(owner, run_id, token, "published", patch,
                                          "final", {"state": "published"})
         with self.store.locked(owner, run_id, fencing_token=token) as (conn, row):
+            if self.dependencies.production_outbound_enabled:
+                self._validate_outbound_authorization(row["document"], owner)
             policy = RequestLedger._load_policy(row, reject_money=True)
             summary = RequestLedger._aggregate(
                 conn, row["run_id"], max_total_tokens=policy.max_total_tokens,

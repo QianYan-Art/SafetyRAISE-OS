@@ -70,6 +70,71 @@ class SyntheticRoles:
         self.closed = True
 
 
+class KnowledgeCitationRoles(SyntheticRoles):
+    """合成法律引用角色，验证引用原文必须来自工具审计。"""
+
+    def __init__(self, reviewer_read="full", chunk_id="legal-rule"):
+        super().__init__()
+        if reviewer_read not in {"none", "partial", "id_only", "full"}:
+            raise ValueError("reviewer_read 必须是 none、partial、id_only 或 full。")
+        if not isinstance(chunk_id, str) or not chunk_id:
+            raise ValueError("chunk_id 必须是非空字符串。")
+        self.reviewer_read = reviewer_read
+        self.chunk_id = chunk_id
+
+    def _read_call(self, context, *, continue_until_complete):
+        tool_results = context.get("tool_results", [])
+        if not tool_results:
+            arguments = {"chunk_ids": [self.chunk_id]}
+        else:
+            previous = tool_results[-1]["result"]
+            cursor = previous.get("next_cursor")
+            if not continue_until_complete or cursor is None:
+                return None
+            arguments = {"chunk_ids": [self.chunk_id], "cursor": cursor}
+        return {
+            "tool_calls": [{
+                "call_id": "read-legal-rule",
+                "name": "read_knowledge",
+                "arguments": arguments,
+            }],
+        }
+
+    def _search_call(self, context):
+        if context.get("tool_results"):
+            return None
+        return {
+            "tool_calls": [{
+                "call_id": "search-legal-rule",
+                "name": "search_knowledge",
+                "arguments": {"query": "法条正文", "top_k": 1},
+            }],
+        }
+
+    async def generate(self, context):
+        call = self._read_call(context, continue_until_complete=True)
+        if call is not None:
+            return call
+        result = await super().generate(context)
+        result["claims"][0]["type"] = "knowledge"
+        result["claims"][0]["knowledge_refs"] = [self.chunk_id]
+        return result
+
+    async def review(self, context):
+        if self.reviewer_read == "id_only":
+            call = self._search_call(context)
+            if call is not None:
+                return call
+        elif self.reviewer_read != "none":
+            call = self._read_call(
+                context,
+                continue_until_complete=self.reviewer_read == "full",
+            )
+            if call is not None:
+                return call
+        return await super().review(context)
+
+
 def dependencies(roles, profile="synthetic_test"):
     return ReportExecutionDependencies(
         roles_factory=lambda: roles, execution_profile=profile,

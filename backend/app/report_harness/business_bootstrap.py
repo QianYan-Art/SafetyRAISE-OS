@@ -20,7 +20,7 @@ from app.report_harness.money_guard import (
 from app.report_harness.runtime_factory import build_business_dependencies
 from app.report_harness.runtime_profiles import (
     capacity_from_expert_metadata, capacity_from_metadata, price_upper_cny,
-    openrouter_price_filter, capacity_budget,
+    openrouter_price_filter, capacity_budget, capacity_from_local_embedding_metadata,
 )
 from app.schemas.base import StrictModel
 from app.schemas.report_run import BudgetPolicy
@@ -81,6 +81,11 @@ def assemble_business_runtime(settings, manifest: BusinessRuntimeManifest, *, re
     expert = settings.models.expert_local
     embedding = settings.models.retrieval_embedding
     report = settings.models.report_external
+    contracts = billing["contracts"]
+    local_embedding = ("embedding" in contracts
+                       and contracts["embedding"].billing_mode == "local_token_free")
+    if local_embedding and embedding.base_url.rstrip("/") != expert.base_url.rstrip("/"):
+        raise HarnessError("local_embedding_endpoint_unapproved")
     endpoints_by_name = {item.name: item for item in report.endpoints}
     profiles = {}
     for role, name in (
@@ -100,8 +105,11 @@ def assemble_business_runtime(settings, manifest: BusinessRuntimeManifest, *, re
     }
     capacities = {
         "expert": capacity_from_expert_metadata(manifest.metadata["expert"], model=expert.model),
-        "embedding": capacity_from_metadata(
-            manifest.metadata["embedding"], model=embedding.model, effort=None, embedding=True,
+        "embedding": (
+            capacity_from_local_embedding_metadata(manifest.metadata["embedding"], model=embedding.model)
+            if local_embedding else capacity_from_metadata(
+                manifest.metadata["embedding"], model=embedding.model, effort=None, embedding=True,
+            )
         ),
     }
     for role, profile in profiles.items():
@@ -111,7 +119,6 @@ def assemble_business_runtime(settings, manifest: BusinessRuntimeManifest, *, re
         capacities[role] = capacity_from_metadata(
             manifest.metadata[role], model=profile.model or report.model, effort=effort,
         )
-    contracts = billing["contracts"]
     if set(contracts) != set(capacities):
         raise HarnessError("money_guard_roles_unregistered")
     for role, capacity in capacities.items():
@@ -119,10 +126,11 @@ def assemble_business_runtime(settings, manifest: BusinessRuntimeManifest, *, re
         if (contract.model != capacity.model or contract.endpoint_digest
                 != billing_endpoint_digest(role, endpoints[role], capacity)):
             raise HarnessError("money_guard_contract_configuration_changed")
-        expected_mode = "local_token_free" if role == "expert" else "remote_actual"
+        free = role == "expert" or (role == "embedding" and local_embedding)
+        expected_mode = "local_token_free" if free else "remote_actual"
         if contract.billing_mode != expected_mode:
             raise HarnessError("money_guard_billing_mode_invalid")
-        required = Decimal(0) if role == "expert" else price_upper_cny(
+        required = Decimal(0) if free else price_upper_cny(
             manifest.metadata[role], capacity, usd_to_cny=billing["usd_to_cny_upper"],
         )
         if contract.quote_cny < required:
@@ -155,6 +163,8 @@ def assemble_business_runtime(settings, manifest: BusinessRuntimeManifest, *, re
             options["verbosity"] = verbosity
         request_options[role] = options
     for role in ("generator", "reviewer", "embedding"):
+        if role == "embedding" and local_embedding:
+            continue
         address = urlsplit(endpoints[role])
         if address.scheme != "https" or address.hostname != "openrouter.ai":
             raise HarnessError("runtime_pricing_enforcement_unavailable")

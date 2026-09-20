@@ -9,7 +9,9 @@ import pytest
 from app.core.settings import HybridRetrievalSettings, LocalJsonlRetrievalSettings, RetrievalSettings
 from app.report_harness.contracts import canonical_digest
 from app.report_harness.errors import HarnessError
-from app.report_harness.knowledge_assets import file_digest, load_knowledge_assets
+from app.report_harness.knowledge_assets import (
+    file_digest, knowledge_asset_paths, load_knowledge_assets, source_text,
+)
 from app.report_harness.knowledge_bridge import KnowledgeBridge
 
 
@@ -78,6 +80,52 @@ def test_resolved_source_substitution_is_rejected(tmp_path, monkeypatch):
     sparse.rules_path = tmp_path / "other"
     with pytest.raises(HarnessError, match="knowledge_source_unapproved"):
         load_knowledge_assets(settings, approved_content_digest=digest)
+
+
+def test_approval_hashes_actual_enhanced_rules_selected_by_original_retriever(tmp_path, monkeypatch):
+    settings, paths, old_digest, sparse = fixture_settings(tmp_path, monkeypatch)
+    enhanced = tmp_path / "liability_rules_enhanced.jsonl"
+    enhanced.write_text("合成增强规则", encoding="utf-8")
+    sparse.rules_path = enhanced
+    selected = knowledge_asset_paths(settings)
+    assert selected["rules"] == enhanced
+    with pytest.raises(HarnessError, match="knowledge_source_unapproved"):
+        load_knowledge_assets(settings, approved_content_digest=old_digest)
+    digest = canonical_digest({name: file_digest(path) for name, path in selected.items()})
+    assets = load_knowledge_assets(settings, approved_content_digest=digest)
+    assert enhanced in assets.identities
+    assert paths["rules"] not in assets.identities
+    enhanced.write_text("合成增强规则已改变", encoding="utf-8")
+    with pytest.raises(HarnessError, match="authorization_stale"):
+        assets.validate()
+
+
+def test_source_context_preserves_metadata_and_does_not_present_rules_as_statutes():
+    record = {
+        "rule_id": "source#rule#1", "content": "合成摘录，不是完整条文。",
+        "authority": "合成机关", "effective_date": None,
+        "citation": {"article": "合成条款"}, "raw_sha256": "a" * 64,
+    }
+    text = source_text(record, record["rule_id"], "source", ())
+    assert "规则摘录，仅作为检索线索" in text
+    assert '"effective_date": null' in text
+    assert '"authority": "合成机关"' in text
+    assert '"citation": {"article": "合成条款"}' in text
+    assert '"raw_sha256": "' + "a" * 64 + '"' in text
+    assert text.endswith(record["content"])
+
+
+def test_source_neighbors_are_existing_adjacent_chunks_of_same_document(tmp_path, monkeypatch):
+    settings, _, digest, sparse = fixture_settings(tmp_path, monkeypatch)
+    sparse._chunk_records = [
+        {"chunk_id": f"law#{number:04d}", "source_id": "law", "content": f"合成原文{number}"}
+        for number in (1, 2, 4)
+    ] + [{"chunk_id": "other#0003", "source_id": "other", "content": "其他来源"}]
+    assets = load_knowledge_assets(settings, approved_content_digest=digest)
+    assert "相邻来源片段：law#0002" in assets.chunks[0]["text"]
+    assert "相邻来源片段：law#0001\n" in assets.chunks[1]["text"]
+    assert "相邻来源片段：未提供" in assets.chunks[2]["text"]
+    assert assets.chunks[0]["digest"] == canonical_digest(assets.chunks[0]["text"])
 
 
 def test_real_sparse_dense_assets_feed_original_hybrid_retriever(tmp_path):

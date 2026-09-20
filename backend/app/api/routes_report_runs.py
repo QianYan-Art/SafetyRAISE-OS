@@ -92,13 +92,41 @@ class HarnessRoute(APIRoute):
         return handle
 
 
-def get_report_run_service(database=Depends(get_database_service)) -> ReportRunService:
+def get_report_run_service(database=Depends(get_database_service),
+                           request: Request = None) -> ReportRunService:
     config = getattr(deps.get_settings(), "report_harness", ReportHarnessSettings())
     config = ReportHarnessSettings.model_validate(config)
     if not config.enabled:
         raise HarnessError("feature_unavailable", 503)
     if config.online_enabled:
-        raise HarnessError("outbound_transport_unavailable", 503)
+        runtime = (getattr(request.app.state, "report_harness_runtime", None)
+                   if request is not None else None)
+        if runtime is None or not runtime.production_outbound_enabled:
+            blocked = (getattr(request.app.state, "report_harness_blocked_reason", None)
+                       if request is not None else None)
+            read_or_cancel = request is not None and (
+                request.method == "GET" or (
+                    request.method == "POST" and request.url.path.endswith("/cancel")
+                )
+            )
+            if blocked in {"resource_pressure", "resource_probe_failed"} and read_or_cancel:
+                def unavailable():
+                    raise HarnessError("outbound_transport_unavailable", 503)
+
+                runtime = ReportExecutionDependencies(
+                    roles_factory=unavailable, execution_profile="outbound",
+                    endpoint_profile_digest=canonical_digest("unavailable"),
+                    policy_digest=canonical_digest("unavailable"),
+                    knowledge_manifest_digest=canonical_digest("unavailable"),
+                    force_engineering_exports=True,
+                )
+                store = RunStore(database.connection)
+                store.check_schema()
+                return ReportRunService(store, runtime)
+            raise HarnessError("outbound_transport_unavailable", 503)
+        store = RunStore(database.connection)
+        store.check_schema()
+        return ReportRunService(store, runtime)
     production_dependencies(config.model_dump(mode="json"))
     store = RunStore(database.connection)
     store.check_schema()

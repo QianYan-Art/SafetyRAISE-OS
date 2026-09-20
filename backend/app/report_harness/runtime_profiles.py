@@ -106,6 +106,17 @@ def capacity_from_expert_metadata(metadata: dict, *, model: str) -> ModelCapacit
     }))
 
 
+def capacity_from_local_embedding_metadata(metadata: dict, *, model: str) -> ModelCapacity:
+    if metadata.get("id", metadata.get("key")) != model:
+        raise HarnessError("model_metadata_mismatch")
+    context = metadata.get("max_context_length")
+    if metadata.get("type") not in {"embedding", "embeddings"} or type(context) is not int or context <= 0:
+        raise HarnessError("model_capacity_unverified")
+    return ModelCapacity(model, context, 0, canonical_digest({
+        "source": deepcopy(metadata), "policy": "既有自有嵌入服务容量，无模型输出",
+    }))
+
+
 def price_upper_cny(metadata: dict, capacity: ModelCapacity, *, usd_to_cny: Decimal) -> Decimal:
     """仅接受已核验的文字/嵌入计费项；新增收费类型必须先补预算证明。"""
     if metadata.get("id") != capacity.model or not usd_to_cny.is_finite() or usd_to_cny <= 0:

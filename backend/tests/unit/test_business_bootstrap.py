@@ -11,7 +11,9 @@ from app.report_harness.authorization import KnowledgeCollection
 from app.report_harness.contracts import canonical_digest
 from app.report_harness.errors import HarnessError
 from app.report_harness.money_guard import RoleBillingContract
-from app.report_harness.runtime_profiles import capacity_from_expert_metadata, capacity_from_metadata
+from app.report_harness.runtime_profiles import (
+    capacity_from_expert_metadata, capacity_from_metadata, capacity_from_local_embedding_metadata,
+)
 from app.report_harness.business_server import install_business_runtime
 from app.schemas.report_run import BudgetPolicy
 
@@ -106,6 +108,8 @@ def test_assembly_connects_original_templates_without_enabling_formal_release(co
     app = FastAPI()
     install_business_runtime(app, runtime)
     assert get_report_run_service in app.dependency_overrides
+    assert app.state.report_harness_development_runtime is runtime
+    assert not runtime.production_outbound_enabled
     with pytest.raises(ValueError):
         install_business_runtime(app, replace(runtime, business_workflow=None))
 
@@ -148,6 +152,58 @@ def test_assembly_does_not_create_missing_ledger(configured, tmp_path):
     with pytest.raises(HarnessError, match="money_guard_ledger_missing"):
         bootstrap.assemble_business_runtime(settings, manifest, resource_check=lambda: None)
     assert not path.exists()
+
+
+def configure_local_embedding(configured, model_type="embedding"):
+    settings, manifest, billing = configured
+    embedding = settings.models.retrieval_embedding
+    embedding.base_url = settings.models.expert_local.base_url
+    metadata = {"key": embedding.model, "max_context_length": 128, "type": model_type}
+    manifest.metadata["embedding"] = metadata
+    capacity = capacity_from_local_embedding_metadata(metadata, model=embedding.model)
+    billing["contracts"]["embedding"] = replace(
+        billing["contracts"]["embedding"],
+        endpoint_digest=bootstrap.billing_endpoint_digest(
+            "embedding", embedding.base_url + "/embeddings", capacity),
+        billing_mode="local_token_free", quote_cny=Decimal(0),
+    )
+
+
+@pytest.mark.parametrize("model_type", ["embedding", "embeddings"])
+def test_original_local_embedding_requires_explicit_free_contract(configured, monkeypatch, model_type):
+    configure_local_embedding(configured, model_type)
+    settings, manifest, _ = configured
+    captured = {}
+    original = bootstrap.build_business_dependencies
+
+    def capture(**kwargs):
+        captured.update(kwargs)
+        return original(**kwargs)
+
+    monkeypatch.setattr(bootstrap, "build_business_dependencies", capture)
+    runtime = bootstrap.assemble_business_runtime(settings, manifest, resource_check=lambda: None)
+    assert runtime.business_workflow is not None
+    assert captured["capacities"]["embedding"].output_tokens == 0
+    assert "provider" not in captured["request_options"].get("embedding", {})
+    assert "provider" in captured["request_options"]["generator"]
+
+
+def test_local_embedding_contract_does_not_authorize_another_host(configured):
+    configure_local_embedding(configured)
+    settings, manifest, _ = configured
+    settings.models.retrieval_embedding.base_url = "https://other.invalid/v1"
+    with pytest.raises(HarnessError, match="local_embedding_endpoint_unapproved"):
+        bootstrap.assemble_business_runtime(settings, manifest, resource_check=lambda: None)
+
+
+@pytest.mark.parametrize("metadata", [
+    {"key": "embedding", "max_context_length": 128, "type": "llm"},
+    {"key": "embedding", "max_context_length": True, "type": "embedding"},
+    {"key": "embedding", "max_context_length": 0, "type": "embeddings"},
+])
+def test_local_embedding_capacity_cannot_be_inferred_from_unverified_metadata(metadata):
+    with pytest.raises(HarnessError, match="model_capacity_unverified"):
+        capacity_from_local_embedding_metadata(metadata, model="embedding")
 
 
 def test_connection_key_preserves_original_environment_name_resolution(monkeypatch):

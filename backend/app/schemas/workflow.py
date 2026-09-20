@@ -118,6 +118,13 @@ class PublicReportModelResponse(StrictModel):
     options: list[PublicReportModelOptionResponse] = Field(default_factory=list)
 
 
+class PublicReportHarnessResponse(StrictModel):
+    enabled: bool = False
+    online_enabled: bool = False
+    available: bool = False
+
+
 class PublicAppConfigResponse(StrictModel):
     upload_limits: PublicUploadLimitsResponse
     report_model: PublicReportModelResponse
+    report_harness: PublicReportHarnessResponse = Field(default_factory=PublicReportHarnessResponse)

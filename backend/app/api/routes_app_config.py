@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
 from app.api.deps import get_current_user, get_settings
 from app.core.settings import Settings
 from app.schemas.workflow import (
     PublicAppConfigResponse,
     PublicReportModelResponse,
+    PublicReportHarnessResponse,
     PublicUploadLimitsResponse,
 )
 from app.services.auth_service import AuthenticatedUser
@@ -16,10 +17,27 @@ router = APIRouter(prefix="/api/v1/app-config", tags=["app-config"])
 def get_public_app_config(
     settings: Settings = Depends(get_settings),
     current_user: AuthenticatedUser = Depends(get_current_user),
+    request: Request = None,
 ):
+    config = getattr(settings, "report_harness", None)
+    runtime = (getattr(request.app.state, "report_harness_runtime", None)
+               if request is not None else None)
+    development = (getattr(request.app.state, "report_harness_development_runtime", None)
+                   if request is not None else None)
+    development_ready = bool(
+        development and development.development_outbound_enabled
+        and development.force_engineering_exports and development.business_workflow is not None
+    )
     return PublicAppConfigResponse(
         upload_limits=_build_public_upload_limits(settings),
         report_model=_build_public_report_model(settings, current_user=current_user),
+        report_harness=PublicReportHarnessResponse(
+            enabled=bool((config and config.enabled) or development_ready),
+            online_enabled=bool((config and config.online_enabled)
+                                or (runtime and runtime.production_outbound_enabled)
+                                or development_ready),
+            available=bool((runtime and runtime.production_outbound_enabled) or development_ready),
+        ),
     )
 
 

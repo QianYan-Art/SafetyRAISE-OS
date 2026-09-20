@@ -1,12 +1,19 @@
 import asyncio
+from dataclasses import replace
 from uuid import uuid4
 
 import pytest
 
+from app.report_harness.contracts import canonical_digest
 from app.report_harness.errors import HarnessError
 from app.schemas.report_run import CreateRunRequest
 from app.services.report_run_service import ReportRunService
-from tests.harness_fixtures import MemoryStore, SyntheticRoles, dependencies
+from tests.harness_fixtures import (
+    KnowledgeCitationRoles,
+    MemoryStore,
+    SyntheticRoles,
+    dependencies,
+)
 
 
 def create(service):
@@ -14,6 +21,42 @@ def create(service):
         request_id=uuid4(), session_id="synthetic-session",
         accident_data={"天气": "合成晴天"}, evidence_revision=0,
     ))
+
+
+def legal_service(reviewer_read):
+    roles = KnowledgeCitationRoles(reviewer_read)
+    base = dependencies(roles)
+    text = "合成法律原文：" + "法条正文。" * 7000
+    source = {
+        "id": "legal-rule", "document_id": "legal-doc", "version": "v1",
+        "text": text, "digest": canonical_digest(text),
+        "manifest_digest": base.knowledge_manifest_digest,
+    }
+    runtime = replace(base, knowledge_chunks=(source,))
+    service = ReportRunService(MemoryStore(), runtime)
+    return service, roles, create(service)
+
+
+@pytest.mark.parametrize(
+    ("reviewer_read", "expected_state"),
+    [
+        ("none", "needs_review"),
+        ("partial", "needs_review"),
+        ("id_only", "needs_review"),
+        ("full", "published"),
+    ],
+)
+def test_candidate_knowledge_refs_require_complete_independent_review(
+    reviewer_read, expected_state,
+):
+    service, roles, run = legal_service(reviewer_read)
+
+    result = asyncio.run(service.execute("owner", run["run_id"], 0))
+
+    assert result["state"] == expected_state
+    if expected_state == "needs_review":
+        assert "report" not in result
+    assert roles.closed
 
 
 def test_controller_requires_separate_review_of_final_candidate():
@@ -39,6 +82,36 @@ def test_invalid_review_cannot_publish():
     assert result["state"] == "needs_review"
     assert "report" not in result
     assert service.candidate("owner", run["run_id"])["display_status"] == "candidate"
+    assert roles.closed
+
+
+def test_revocation_after_review_is_checked_before_publication(monkeypatch):
+    revoked = False
+
+    class RevokingRoles(SyntheticRoles):
+        async def review(self, context):
+            nonlocal revoked
+            result = await super().review(context)
+            revoked = True
+            object.__setattr__(service.dependencies, "production_outbound_enabled", True)
+            return result
+
+    roles = RevokingRoles()
+    service = ReportRunService(MemoryStore(), dependencies(roles))
+    run = create(service)
+    # 合成角色验证控制流；不冒充正式模型或发布批准。
+    validations = []
+
+    def validate(*args):
+        validations.append(revoked)
+        if revoked:
+            raise HarnessError("release_not_approved", 503)
+
+    monkeypatch.setattr(service, "_validate_outbound_authorization", validate)
+    with pytest.raises(HarnessError, match="release_not_approved"):
+        asyncio.run(service.execute("owner", run["run_id"], 0))
+    assert validations[-1] is True
+    assert service.get("owner", run["run_id"])["state"] != "published"
     assert roles.closed
 
 

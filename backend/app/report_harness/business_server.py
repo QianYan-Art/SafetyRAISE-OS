@@ -28,6 +28,7 @@ def install_business_runtime(app, runtime):
         return ReportRunService(store, runtime)
 
     app.dependency_overrides[get_report_run_service] = service
+    app.state.report_harness_development_runtime = runtime
     return app
 
 

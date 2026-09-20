@@ -14,7 +14,7 @@ from app.report_harness.journal import ExecutionJournal
 from app.report_harness.role_loop import RoleLoop
 from app.schemas.report_run import CreateRunRequest
 from app.services.report_run_service import ReportRunService
-from tests.harness_fixtures import SyntheticRoles, dependencies
+from tests.harness_fixtures import KnowledgeCitationRoles, SyntheticRoles, dependencies
 
 
 def business_service(pg_store, roles=None):
@@ -73,7 +73,9 @@ def test_initial_retrieval_replays_from_postgres_without_repeating_operation(pg_
 
 def test_business_flow_persists_used_sources_without_copying_corpus(pg_store):
     store, owner, _, _ = pg_store
-    service, runtime, roles, run = business_service(pg_store)
+    service, runtime, roles, run = business_service(
+        pg_store, roles=KnowledgeCitationRoles("full", chunk_id="synthetic-rule"),
+    )
     assert store.get(owner, run["run_id"])["knowledge_source"] == []
     result = asyncio.run(service.execute(owner, run["run_id"], 0))
     assert result["state"] == "published"
