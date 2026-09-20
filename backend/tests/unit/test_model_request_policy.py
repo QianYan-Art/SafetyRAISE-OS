@@ -9,6 +9,7 @@ from app.core.model_requests import omit_explicit_token_limits
 from app.core.settings import ReportModelSettings
 from app.providers.llm.openai_report import OpenAIReportProvider
 from app.providers.llm.openai_vision import OpenAIVisionProvider
+from app.report_harness.errors import HarnessError
 from app.report_harness.transport_roles import RoleModel, TransportRoles
 
 
@@ -85,3 +86,17 @@ def test_harness_default_payload_does_not_emit_accounting_bound():
         profile, payload = roles._payload(role, {"instructions": "仅合成", "facts": []})
         assert profile.output_limit_field is None
         assert not {"max_tokens", "max_completion_tokens", "max_output_tokens"} & payload.keys()
+
+
+def test_provider_refusal_is_not_rewritten_as_invalid_json():
+    response = {
+        "choices": [{
+            "finish_reason": "stop",
+            "message": {"refusal": "供应商拒绝该请求。", "content": "not json"},
+        }],
+    }
+
+    with pytest.raises(HarnessError) as error:
+        TransportRoles._decode(response)
+
+    assert error.value.code == "model_refusal"

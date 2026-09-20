@@ -6,9 +6,9 @@ from copy import deepcopy
 from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
-from pydantic import Field, model_validator
+from pydantic import Field, ValidationError, model_validator
 
-from app.report_harness.contracts import canonical_digest
+from app.report_harness.contracts import CandidateReport, ReviewResult, canonical_digest
 from app.report_harness.errors import HarnessError
 from app.schemas.base import StrictModel
 
@@ -60,11 +60,14 @@ class RoleLoop:
 
     def __init__(self, tools, checkpoint: Callable[[dict, dict], None], *,
                  before_call: Callable[[], None], max_model_turns=24, max_tool_calls=24,
-                 journal=None, replay_model=None):
+                 journal=None, replay_model=None, max_protocol_repairs=2):
+        if type(max_protocol_repairs) is not int or not 0 <= max_protocol_repairs <= 2:
+            raise ValueError("单回合格式修复最多两次。")
         self.tools, self.checkpoint, self.before_call = tools, checkpoint, before_call
         self.journal = journal
         self.replay_model = replay_model
         self.max_model_turns, self.max_tool_calls = max_model_turns, max_tool_calls
+        self.max_protocol_repairs = max_protocol_repairs
         self.model_turns = 0
         self.tool_calls = 0
 
@@ -99,19 +102,44 @@ class RoleLoop:
 
     async def run(self, role: str, invoke: Callable[[dict], Awaitable[dict]], context: dict) -> dict:
         results = []
+        repairs = []
+
+        async def invoke_role(current):
+            try:
+                return await invoke(deepcopy(current))
+            except HarnessError as exc:
+                if exc.code != "invalid_role_response":
+                    raise
+                # 已收到但无法解码的结果可修复；未知完成/计费等错误绝不进入此分支。
+                return {"protocol_error": "invalid_role_response"}
+
+        async def replay_role(current):
+            try:
+                return await self.replay_model(role, deepcopy(current))
+            except HarnessError as exc:
+                if exc.code != "invalid_role_response":
+                    raise
+                return {"protocol_error": "invalid_role_response"}
+
         while self.journal is not None or self.model_turns < self.max_model_turns:
             self.before_call()
             current = {**deepcopy(context), "tool_results": deepcopy(results),
                        "tools": tool_schemas()}
+            if repairs:
+                current["protocol_feedback"] = {
+                    "instruction": "上次响应不符合完整响应结构。返回完整response_schema对象，"
+                                   "或完整tool_calls对象；不要仅返回字段、断言片段或思考。",
+                    "repairs": deepcopy(repairs),
+                }
             if self.journal is None:
                 self.model_turns += 1
-                response = await invoke(current)
+                response = await invoke_role(current)
             else:
                 response = await self.journal.invoke(
                     "model", {"role": role, "context": current},
-                    lambda: invoke(deepcopy(current)), limit=self.max_model_turns,
+                    lambda: invoke_role(current), limit=self.max_model_turns,
                     replay_operation=(
-                        (lambda: self.replay_model(role, deepcopy(current)))
+                        (lambda: replay_role(current))
                         if self.replay_model is not None else None
                     ),
                 )
@@ -125,10 +153,36 @@ class RoleLoop:
             if size > 256 * 1024:
                 raise HarnessError("role_response_too_large")
             # 也处理已提交的历史响应，恢复时不必再次请求模型。
-            response = normalize_tool_response(response)
-            if "tool_calls" not in response:
-                return response
-            turn = ToolTurn.model_validate(response)
+            try:
+                response = normalize_tool_response(response)
+                if "tool_calls" not in response:
+                    if response == {"protocol_error": "invalid_role_response"}:
+                        raise ValueError("响应未能解析为完整JSON对象。")
+                    if "response_schema" in context:
+                        model = {"generator": CandidateReport, "reviewer": ReviewResult}[role]
+                        model.model_validate(response)
+                    return response
+                turn = ToolTurn.model_validate(response)
+            except (ValidationError, ValueError) as exc:
+                if len(repairs) >= self.max_protocol_repairs:
+                    raise HarnessError("invalid_role_response") from exc
+                errors = exc.errors(include_input=False, include_url=False) if isinstance(
+                    exc, ValidationError,
+                ) else [{"type": "invalid_json", "loc": [], "msg": str(exc)}]
+                # JSONB会重排对象键；反馈排序固定，崩溃重放才能命中原请求摘要。
+                errors.sort(key=lambda item: json.dumps(
+                    [list(item["loc"]), item["type"]], ensure_ascii=False, separators=(",", ":"),
+                ))
+                repairs.append({
+                    "response_digest": canonical_digest(response),
+                    "errors": [{
+                        "type": item["type"],
+                        "path": [part if type(part) is int else str(part)[:80]
+                                 for part in item["loc"][:10]],
+                        "message": item["msg"][:200],
+                    } for item in errors[:16]],
+                })
+                continue
             for call in turn.tool_calls:
                 self.before_call()
                 if self.journal is not None:

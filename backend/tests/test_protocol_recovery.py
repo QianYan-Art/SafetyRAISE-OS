@@ -106,7 +106,7 @@ def test_can_resume_protocol_accepts_only_the_saved_single_tool_envelope():
     assert can_resume_protocol(_protocol_document(), unknown_requests=0)
 
 
-def test_can_resume_protocol_rejects_digest_mismatch_and_extra_result_fields():
+def test_can_resume_protocol_rejects_digest_mismatch_but_allows_known_structure_repairs():
     digest_mismatch = _protocol_document()
     entry = _generator_entries(digest_mismatch)[0]
     entry["result_digest"] = "0" * 64
@@ -116,7 +116,7 @@ def test_can_resume_protocol_rejects_digest_mismatch_and_extra_result_fields():
     entry = _generator_entries(extra_field)[0]
     entry["result"]["extra"] = "不属于ToolCall"
     entry["result_digest"] = canonical_digest(entry["result"])
-    assert not can_resume_protocol(extra_field, unknown_requests=0)
+    assert can_resume_protocol(extra_field, unknown_requests=0)
 
 
 def test_can_resume_protocol_rejects_unrelated_review_states_and_existing_candidates():
@@ -130,11 +130,15 @@ def test_can_resume_protocol_rejects_unrelated_review_states_and_existing_candid
     assert not can_resume_protocol(existing_candidate, unknown_requests=0)
 
 
-def test_can_resume_protocol_requires_exactly_one_generator_model_entry():
+def test_can_resume_protocol_handles_multiple_known_turns_but_never_a_valid_candidate():
     two_generators = _protocol_document(
-        model_results=[_model_result("first"), _model_result("second")],
+        model_results=[_model_result("first"), {"claim_id": "C8", "quote": "合成片段"}],
     )
-    assert not can_resume_protocol(two_generators, unknown_requests=0)
+    assert can_resume_protocol(two_generators, unknown_requests=0)
+    complete = _protocol_document(model_results=[
+        _model_result("first"), {"version": 1, "report_markdown": "合成完整候选"},
+    ])
+    assert not can_resume_protocol(complete, unknown_requests=0)
     assert not can_resume_protocol(_protocol_document(), unknown_requests=1)
 
 
@@ -210,7 +214,7 @@ def test_pg_protocol_resume_preserves_owner_cas_and_original_journal(pg_store):
     assert event["type"] == "checkpoint"
     assert event["state_version"] == after["state_version"]
     assert event["data"]["from_state"] == "needs_review"
-    assert event["data"]["recovery_kind"] == "single_tool_envelope"
+    assert event["data"]["recovery_kind"] == "pre_candidate_protocol"
 
 
 def test_pg_protocol_resume_rejects_wrong_owner_and_cas_without_mutation(pg_store):

@@ -166,3 +166,110 @@ def test_saved_single_tool_response_is_replayed_without_a_new_model_request():
     assert asyncio.run(loop.run("generator", role, {})) == {"candidate": "合成"}
     assert len(requests) == 1
     assert loop.tool_calls == 1
+
+
+def _candidate_context():
+    from app.report_harness.contracts import CandidateReport
+
+    return {"response_schema": CandidateReport.model_json_schema(), "candidate_version": 1}
+
+
+def test_fragmented_candidate_gets_bounded_structure_feedback_not_silent_defaults():
+    requests = []
+
+    async def role(context):
+        requests.append(context)
+        if "protocol_feedback" not in context:
+            return {"claim_id": "C8", "quote": "不要把此片段当完整报告或回填默认事实"}
+        assert "不要把此片段" not in str(context["protocol_feedback"])
+        return {"version": 1, "report_markdown": "合成完整正文"}
+
+    loop = RoleLoop(LocalTools(), lambda *_: None, before_call=lambda: None)
+    assert asyncio.run(loop.run("generator", role, _candidate_context()))["version"] == 1
+    assert len(requests) == 2 and loop.model_turns == 2 and loop.tool_calls == 0
+    errors = requests[1]["protocol_feedback"]["repairs"][0]["errors"]
+    assert any(item["path"] == ["report_markdown"] for item in errors)
+
+
+def test_known_decode_failure_is_repairable_but_unknown_completion_is_not():
+    calls = []
+
+    async def role(context):
+        calls.append(context)
+        if len(calls) == 1:
+            raise HarnessError("invalid_role_response")
+        return {"version": 1, "report_markdown": "合成正文"}
+
+    loop = RoleLoop(LocalTools(), lambda *_: None, before_call=lambda: None)
+    asyncio.run(loop.run("generator", role, _candidate_context()))
+    assert len(calls) == 2
+
+    async def unknown(context):
+        calls.append(context)
+        raise HarnessError("completion_unknown")
+
+    with pytest.raises(HarnessError, match="completion_unknown"):
+        asyncio.run(loop.run("generator", unknown, _candidate_context()))
+    assert len(calls) == 3
+
+
+@pytest.mark.parametrize("role_name", ["generator", "reviewer"])
+def test_structure_repair_stops_after_two_additional_model_turns(role_name):
+    calls = []
+
+    async def invalid(context):
+        calls.append(context)
+        return {"fragment": "合成"}
+
+    loop = RoleLoop(LocalTools(), lambda *_: None, before_call=lambda: None)
+    with pytest.raises(HarnessError, match="invalid_role_response"):
+        asyncio.run(loop.run(role_name, invalid, _candidate_context()))
+    assert len(calls) == 3 and loop.tool_calls == 0
+
+
+def test_structure_repair_cannot_expand_the_shared_model_turn_budget():
+    async def invalid(_context):
+        return {"fragment": "合成"}
+
+    loop = RoleLoop(LocalTools(), lambda *_: None, before_call=lambda: None, max_model_turns=2)
+    with pytest.raises(HarnessError, match="model_turn_budget_exhausted"):
+        asyncio.run(loop.run("generator", invalid, _candidate_context()))
+    assert loop.model_turns == 2
+
+
+def test_structure_repair_feedback_is_stable_after_jsonb_key_reordering():
+    import json
+    from copy import deepcopy
+    from app.report_harness.contracts import canonical_digest
+
+    class CachedJournal:
+        def __init__(self):
+            self.saved = {}
+
+        def attempts(self, category):
+            assert category == "model"
+            return len(self.saved)
+
+        async def invoke(self, category, identity, operation, **_kwargs):
+            assert category == "model"
+            key = canonical_digest(identity)
+            if key in self.saved:
+                return json.loads(json.dumps(self.saved[key], sort_keys=True))
+            response = await operation()
+            self.saved[key] = deepcopy(response)
+            return response
+
+    requests = []
+
+    async def role(context):
+        requests.append(context)
+        if "protocol_feedback" not in context:
+            return {"z_extra": "合成", "a_extra": "合成"}
+        return {"version": 1, "report_markdown": "合成正文"}
+
+    journal = CachedJournal()
+    for _ in range(2):
+        loop = RoleLoop(LocalTools(), lambda *_: None, before_call=lambda: None, journal=journal)
+        assert asyncio.run(loop.run("generator", role, _candidate_context()))["version"] == 1
+    assert len(requests) == 2
+    assert len(journal.saved) == 2

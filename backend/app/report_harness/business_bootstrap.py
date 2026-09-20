@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -189,7 +190,7 @@ def assemble_business_runtime(settings, manifest: BusinessRuntimeManifest, *, re
             acknowledged_unknown_attempts=frozen.acknowledged_unknown_attempts,
         )
 
-    return build_business_dependencies(
+    dependencies = build_business_dependencies(
         workflow=workflow, capacities=capacities, endpoints=endpoints, headers=headers,
         catalog=catalog, knowledge_chunks=assets.chunks, budget_policy=budget,
         monetary_client_factory=monetary_client, retriever_factory=assets.retriever,
@@ -200,3 +201,14 @@ def assemble_business_runtime(settings, manifest: BusinessRuntimeManifest, *, re
         request_options=request_options,
         role_timeouts=role_timeouts,
     )
+    runtime_factory = dependencies.runtime_roles_factory
+    if runtime_factory is None:
+        raise HarnessError("runtime_factory_required")
+
+    async def structured_runtime_factory(*args, **kwargs):
+        roles = await runtime_factory(*args, **kwargs)
+        roles.models["generator"] = replace(roles.models["generator"], json_object_mode=True)
+        roles.models["reviewer"] = replace(roles.models["reviewer"], json_object_mode=True)
+        return roles
+
+    return replace(dependencies, runtime_roles_factory=structured_runtime_factory)

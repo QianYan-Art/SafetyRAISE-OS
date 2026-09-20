@@ -100,9 +100,13 @@ class TransportRoles:
     def _decode(response):
         try:
             choices = response["choices"]
-            if len(choices) != 1 or choices[0]["finish_reason"] not in {"stop", "tool_calls"}:
+            if len(choices) != 1:
                 raise ValueError("未完整结束的角色响应。")
             message = choices[0]["message"]
+            if message.get("refusal"):
+                raise HarnessError("model_refusal")
+            if choices[0]["finish_reason"] not in {"stop", "tool_calls"}:
+                raise ValueError("未完整结束的角色响应。")
             if message.get("tool_calls"):
                 if message.get("content"):
                     raise ValueError("工具与最终内容不能混合。")

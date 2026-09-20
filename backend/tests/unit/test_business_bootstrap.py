@@ -1,3 +1,4 @@
+import asyncio
 from dataclasses import replace
 from decimal import Decimal
 from types import SimpleNamespace
@@ -10,10 +11,12 @@ from app.report_harness import business_bootstrap as bootstrap
 from app.report_harness.authorization import KnowledgeCollection
 from app.report_harness.contracts import canonical_digest
 from app.report_harness.errors import HarnessError
+from app.report_harness.execution import ReportExecutionDependencies
 from app.report_harness.money_guard import RoleBillingContract
 from app.report_harness.runtime_profiles import (
     capacity_from_expert_metadata, capacity_from_metadata, capacity_from_local_embedding_metadata,
 )
+from app.report_harness.transport_roles import RoleModel
 from app.report_harness.business_server import install_business_runtime
 from app.schemas.report_run import BudgetPolicy
 
@@ -112,6 +115,38 @@ def test_assembly_connects_original_templates_without_enabling_formal_release(co
     assert not runtime.production_outbound_enabled
     with pytest.raises(ValueError):
         install_business_runtime(app, replace(runtime, business_workflow=None))
+
+
+def test_assembly_enables_json_object_mode_only_for_report_roles(configured, monkeypatch):
+    async def factory(*args, **kwargs):
+        return SimpleNamespace(models={
+            "expert": RoleModel("synthetic-expert"),
+            "generator": RoleModel("synthetic-report"),
+            "reviewer": RoleModel("synthetic-report"),
+        })
+
+    captured = {}
+
+    def build(**kwargs):
+        captured.update(kwargs)
+        return ReportExecutionDependencies(
+            roles_factory=lambda: None,
+            execution_profile="outbound",
+            endpoint_profile_digest="0" * 64,
+            policy_digest="1" * 64,
+            knowledge_manifest_digest="2" * 64,
+            runtime_roles_factory=factory,
+        )
+
+    monkeypatch.setattr(bootstrap, "build_business_dependencies", build)
+    settings, manifest, _ = configured
+    runtime = bootstrap.assemble_business_runtime(settings, manifest, resource_check=lambda: None)
+    roles = asyncio.run(runtime.runtime_roles_factory())
+
+    assert roles.models["expert"].json_object_mode is False
+    assert roles.models["generator"].json_object_mode is True
+    assert roles.models["reviewer"].json_object_mode is True
+    assert "json_object_mode" not in captured["request_options"].get("expert", {})
 
 
 @pytest.mark.parametrize("change,code", [

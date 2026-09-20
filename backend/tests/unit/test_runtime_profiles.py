@@ -154,6 +154,67 @@ def test_expert_thoughts_are_removed_before_returning_response_to_ledger(monkeyp
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("role", ["generator", "reviewer"])
+def test_report_roles_reject_inner_json_extraction_and_preserve_usage(monkeypatch, role):
+    async def attempt(self, active_role, payload, timeout):
+        return {
+            "choices": [{"message": {
+                "content": '{"outer":{"claim":"C8"} trailing',
+                "reasoning": "内部思考",
+            }}],
+            "usage": {"total_tokens": 31},
+        }
+
+    monkeypatch.setattr(HTTPAttemptClient, "attempt", attempt)
+
+    async def run():
+        capacity = capacity_from_metadata(metadata(), model="synthetic", effort="high")
+        client = ConfiguredAttemptClient(
+            {role: "https://example.invalid/chat"}, {}, {role: capacity},
+        )
+        try:
+            response = await client.attempt(
+                role, {"model": "synthetic", "messages": []}, 1,
+            )
+            message = response["choices"][0]["message"]
+            assert message["content"] == ""
+            assert "reasoning" not in message
+            assert response["usage"] == {"total_tokens": 31}
+        finally:
+            await client.close()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("role", ["generator", "reviewer"])
+def test_report_roles_accept_only_complete_json_fence_before_redaction(monkeypatch, role):
+    async def attempt(self, active_role, payload, timeout):
+        return {
+            "choices": [{"message": {
+                "content": '```json\n{"reasoning":"内部思考","claim":"C8"}\n```',
+            }}],
+            "usage": {"total_tokens": 32},
+        }
+
+    monkeypatch.setattr(HTTPAttemptClient, "attempt", attempt)
+
+    async def run():
+        capacity = capacity_from_metadata(metadata(), model="synthetic", effort="high")
+        client = ConfiguredAttemptClient(
+            {role: "https://example.invalid/chat"}, {}, {role: capacity},
+        )
+        try:
+            response = await client.attempt(
+                role, {"model": "synthetic", "messages": []}, 1,
+            )
+            assert json.loads(response["choices"][0]["message"]["content"]) == {"claim": "C8"}
+            assert response["usage"] == {"total_tokens": 32}
+        finally:
+            await client.close()
+
+    asyncio.run(run())
+
+
 def test_real_capacity_defaults_are_accounting_only_and_explicit_small_budget_is_rejected():
     capacities = {
         "expert": ModelCapacity("expert", 262144, 262144, canonical_digest("expert")),

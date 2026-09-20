@@ -17,6 +17,7 @@ from app.schemas.report_run import BudgetPolicy
 
 
 _THOUGHT_FIELDS = frozenset({"think", "thinking", "reasoning", "reasoning_content", "reasoning_details"})
+_STRICT_JSON_ROLES = frozenset({"generator", "reviewer"})
 
 
 def _redact_thoughts(value):
@@ -27,6 +28,33 @@ def _redact_thoughts(value):
     if isinstance(value, str):
         return sanitize_model_text(value)
     return value
+
+
+def _parse_strict_json_object(content: str) -> dict:
+    """生成与审查只接受完整 JSON 对象，不从外层失败文本提取内层片段。"""
+    normalized = content.strip()
+    if not normalized:
+        raise InputValidationError("生成或审查响应为空，无法解码 JSON 对象。")
+
+    if normalized.startswith("```json"):
+        if not normalized.endswith("```"):
+            raise InputValidationError("生成或审查响应的 JSON 围栏不完整。")
+        fenced = normalized[len("```json"):-3]
+        if fenced.startswith("\r\n"):
+            fenced = fenced[2:]
+        elif fenced.startswith("\n"):
+            fenced = fenced[1:]
+        else:
+            raise InputValidationError("生成或审查响应不是完整 JSON 围栏。")
+        normalized = fenced.strip()
+
+    try:
+        result = json.loads(normalized)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise InputValidationError("生成或审查响应无法解码为完整 JSON 对象。") from exc
+    if not isinstance(result, dict):
+        raise InputValidationError("生成或审查响应不是 JSON 对象。")
+    return result
 
 
 @dataclass(frozen=True)
@@ -235,8 +263,13 @@ class ConfiguredAttemptClient(HTTPAttemptClient):
                 message.pop(field, None)
             if isinstance(message.get("content"), str):
                 try:
+                    parsed = (
+                        _parse_strict_json_object(message["content"])
+                        if role in _STRICT_JSON_ROLES
+                        else extract_json_from_text(message["content"])
+                    )
                     message["content"] = json.dumps(
-                        _redact_thoughts(extract_json_from_text(message["content"])), ensure_ascii=False,
+                        _redact_thoughts(parsed), ensure_ascii=False,
                         separators=(",", ":"), allow_nan=False,
                     )
                 except (InputValidationError, ValueError):

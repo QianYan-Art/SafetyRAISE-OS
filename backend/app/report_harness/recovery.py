@@ -9,19 +9,19 @@ from psycopg.errors import UniqueViolation
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from app.report_harness.contracts import canonical_digest
+from app.report_harness.contracts import CandidateReport, canonical_digest
 from app.report_harness.errors import HarnessError
 from app.report_harness.journal import JOURNAL_VERSION
 from app.report_harness.resources import assert_run_capacity
 from app.report_harness.request_ledger import RequestLedger
-from app.report_harness.role_loop import ToolCall
+from app.report_harness.role_loop import ToolTurn, normalize_tool_response
 from app.report_harness.store import RunStore
 
 _RECOVERABLE_STATES = frozenset({"preparing", "generating", "checking", "revising"})
 
 
 def can_resume_protocol(document: object, *, unknown_requests: object = None) -> bool:
-    """只识别已保存的生成者单工具响应故障，不放宽一般复核终态。"""
+    """仅恢复首份候选之前已结算的结构故障，不放宽独立审查或事实判断。"""
     if not isinstance(document, dict):
         return False
     if (document.get("state") != "needs_review"
@@ -73,25 +73,31 @@ def can_resume_protocol(document: object, *, unknown_requests: object = None) ->
         return False
     if any(category_counts[key] > attempts.get(key, 0) for key in category_counts):
         return False
-    # JSONB对象不保留插入时序；此兼容恢复仅接受第一份模型响应，不猜测“最后一项”。
-    if len(model_entries) != 1:
+    # JSONB对象不保留插入时序；检查全部回合，不猜测“最后一项”。
+    if not model_entries:
         return False
-
-    last = model_entries[0]
-    identity = last.get("identity")
-    result = last.get("result")
-    if (not isinstance(identity, dict)
-            or identity.get("role") != "generator"
-            or not isinstance(identity.get("context"), dict)
-            or identity["context"].get("candidate_version") != 1
-            or not isinstance(result, dict)
-            or set(result) != {"call_id", "name", "arguments"}):
-        return False
-    try:
-        call = ToolCall.model_validate(result)
-    except (ValidationError, TypeError, ValueError):
-        return False
-    return call.model_dump(mode="json") == result
+    repairable = False
+    for entry in model_entries:
+        identity, result = entry["identity"], entry["result"]
+        if (not isinstance(identity, dict) or identity.get("role") != "generator"
+                or not isinstance(identity.get("context"), dict)
+                or type(identity["context"].get("candidate_version")) is not int
+                or identity["context"]["candidate_version"] != 1):
+            return False
+        try:
+            CandidateReport.model_validate(result)
+        except ValidationError:
+            pass
+        else:
+            # 有完整候选却被后续引用/版本检查拒绝，不属于格式修复。
+            return False
+        try:
+            normalized = normalize_tool_response(result)
+            ToolTurn.model_validate(normalized)
+            repairable = repairable or normalized != result
+        except (ValidationError, TypeError, ValueError):
+            repairable = True
+    return repairable
 
 
 def _active_document_until(row: dict, end_at: datetime, reason: str) -> dict:
@@ -319,7 +325,7 @@ class RunRecovery:
             if protocol_resume:
                 # 专用恢复操作原子推进终态，不放宽通用状态机的终态转换规则。
                 document["review_status"] = "pending"
-                event["recovery_kind"] = "single_tool_envelope"
+                event["recovery_kind"] = "pre_candidate_protocol"
                 next_version, next_seq = row["state_version"] + 1, row["last_event_seq"] + 1
                 try:
                     updated = conn.execute(
