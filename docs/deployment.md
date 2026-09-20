@@ -273,6 +273,10 @@ Starlette `UploadFile`的大文件临时内容落到212本地受控目录，而�
 `RUNTIME_BASE_IMAGE`，输出镜像标签为 `safetyraise-backend:harness-runtime`。
 不能用缺少视频依赖的新镜像替换已有完整服务。操作前固定并记录基础镜像完整ID，构建时
 禁止拉取或联网，避免可变标签悄悄换源；构建后再次记录实际基础与成品ID。
+Windows准备Linux构建context时，必须用
+`git -c core.autocrlf=false -c core.eol=lf archive` 固定归档换行，
+并逐文件核对归档内容与构建清单。普通 `git archive` 可能受Windows换行配置影响，
+不能仅凭commit相同就认定归档字节与清单一致；不用修改全局Git配置。
 该路径清除新镜像内旧应用源码后复制本次源码，使用
 `verify-runtime-dependencies.py` 核验版本、视频模块及配置中的ffmpeg/ffprobe实际执行，
 再运行 `pip check`，不自动安装依赖。
