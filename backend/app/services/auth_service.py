@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Literal
+from uuid import uuid4
 
 from psycopg.errors import UniqueViolation
 
@@ -40,12 +41,12 @@ class AuthService:
                 with conn.cursor() as cur:
                     cur.execute(
                         """
-                        insert into users (username, password_hash, display_name, role)
-                        values (%s, %s, %s, 'user')
+                        insert into users (id, username, password_hash, display_name, role)
+                        values (%s, %s, %s, %s, 'user')
                         returning id::text as id, username, display_name, role, is_active,
                                   created_at::text as created_at, updated_at::text as updated_at
                         """,
-                        (request.username, password_hash, request.display_name),
+                        (str(uuid4()), request.username, password_hash, request.display_name),
                     )
                     row = cur.fetchone()
                 conn.commit()
@@ -119,10 +120,11 @@ class AuthService:
                     return
                 cur.execute(
                     """
-                    insert into users (username, password_hash, display_name, role)
-                    values (%s, %s, %s, 'admin')
+                    insert into users (id, username, password_hash, display_name, role)
+                    values (%s, %s, %s, %s, 'admin')
                     """,
                     (
+                        str(uuid4()),
                         self.settings.auth.bootstrap_admin_username,
                         hash_password(self.settings.auth.bootstrap_admin_password),
                         self.settings.auth.bootstrap_admin_display_name,
