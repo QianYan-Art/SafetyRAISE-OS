@@ -198,32 +198,43 @@ def can_resume_tool_contract(document: object, *, unknown_requests: object = Non
     if journal_data is None:
         return False
     entries, _ = journal_data
-    repaired_digests = set()
+    candidate_entries = []
     for entry in entries:
-        if (entry["category"] == "model"
-                and entry["identity"].get("role") == "generator"
-                and entry.get("result_digest") == candidate_digest):
-            context = entry["identity"].get("context")
-            if not isinstance(context, dict):
-                return False
-            feedback = context.get("protocol_feedback", {})
-            if not isinstance(feedback, dict):
-                return False
-            repairs = feedback.get("repairs", [])
-            if not isinstance(repairs, list) or len(repairs) > 2:
-                return False
-            for repair in repairs:
-                digest = repair.get("response_digest") if isinstance(repair, dict) else None
-                if (not isinstance(digest, str) or len(digest) != 64
-                        or any(char not in "0123456789abcdef" for char in digest)):
-                    return False
-                repaired_digests.add(digest)
+        if entry["category"] != "model" or entry["identity"].get("role") != "generator":
+            continue
+        try:
+            normalized = CandidateReport.model_validate(entry["result"])
+        except (TypeError, ValueError, ValidationError):
+            continue
+        if (normalized.version != 1
+                or canonical_digest(normalized.model_dump(mode="json")) != candidate_digest):
+            return False
+        candidate_entries.append(entry)
+    if len(candidate_entries) != 1:
+        return False
+    raw_candidate_digest = candidate_entries[0]["result_digest"]
+    repaired_digests = set()
+    context = candidate_entries[0]["identity"].get("context")
+    if not isinstance(context, dict):
+        return False
+    feedback = context.get("protocol_feedback", {})
+    if not isinstance(feedback, dict):
+        return False
+    repairs = feedback.get("repairs", [])
+    if not isinstance(repairs, list) or len(repairs) > 2:
+        return False
+    for repair in repairs:
+        digest = repair.get("response_digest") if isinstance(repair, dict) else None
+        if (not isinstance(digest, str) or len(digest) != 64
+                or any(char not in "0123456789abcdef" for char in digest)):
+            return False
+        repaired_digests.add(digest)
     committed_generator_digests = {
         entry["result_digest"] for entry in entries
         if entry["category"] == "model"
         and entry["identity"].get("role") == "generator"
         and entry["status"] == "committed"
-        and entry["result_digest"] != candidate_digest
+        and entry["result_digest"] != raw_candidate_digest
     }
     if not repaired_digests <= committed_generator_digests:
         return False
@@ -254,7 +265,7 @@ def can_resume_tool_contract(document: object, *, unknown_requests: object = Non
                     return False
             else:
                 if (saved_candidate.version != 1
-                        or canonical_digest(result) != candidate_digest):
+                        or canonical_digest(saved_candidate.model_dump(mode="json")) != candidate_digest):
                     return False
                 generator_candidates += 1
         else:

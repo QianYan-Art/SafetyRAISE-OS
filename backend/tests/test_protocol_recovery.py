@@ -274,6 +274,30 @@ def test_can_resume_tool_contract_allows_known_generator_structure_repair_histor
     assert can_resume_tool_contract(document, unknown_requests=0)
 
 
+@pytest.mark.parametrize("omitted_field", ["knowledge_refs", "evidence_refs"])
+def test_tool_contract_recovery_binds_normalized_candidate_without_rewriting_raw_response(omitted_field):
+    candidate = _tool_contract_candidate()
+    candidate["claims"] = [{
+        "claim_id": "fact-one", "type": "fact", "text_span": {"start": 0, "end": 2},
+        "evidence_refs": [], "knowledge_refs": [],
+    }]
+    digest = canonical_digest(candidate)
+    document = _tool_contract_document()
+    document.update({
+        "candidate": deepcopy(candidate),
+        "candidate_history": [{"version": 1, "digest": digest, "candidate": deepcopy(candidate)}],
+        "execution_journal": _tool_contract_journal(candidate, generator_history=True),
+    })
+    entry = next(item for item in document["execution_journal"]["entries"].values()
+                 if item.get("result_digest") == digest)
+    del entry["result"]["claims"][0][omitted_field]
+    entry["result_digest"] = canonical_digest(entry["result"])
+    before = deepcopy(document)
+    assert entry["result_digest"] != digest
+    assert can_resume_tool_contract(document, unknown_requests=0)
+    assert document == before
+
+
 @pytest.mark.parametrize("mutation", ["missing", "unbound", "too_many"])
 def test_tool_contract_recovery_requires_saved_candidate_repair_provenance(mutation):
     document = _tool_contract_document(generator_history=True)
