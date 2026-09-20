@@ -9,6 +9,14 @@
 manifest 不包含新预算授权；迁移时不得丢弃旧请求或未知预留。费用 SQLite 放本地磁盘，
 不能借用 SSHFS 运行目录。详见 `docs/deployment.md`，这些要求不表示已完成部署。
 
+正式覆盖文件 `deployment/docker/docker-compose.harness.yml` 将外部
+`runtime-manifest.json` 只读挂载到 `/run/safetyraise/harness/runtime-manifest.json`。
+独立release目录须包含与实际构建一致的 `generator.md`、`reviewer.md`、
+`build_manifest.json`、`approved_release_bindings.json` 和 `approved_evaluations/`；
+不能只挂载批准JSON而遗漏其证据或模板。费用账本在212本地盘，容器路径为
+`/var/lib/safetyraise/ledger/money.sqlite3`，manifest中的路径必须相同。
+完整workflow配置另行只读挂载，包含显式开关及实际资源探针路径。
+
 知识内容摘要覆盖实际选用的文件。原检索器启用 `prefer_enhanced_rules` 且增强规则文件
 存在时，批准与完整性检查必须使用增强规则，不能对基础规则算摘要后悄悄读取另一份文件。
 工具保留来源机关、日期等已有元数据、原始片段哈希和存在的相邻块编号；缺失信息保持未知。
@@ -373,6 +381,7 @@ python backend/app/tools/build_dense_index.py \
 1. `.env.server`
 2. `backend/config/workflow.server.yaml`
 3. `deployment/docker/docker-compose.server.yml`
+4. `deployment/docker/docker-compose.harness.yml`，仅在正式批准、账本及外部配置就绪后显式叠加
 
 ## 开源仓库包含与不包含的内容
 

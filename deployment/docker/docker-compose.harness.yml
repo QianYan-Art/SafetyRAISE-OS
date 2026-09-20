@@ -1,0 +1,47 @@
+# 仅在正式 harness 已完成批准材料、manifest 和账本准备后显式叠加。
+# 基础 docker-compose.server.yml 不引用本文件，因此旧部署保持关闭。
+services:
+  backend:
+    build:
+      # 正式镜像必须保留已核实的视频依赖；基础 Compose 的默认值刻意为 false。
+      args:
+        INSTALL_VIDEO_DEPS: "true"
+    # 默认使用专用非 root 身份；如需兼容现有 root:root、755 的 SSHFS 子目录，
+    # 可显式设 HARNESS_UID=0、HARNESS_GID=0，但只能在下方只读隔离约束全部生效，
+    # 且已实测 root 对 release 目录和批准表的 os.access(W_OK) 均为 false 时使用。
+    user: "${HARNESS_UID:-10001}:${HARNESS_GID:-10001}"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=128m
+    environment:
+      # 该外部配置必须显式包含 report_harness.enabled/online_enabled=true、
+      # 绝对 runtime_manifest_path 和 resource_paths，不在覆盖层自行编造模型合同。
+      WORKFLOW_CONFIG_PATH: /run/safetyraise/harness/workflow.server.yaml
+      TMPDIR: /tmp
+      # 不在覆盖层关闭 INSTALL_VIDEO_DEPS；正式镜像须保留已验证的视频依赖。
+    # 基础镜像 CMD 带有 --config；显式覆盖它，避免环境变量被命令行参数遮蔽。
+    command:
+      - python
+      - -m
+      - app.main
+      - serve
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --config
+      - /run/safetyraise/harness/workflow.server.yaml
+    volumes:
+      # 外部正式配置和 manifest 只读；manifest 内的 ledger_path 应指向下方容器路径。
+      - "${HARNESS_WORKFLOW_CONFIG_HOST_PATH:?set the approved harness workflow config path}:/run/safetyraise/harness/workflow.server.yaml:ro"
+      - "${HARNESS_MANIFEST_HOST_PATH:?set the approved runtime manifest path}:/run/safetyraise/harness/runtime-manifest.json:ro"
+      # 目录须包含 generator.md、reviewer.md、build_manifest.json、
+      # approved_release_bindings.json 和 approved_evaluations/，整体只读。
+      - "${HARNESS_RELEASE_DIR_HOST_PATH:?set the approved release directory path}:/app/backend/config/report_harness:ro"
+      # 这是 212 本地持久费用盘，不得指向 213 SSHFS runtime/kbase 目录。
+      # manifest 的 ledger_path 应使用 /var/lib/safetyraise/ledger/<filename>。
+      - "${HARNESS_LOCAL_LEDGER_HOST_DIR:?set the dedicated local 212 ledger directory}:/var/lib/safetyraise/ledger:rw"

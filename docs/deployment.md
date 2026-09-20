@@ -8,6 +8,11 @@ Compose 默认后端 `BACKEND_MEMORY_LIMIT=1536m`、`BACKEND_CPU_LIMIT=2`、
 `FRONTEND_PIDS_LIMIT=64`。它们是待负载验证的部署起点，不是已证明的容量。
 既有 `.env.server` 中的显式值优先，调整前核对实际生效配置，不输出密钥。
 
+一次212隔离业务实测中，768MiB容器在加载知识索引后无法再保留256MiB余量，
+触发保护且没有OOM；仅将该容器改为1GiB并禁止额外swap后可恢复运行。
+这不是完整视频流程的容量认证。Docker stats扣除部分缓存后的数值不等于
+`memory.current`；配置须同时检查cgroup峰值、宿主余量和实际视频负载。
+
 `DOCKER_LOG_MAX_SIZE=10m` 与 `DOCKER_LOG_MAX_FILE=3` 限定单容器日志轮转；
 后端增加仅访问本地 `/api/v1/health` 的存活探针，探针不调用模型。
 存活200不代表模型、完整链路或报告质量已验收。
@@ -27,6 +32,10 @@ Linux 内存检查同时考虑宿主 `MemAvailable` 与 cgroup v2 剩余额度�
 `report_harness.enabled=true`、`online_enabled=true`，提供绝对路径
 `runtime_manifest_path` 与 `resource_paths`。启动时验证数据库 schema、既有四角色合同、
 知识摘要、实际代码清单和只读批准绑定；不是运行开发服务器后自动切换正式模式。
+
+正式Docker部署须显式叠加 `deployment/docker/docker-compose.harness.yml`。
+它不会被基础脚本自动加载，不创建批准或预算；外部配置的命令行 `--config`
+与 `WORKFLOW_CONFIG_PATH` 同时指向 `/run/safetyraise/harness/workflow.server.yaml`。
 
 批准目录及其父目录必须对应用身份不可写。构建产物须包含代码清单核对的后端源码、
 前端源码与依赖清单；不能用缺文件的镜像绕过校验。费用 SQLite 必须放在运行主机本地盘，
@@ -226,6 +235,36 @@ sh deployment/docker/server-compose.sh up -d --build
 ```
 
 这个脚本会固定读取仓库根目录的 `.env.server`。
+
+### 正式harness覆盖
+
+完成真实业务核验和批准材料准备后，使用同一个Compose项目显式叠加覆盖文件，
+不要另建长期并行生产服务。先核验以下外部路径，再用两个 `-f` 参数执行
+`docker compose --env-file .env.server ... config --quiet`；不要公开完整配置输出。
+
+- `HARNESS_WORKFLOW_CONFIG_HOST_PATH`：显式启用harness的完整服务端配置。
+- `HARNESS_MANIFEST_HOST_PATH`：只读挂载为 `/run/safetyraise/harness/runtime-manifest.json`。
+- `HARNESS_RELEASE_DIR_HOST_PATH`：包含实际角色模板、构建清单、批准表和验收证据的只读目录。
+- `HARNESS_LOCAL_LEDGER_HOST_DIR`：212本地持久盘，容器路径 `/var/lib/safetyraise/ledger`，
+  不是来自213的SSHFS目录。必须迁移原账本，不能用空文件重新开始费用计数。
+
+覆盖默认身份为 `HARNESS_UID=10001/HARNESS_GID=10001`，根文件系统只读、移除全部
+capability、禁止提权，`TMPDIR=/tmp`，仅允许128MiB的 `/tmp` tmpfs及明确的数据挂载写入。
+宿主写目录须预先配置权限。若旧SSHFS目录只有root可写，可显式选择UID/GID 0，
+但必须保留全部只读隔离约束，实测应用对批准表及其父目录 `os.access(W_OK)` 为false。
+不能递归更改共享资产权限，也不能把可写Git检出目录当成批准源。
+
+完整新构建仍使用 `backend.Dockerfile`；覆盖强制保留 `INSTALL_VIDEO_DEPS=true`，
+不能用缺少视频依赖的新镜像替换已有完整服务。为节约小主机下载与存储，
+可用 `backend.runtime.Dockerfile` 复用已核实的本机运行镜像，并显式传入
+`RUNTIME_BASE_IMAGE`。操作前固定并记录基础镜像完整ID，构建时禁止拉取或联网，
+避免可变标签悄悄换源；构建后再次记录实际基础与成品ID。
+该路径清除新镜像内旧应用源码后复制本次源码，使用
+`verify-runtime-dependencies.py` 核验版本、视频模块及配置中的ffmpeg/ffprobe实际执行，
+再运行 `pip check`，不自动安装依赖。
+native库通过 `COPY --from` 从核实的基础阶段继承，仅可在原生源码已核实一致时复用；
+依赖或原生源码变化须回到完整构建。
+这两种构建都不能替代镜像内源码清单、批准权限、真实视频链路和上线资源验收。
 
 ## backend 配置切换
 
