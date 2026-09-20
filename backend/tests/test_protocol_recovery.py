@@ -600,8 +600,9 @@ def test_pg_protocol_resume_cannot_replace_a_new_queued_run_in_the_session(pg_st
     assert _run_row(store, run_id) == before
 
 
-def test_pg_protocol_authorization_only_reconfirms_identical_bindings(pg_store):
-    service, store, owner, _, run_id = _service_run(pg_store)
+@pytest.mark.parametrize("factory", [_service_run, _service_tool_contract_run])
+def test_pg_protocol_authorization_only_reconfirms_identical_bindings(pg_store, factory):
+    service, store, owner, _, run_id = factory(pg_store)
     before = _run_row(store, run_id)
     proof = {"snapshot_digest": before["document"]["snapshot_digest"], "binding": "合成绑定"}
     document = deepcopy(before["document"])
@@ -624,6 +625,54 @@ def test_pg_protocol_authorization_only_reconfirms_identical_bindings(pg_store):
     with pytest.raises(HarnessError, match="authorization_stale"):
         service.authorize(owner, run_id, SimpleNamespace())
     assert _run_row(store, run_id) == before
+
+
+def test_http_tool_contract_authorize_then_resume_preserves_the_existing_run(pg_store):
+    """执行器为替身，仅验证真实JWT、HTTP与数据库授权恢复边界。"""
+    from tests.test_run_recovery import _api_client
+
+    service, store, owner, _, run_id = _service_tool_contract_run(pg_store)
+    before = _run_row(store, run_id)
+    document = deepcopy(before["document"])
+    proof = {
+        "snapshot_digest": document["snapshot_digest"],
+        "endpoint_profile_digest": document["endpoint_profile_digest"],
+        "approved_knowledge_manifest_digest": service.dependencies.knowledge_manifest_digest,
+    }
+    document["approval"] = {
+        **proof, "policy_digest": document["policy_digest"], "owner_user_id": owner,
+        "approved_at": "2026-09-20T00:00:00+00:00",
+    }
+    with store.connection() as conn:
+        conn.execute("UPDATE report_runs SET document=%s WHERE run_id=%s", (Jsonb(document), run_id))
+    service.dependencies = replace(
+        service.dependencies,
+        authorization_catalog=SimpleNamespace(validate=lambda _record, _request: deepcopy(proof)),
+    )
+    claimed = []
+
+    async def record_claim(current_owner, current_run, token):
+        claimed.append((current_owner, current_run, token))
+        return service.get(current_owner, current_run)
+
+    service.execute_claimed = record_claim
+    with _api_client(pg_store, service) as (client, headers):
+        prefix = "/api/v1/report-runs/" + run_id
+        visible = client.get(prefix, headers=headers)
+        assert visible.status_code == 200
+        assert visible.json()["can_resume_protocol"] is True
+        approved = client.post(prefix + "/authorize", headers=headers, json={**proof, "confirmed": True})
+        assert approved.status_code == 200, approved.text
+        assert approved.json()["state_version"] == 54
+        resumed = client.post(prefix + "/resume/stream", headers=headers, json={
+            "expected_version": approved.json()["state_version"], "retry_unknown_requests": False,
+        })
+        assert resumed.status_code == 200, resumed.text
+        assert '"recovery_kind": "tool_contract"' in resumed.text
+    assert len(claimed) == 1 and claimed[0][:2] == (owner, run_id)
+    after = _run_row(store, run_id)
+    assert after["document"]["candidate"] == document["candidate"]
+    assert after["document"]["execution_journal"] == document["execution_journal"]
 
 
 def test_pg_protocol_resume_rejects_unknown_requests_and_retry_opt_in(pg_store):

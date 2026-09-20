@@ -168,8 +168,10 @@ class ReportRunService:
 
     def authorize(self, owner: str, run_id: str, request: AuthorizationRequest) -> dict:
         with self.store.locked(owner, run_id) as (conn, row):
-            protocol_resume = can_resume_protocol(
-                {**row["document"], "state": row["state"]}, unknown_requests=0,
+            document = {**row["document"], "state": row["state"]}
+            protocol_resume = (
+                can_resume_protocol(document, unknown_requests=0)
+                or can_resume_tool_contract(document, unknown_requests=0)
             )
             if row["state"] not in {"queued", "suspended"} and not protocol_resume:
                 raise HarnessError("authorization_state_conflict")
