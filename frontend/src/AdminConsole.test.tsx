@@ -118,6 +118,25 @@ describe("AdminConsole", () => {
     expect((screen.getByLabelText("显示名称") as HTMLInputElement).value).toBe("未保存草稿");
   });
 
+  it("用户抽屉有草稿时确认后才允许关闭", async () => {
+    const user = userEvent.setup();
+    const confirmDiscard = vi.spyOn(window, "confirm")
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true);
+    render(<AdminConsole currentUser={currentUser} activeTab="users" />);
+    await user.click(await screen.findByRole("button", { name: "编辑 analyst_demo" }));
+    await user.clear(screen.getByLabelText("显示名称"));
+    await user.type(screen.getByLabelText("显示名称"), "未保存草稿");
+    const dialog = screen.getByRole("dialog", { name: "编辑用户" });
+
+    await user.click(dialog.parentElement!);
+    expect(screen.getByRole("dialog", { name: "编辑用户" })).toBe(dialog);
+    expect(confirmDiscard).toHaveBeenLastCalledWith("有未保存的用户信息，放弃这些修改？");
+
+    await user.click(dialog.parentElement!);
+    expect(screen.queryByRole("dialog", { name: "编辑用户" })).toBeNull();
+  });
+
   it("保留真实用户创建 API，并以全屏抽屉编辑用户", async () => {
     const user = userEvent.setup();
     render(<AdminConsole currentUser={currentUser} activeTab="users" />);
@@ -173,5 +192,23 @@ describe("AdminConsole", () => {
     expect(screen.getByRole("dialog", { name: "确认删除空间" })).not.toBeNull();
     await user.click(screen.getByRole("button", { name: "删除空间" }));
     await waitFor(() => expect(api.deleteAdminSpace).toHaveBeenCalledWith("session-1"));
+  });
+
+  it("空间抽屉有草稿时确认后才允许关闭", async () => {
+    const user = userEvent.setup();
+    const confirmDiscard = vi.spyOn(window, "confirm")
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true);
+    render(<AdminConsole currentUser={currentUser} activeTab="spaces" />);
+    await user.click(await screen.findByRole("button", { name: "编辑 追尾事故档案" }));
+    await user.type(screen.getByLabelText("排序号"), "3");
+    const dialog = screen.getByRole("dialog", { name: "空间元数据编辑" });
+
+    await user.click(dialog.parentElement!);
+    expect(screen.getByRole("dialog", { name: "空间元数据编辑" })).toBe(dialog);
+    expect(confirmDiscard).toHaveBeenLastCalledWith("有未保存的空间调整，放弃这些修改？");
+
+    await user.click(dialog.parentElement!);
+    expect(screen.queryByRole("dialog", { name: "空间元数据编辑" })).toBeNull();
   });
 });

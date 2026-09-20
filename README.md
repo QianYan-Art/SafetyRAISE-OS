@@ -24,19 +24,20 @@ SafetyRAISE 面向道路交通事故分析场景，提供从事故图片、视�
    - 总上传大小最多 `1GB`
 3. 视频处理链路完整接入 `YOLO + ByteTrack + 自适应抽帧 + 视觉模型`。
 4. 报告链路固定为 `generate_guidance -> retrieve_knowledge(hybrid_local) -> generate_report(agentic RAG) -> postprocess`。
-5. 中间产物支持预览，包含：
+5. 报告 Harness 在原报告链路之外提供证据快照、独立审查、预算、审计与恢复能力；服务端未完成显式装配和质量门验证时保持关闭，旧报告链路不变。
+6. 中间产物支持预览，包含：
    - 知识片段
    - 模型自主搜索关键词
    - YOLO 完整输出
    - 结构化事故信息
    - 图片与关键帧
-6. 报告/视觉/嵌入模型按「每用户能力配置」解析：
+7. 报告/视觉/嵌入模型按「每用户能力配置」解析：
    - 普通用户：视觉/报告必须自填；嵌入留空才回退管理员，一旦自己填写就只用自己的
    - 专家模型固定为系统统一配置，不进入用户配置项
-   - 前端填 `url + key + model` 后直接写库，`api_key` 脱敏存储；系统报告端点收敛为单一端点，旧的 `max / pro / lite` 档位已下线
-7. 后端支持 `report.md / report.docx / report.pdf` 导出。
-8. 内置用户体系：用户名密码登录 + 注册、管理员/普通用户角色、仅管理员可见的用户与空间管理控制台。
-9. 会话隔离按登录账户收口：管理员不会在主会话列表看到普通用户会话，前端本地缓存也按用户分桶，切账号不串会话列表。
+   - 前端填 `url + key + model` 后写入用户配置；读取接口中的 `api_key` 只返回脱敏值，系统报告端点收敛为单一端点，旧的 `max / pro / lite` 档位已下线
+8. 后端支持 `report.md / report.docx / report.pdf` 导出。
+9. 内置用户体系：用户名密码登录 + 注册、管理员/普通用户角色、仅管理员可见的用户与空间管理控制台。
+10. 会话隔离按登录账户收口：管理员不会在主会话列表看到普通用户会话，前端本地缓存也按用户分桶，切账号不串会话列表。
 
 ## 处理链路
 
@@ -120,10 +121,11 @@ npm install
 
 ## 当前部署基线
 
-1. `deployment/docker/docker-compose.server.yml` 已为 `frontend / backend` 显式设置 `json-file` 日志策略；可通过 `.env.server` 的 `DOCKER_LOG_MAX_SIZE` / `DOCKER_LOG_MAX_FILE` 调整上限。
-2. `deployment/docker/provision-212.sh` 会用 `EOF` heredoc 预写 `/etc/docker/daemon.json`，把应用机宿主 Docker 默认日志限制为 `20m * 5`。
-3. `deployment/docker/setup-https.sh` 通过 `LOGROTATE_FILE=/etc/logrotate.d/safetyraise-cert-renew` 写入证书续期日志轮转规则。
-4. 前端本地会话缓存按 `user.id` 分桶，键前缀为 `SESSION_STORAGE_KEY_PREFIX`；落盘使用 `SYNC_DEBOUNCE_MS=300` 防抖，并在组件卸载/切账号前强制 flush。
+1. 双机生产拓扑由应用服务器运行 `frontend / backend`，数据服务器承载 PostgreSQL、知识库和共享运行时目录；应用服务器只保留运行容器、必要小型模型和受限本地临时数据。
+2. `deployment/docker/docker-compose.server.yml` 已为 `frontend / backend` 显式设置 `json-file` 日志策略；可通过 `.env.server` 的 `DOCKER_LOG_MAX_SIZE` / `DOCKER_LOG_MAX_FILE` 调整上限。
+3. `deployment/docker/provision-212.sh` 会用 `EOF` heredoc 预写 `/etc/docker/daemon.json`，把应用机宿主 Docker 默认日志限制为 `20m * 5`。
+4. `deployment/docker/setup-https.sh` 通过 `LOGROTATE_FILE=/etc/logrotate.d/safetyraise-cert-renew` 写入证书续期日志轮转规则。
+5. 前端本地会话缓存按 `user.id` 分桶，键前缀为 `SESSION_STORAGE_KEY_PREFIX`；落盘使用 `SYNC_DEBOUNCE_MS=300` 防抖，并在组件卸载/切账号前强制 flush。
 
 ## 当前限制
 

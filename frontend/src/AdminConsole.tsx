@@ -519,6 +519,22 @@ function UserDrawer(props: {
   if (!drawer) return null;
 
   const submittedUserId = drawer.record?.id;
+  const dirty = isEdit
+    ? displayName !== (drawer.record?.display_name ?? "")
+      || password !== ""
+      || role !== (drawer.record?.role ?? "user")
+      || isActive !== (drawer.record?.is_active ?? true)
+    : username !== ""
+      || displayName !== ""
+      || password !== ""
+      || role !== "user"
+      || !isActive;
+
+  function requestClose() {
+    if (saving) return;
+    if (dirty && !window.confirm("有未保存的用户信息，放弃这些修改？")) return;
+    onClose();
+  }
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -531,14 +547,14 @@ function UserDrawer(props: {
   }
 
   return (
-    <div className="account-drawer-overlay" onClick={onClose}>
+    <div className="account-drawer-overlay" onClick={requestClose}>
       <aside ref={dialogRef} className="account-drawer" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={isEdit ? "编辑用户" : "新增用户"}>
         <header className="account-drawer-header">
           <div>
             <span className="account-drawer-kicker">{isEdit ? "编辑用户" : "新增用户"}</span>
             <h2>{isEdit ? username : "创建新用户"}</h2>
           </div>
-          <button type="button" className="account-icon-button" disabled={saving} onClick={onClose} aria-label="关闭用户编辑" title="关闭"><X aria-hidden="true" /></button>
+          <button type="button" className="account-icon-button" disabled={saving} onClick={requestClose} aria-label="关闭用户编辑" title="关闭"><X aria-hidden="true" /></button>
         </header>
         <form className="account-drawer-form" onSubmit={(event) => void submit(event)}>
           <div className="account-drawer-body">
@@ -570,7 +586,7 @@ function UserDrawer(props: {
           <footer className="account-drawer-footer">
             <span className="account-drawer-hint">{isEdit ? "留空密码则保留原密码。" : "新账号的权限由角色决定。"}</span>
             <div className="account-footer-actions">
-              <button type="button" className="account-button account-button-secondary" onClick={onClose} disabled={saving}>取消</button>
+              <button type="button" className="account-button account-button-secondary" onClick={requestClose} disabled={saving}>取消</button>
               <button type="submit" className="account-button account-button-primary" disabled={saving}>{saving ? "保存中..." : "保存"}</button>
             </div>
           </footer>
@@ -620,15 +636,23 @@ function SpaceDrawer(props: {
     await onSubmit({ ownerUserId, sortOrder }, space.session_id);
   }
 
+  const dirty = ownerUserId !== (space.owner_user_id ?? "") || sortOrder.trim() !== "";
+
+  function requestClose() {
+    if (saving) return;
+    if (dirty && !window.confirm("有未保存的空间调整，放弃这些修改？")) return;
+    onClose();
+  }
+
   return (
-    <div className="account-drawer-overlay" onClick={onClose}>
+    <div className="account-drawer-overlay" onClick={requestClose}>
       <aside ref={dialogRef} className="account-drawer" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="空间元数据编辑">
         <header className="account-drawer-header">
           <div>
             <span className="account-drawer-kicker">空间元数据编辑</span>
             <h2 title={space.title}>{space.title}</h2>
           </div>
-          <button type="button" className="account-icon-button" disabled={saving} onClick={onClose} aria-label="关闭空间编辑" title="关闭"><X aria-hidden="true" /></button>
+          <button type="button" className="account-icon-button" disabled={saving} onClick={requestClose} aria-label="关闭空间编辑" title="关闭"><X aria-hidden="true" /></button>
         </header>
         <form className="account-drawer-form" onSubmit={(event) => void submit(event)}>
           <div className="account-drawer-body">
@@ -656,7 +680,7 @@ function SpaceDrawer(props: {
           <footer className="account-drawer-footer">
             <span className="account-drawer-hint">只有归属和排序会提交到管理 API。</span>
             <div className="account-footer-actions">
-              <button type="button" className="account-button account-button-secondary" onClick={onClose} disabled={saving}>取消</button>
+              <button type="button" className="account-button account-button-secondary" onClick={requestClose} disabled={saving}>取消</button>
               <button type="submit" className="account-button account-button-primary" disabled={saving}>{saving ? "保存中..." : "保存"}</button>
             </div>
           </footer>

@@ -139,7 +139,7 @@ tokenizer 校验输入长度。部署时需另外核实模型实际加载状态�
 1. `212/tcp/80`：HTTP 首次访问与证书校验
 2. `212/tcp/443`：HTTPS 正式流量
 3. `212/tcp/23333`：SSH 运维
-4. `213/tcp/5432`：PostgreSQL，仅允许来自 `212`
+4. 数据库连接二选一：直接连接时开放 `213/tcp/5432` 且仅允许来自 `212`；使用 SSH 隧道时只开放 `213/tcp/22`，在 `212` 的 Docker bridge 地址监听本地端口，供 backend 通过 host gateway 访问，并用宿主防火墙限制来源
 
 如果 212 通过 SSHFS 挂载 213 的知识库目录：
 
@@ -353,7 +353,7 @@ IDENTITY_FILE=/root/.ssh/<DATA_SERVER_IP>_ssh.key sh deployment/docker/mount-213
 >
 > 该脚本生成 `srv-safetyraise-kbase.mount` / `srv-safetyraise-runtime.mount`（开机自启）与 `safetyraise-backend-bindrefresh.service`（开机在挂载就绪后刷新 backend 的 bind mount）。应用服务器重启后挂载会自动恢复，无需人工介入。
 
-5. 让 `212` 能访问 `213:5432`
+5. 准备数据库连接：可让 `212` 直接访问 `213:5432`；受限网络下则在 `212` 建立指向 `213:5432` 的持久 SSH 隧道。监听地址必须是 Docker bridge 地址而非 `127.0.0.1`，并将 `DATABASE_DSN` 指向 compose 中的 host gateway 与本地转发端口
 6. 执行：
 
 ```bash
@@ -469,17 +469,17 @@ sh deployment/docker/setup-https.sh
    - 当前 server 配置已启用 `app.output_retain_count: 60`，只清理未被当前会话引用的旧输出目录；如果要保留更多历史，再按 213 磁盘容量调大。
 9. 试图在 212 上直接回写 `/srv/safetyraise/kbase/data`
    - 当前 `kbase` 在应用机侧按只读挂载使用；真正写入 dense 索引时，要在 `213:/srv/safetyraise-data/kbase/data` 本机落盘。
-2. `DATABASE_DSN` 仍然指向 `127.0.0.1`
-   - 双机部署时必须改成 `213` 的真实地址。
-3. 知识库目录挂载成功，但内部文件名不匹配
+10. `DATABASE_DSN` 在容器内错误指向 `127.0.0.1`
+   - 直接连接时应指向 `213` 的数据库地址；使用 `212` 上的 SSH 隧道时，应指向容器可访问的 host gateway 和本地转发端口，不能把容器自身回环地址当成宿主机。
+11. 知识库目录挂载成功，但内部文件名不匹配
    - 重点核对 `manifest / chunks / rules / dense_*`。
-4. 212 没有真正挂上 213 的知识库目录，但 backend 容器仍然启动成功
+12. 212 没有真正挂上 213 的知识库目录，但 backend 容器仍然启动成功
    - 重点检查 `/api/v1/ready`，不要只看 `/health`。
-5. 模型服务地址写了根地址，但真实接口不兼容 OpenAI Chat Completions
+13. 模型服务地址写了根地址，但真实接口不兼容 OpenAI Chat Completions
    - 先用 `curl` 打通再接到系统里。
-6. 证书脚本跑通了，但 Nginx 配置中的域名仍是示例值
+14. 证书脚本跑通了，但 Nginx 配置中的域名仍是示例值
    - 记得修改 `.env.server`，必要时同时改示例配置模板。
-7. 只拉起前端容器，忘了 backend
+15. 只拉起前端容器，忘了 backend
    - 先用 `docker ps` 看两类容器是否都在。
 
 ## 部署后第一组检查
@@ -489,6 +489,26 @@ sh deployment/docker/setup-https.sh
 `WORKSPACE_TEST_URL`指定开发页面地址（默认`http://127.0.0.1:15175`），
 `WORKSPACE_TEST_OUTPUT`指定截图及结果目录。该测试拦截API返回合成样例，
 不连接生产数据库、不调用模型，不能替代部署后的真实接口检查。
+
+部署后在本地`frontend`目录运行`node tests/production-workspace-smoke.mjs`，
+用合成账号和会话检查真实生产前端、鉴权、事实保存、用户模型配置与管理员接口；
+脚本不调用视觉、专家或报告模型，结束时删除合成数据，清理失败也会令烟测失败。
+
+```powershell
+$env:PRODUCTION_SMOKE_URL = 'https://<PRODUCTION_HOST>'
+$env:PRODUCTION_SMOKE_SSH_HOST = 'root@<APP_SERVER_IP>'
+$env:PRODUCTION_SMOKE_SSH_PORT = '23333'
+$env:PRODUCTION_SMOKE_SSH_KEY = '<SSH_KEY_PATH>'
+$env:PRODUCTION_SMOKE_EXPECTED_COMMIT = '<FULL_40_CHAR_COMMIT_SHA>'
+$env:PRODUCTION_SMOKE_OUTPUT = '<RESULT_DIRECTORY>'
+$env:PRODUCTION_SMOKE_API_TIMEOUT_MS = '30000'
+node tests/production-workspace-smoke.mjs
+```
+
+`PRODUCTION_SMOKE_URL`默认使用`https://safetyraise.cn`；
+`PRODUCTION_SMOKE_SSH_PORT`默认`23333`，`PRODUCTION_SMOKE_API_TIMEOUT_MS`默认`30000`且不得小于`1000`。
+`PRODUCTION_SMOKE_OUTPUT`不设置时使用本机临时目录；SSH主机、私钥和完整提交SHA必须显式提供。
+脚本要求本地工作区干净，确认SHA等于本地`HEAD`，自行重新构建前端，再逐个比较线上JS/CSS与本地产物的SHA-256。
 
 建议按以下顺序检查：
 
