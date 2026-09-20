@@ -21,7 +21,9 @@ from app.report_harness.execution import ReportExecutionDependencies
 from app.report_harness.controlled_tools import ControlledTools
 from app.report_harness.role_loop import RoleLoop, role_context, tool_schemas
 from app.report_harness.journal import ExecutionJournal, JOURNAL_VERSION
-from app.report_harness.recovery import RunRecovery, can_resume_protocol
+from app.report_harness.recovery import (
+    RunRecovery, can_resume_protocol, can_resume_tool_contract,
+)
 from app.report_harness.review_ledger import IssueLedger
 from app.report_harness.prompts import load_role_prompts
 from app.report_harness.request_ledger import RequestLedger
@@ -99,8 +101,10 @@ class ReportRunService:
         result = {key: document[key] for key in keys}
         result["execution_profile"] = document.get("execution_profile", "outbound")
         result["budget_policy"] = document.get("budget_policy", {})
-        result["can_resume_protocol"] = can_resume_protocol(
-            document, unknown_requests=document.get("budget", {}).get("unknown_requests"),
+        unknown_requests = document.get("budget", {}).get("unknown_requests")
+        result["can_resume_protocol"] = (
+            can_resume_protocol(document, unknown_requests=unknown_requests)
+            or can_resume_tool_contract(document, unknown_requests=unknown_requests)
         )
         if document["state"] == "published":
             result["report"] = document["report"]
@@ -129,8 +133,10 @@ class ReportRunService:
                 **RequestLedger(self.store).view(owner, record["run_id"]),
                 "active_seconds": record.get("active_seconds", 0),
             }
-        result["can_resume_protocol"] = can_resume_protocol(
-            record, unknown_requests=result["budget"].get("unknown_requests"),
+        unknown_requests = result["budget"].get("unknown_requests")
+        result["can_resume_protocol"] = (
+            can_resume_protocol(record, unknown_requests=unknown_requests)
+            or can_resume_tool_contract(record, unknown_requests=unknown_requests)
         )
         return result
 

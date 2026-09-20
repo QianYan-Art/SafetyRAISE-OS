@@ -100,6 +100,174 @@ def can_resume_protocol(document: object, *, unknown_requests: object = None) ->
     return repairable
 
 
+def _tool_contract_journal(document: dict) -> tuple[list[dict], int] | None:
+    journal = document.get("execution_journal")
+    if not isinstance(journal, dict) or journal.get("version") != JOURNAL_VERSION:
+        return None
+    attempts = journal.get("attempts")
+    entries = journal.get("entries")
+    if (not isinstance(attempts, dict) or not isinstance(entries, dict)
+            or not {"model", "tool"} <= attempts.keys()
+            or not attempts.keys() <= {"model", "tool", "prepare"}
+            or any(type(value) is not int or value < 0 for value in attempts.values())):
+        return None
+
+    category_counts = {"model": 0, "tool": 0, "prepare": 0}
+    denied_count = 0
+    try:
+        for key, entry in entries.items():
+            identity = entry.get("identity") if isinstance(entry, dict) else None
+            if (not isinstance(key, str) or len(key) != 64
+                    or any(char not in "0123456789abcdef" for char in key)
+                    or not isinstance(entry, dict)
+                    or not isinstance(identity, dict)
+                    or entry.get("category") not in category_counts
+                    or type(entry.get("fencing_token")) is not int
+                    or entry["fencing_token"] <= 0
+                    or entry.get("status") not in {"committed", "denied"}
+                    or canonical_digest({
+                        "category": entry["category"], "identity": identity,
+                    }) != key):
+                return None
+            category_counts[entry["category"]] += 1
+            if entry["category"] == "tool" and (
+                    identity.get("role") not in {"generator", "reviewer"}
+                    or not isinstance(identity.get("call_id"), str)
+                    or not isinstance(identity.get("name"), str)
+                    or not isinstance(identity.get("arguments"), dict)):
+                return None
+            if entry["status"] == "denied":
+                if (entry["category"] != "tool"
+                        or identity.get("name") != "search_knowledge"
+                        or entry.get("code") != "retrieval_policy_exceeded"):
+                    return None
+                denied_count += 1
+                continue
+            result = entry.get("result")
+            if (not isinstance(result, dict)
+                    or canonical_digest(result) != entry.get("result_digest")):
+                return None
+    except (KeyError, TypeError, ValueError):
+        return None
+    if any(category_counts[key] > attempts.get(key, 0) for key in category_counts):
+        return None
+    if denied_count == 0:
+        return None
+    return list(entries.values()), denied_count
+
+
+def can_resume_tool_contract(document: object, *, unknown_requests: object = None) -> bool:
+    """仅恢复已生成候选、审查前因检索策略拒绝而失败的运行。"""
+    if not isinstance(document, dict):
+        return False
+    if (document.get("state") != "failed"
+            or document.get("terminal_reason") != "retrieval_policy_exceeded"
+            or type(document.get("candidate_version")) is not int
+            or document["candidate_version"] != 1
+            or document.get("review") is not None
+            or document.get("review_history") not in (None, [])):
+        return False
+    if type(unknown_requests) is not int or unknown_requests != 0:
+        return False
+
+    try:
+        candidate = CandidateReport.model_validate(document.get("candidate"))
+        candidate_data = candidate.model_dump(mode="json")
+        candidate_digest = canonical_digest(candidate_data)
+        if (candidate.version != 1
+                or canonical_digest(document["candidate"]) != candidate_digest):
+            return False
+    except (KeyError, TypeError, ValueError, ValidationError):
+        return False
+
+    history = document.get("candidate_history")
+    if (not isinstance(history, list) or len(history) != 1
+            or not isinstance(history[0], dict)
+            or type(history[0].get("version")) is not int
+            or history[0]["version"] != 1):
+        return False
+    history_item = history[0]
+    try:
+        if (history_item.get("digest") != candidate_digest
+                or canonical_digest(history_item["candidate"]) != candidate_digest):
+            return False
+    except (KeyError, TypeError, ValueError):
+        return False
+
+    journal_data = _tool_contract_journal(document)
+    if journal_data is None:
+        return False
+    entries, _ = journal_data
+    repaired_digests = set()
+    for entry in entries:
+        if (entry["category"] == "model"
+                and entry["identity"].get("role") == "generator"
+                and entry.get("result_digest") == candidate_digest):
+            context = entry["identity"].get("context")
+            if not isinstance(context, dict):
+                return False
+            feedback = context.get("protocol_feedback", {})
+            if not isinstance(feedback, dict):
+                return False
+            repairs = feedback.get("repairs", [])
+            if not isinstance(repairs, list) or len(repairs) > 2:
+                return False
+            for repair in repairs:
+                digest = repair.get("response_digest") if isinstance(repair, dict) else None
+                if (not isinstance(digest, str) or len(digest) != 64
+                        or any(char not in "0123456789abcdef" for char in digest)):
+                    return False
+                repaired_digests.add(digest)
+    committed_generator_digests = {
+        entry["result_digest"] for entry in entries
+        if entry["category"] == "model"
+        and entry["identity"].get("role") == "generator"
+        and entry["status"] == "committed"
+        and entry["result_digest"] != candidate_digest
+    }
+    if not repaired_digests <= committed_generator_digests:
+        return False
+    generator_candidates = 0
+    for entry in entries:
+        if entry["category"] != "model":
+            continue
+        identity = entry["identity"]
+        context = identity.get("context")
+        result = entry["result"]
+        if (identity.get("role") not in {"generator", "reviewer"}
+                or not isinstance(context, dict)):
+            return False
+        role = identity["role"]
+        if role == "generator":
+            if (type(context.get("candidate_version")) is not int
+                    or context["candidate_version"] != 1):
+                return False
+            try:
+                saved_candidate = CandidateReport.model_validate(result)
+            except (TypeError, ValueError, ValidationError):
+                # 仅接受完整候选的既有修复反馈实际引用的历史响应，不按案例字段特判。
+                if entry["result_digest"] in repaired_digests:
+                    continue
+                try:
+                    ToolTurn.model_validate(normalize_tool_response(result))
+                except (TypeError, ValueError, ValidationError):
+                    return False
+            else:
+                if (saved_candidate.version != 1
+                        or canonical_digest(result) != candidate_digest):
+                    return False
+                generator_candidates += 1
+        else:
+            if (context.get("candidate_digest") != candidate_digest
+                    or canonical_digest(context.get("candidate")) != candidate_digest):
+                return False
+            try:
+                ToolTurn.model_validate(normalize_tool_response(result))
+            except (TypeError, ValueError, ValidationError):
+                return False
+    return generator_candidates == 1
+
+
 def _active_document_until(row: dict, end_at: datetime, reason: str) -> dict:
     document = deepcopy(row["document"] or {})
     if not isinstance(document, dict):
@@ -242,11 +410,15 @@ class RunRecovery:
             protocol_resume = can_resume_protocol(
                 self.store._view(row), unknown_requests=0,
             )
-            if row["state"] != "suspended" and not protocol_resume:
+            tool_contract_resume = can_resume_tool_contract(
+                self.store._view(row), unknown_requests=0,
+            )
+            special_resume = protocol_resume or tool_contract_resume
+            if row["state"] != "suspended" and not special_resume:
                 raise HarnessError(
                     "not_resumable", 409, {"state": row["state"]},
                 )
-            if protocol_resume and retry_unknown_requests:
+            if special_resume and retry_unknown_requests:
                 raise HarnessError("invalid_resume_request", 422)
             document = deepcopy(row["document"] or {})
             if not isinstance(document, dict):
@@ -322,10 +494,12 @@ class RunRecovery:
                 "retry_unknown_requests": retry_unknown_requests,
                 "approved_unknown_request_ids": unknown_request_ids,
             }
-            if protocol_resume:
+            if special_resume:
                 # 专用恢复操作原子推进终态，不放宽通用状态机的终态转换规则。
                 document["review_status"] = "pending"
-                event["recovery_kind"] = "pre_candidate_protocol"
+                event["recovery_kind"] = (
+                    "pre_candidate_protocol" if protocol_resume else "tool_contract"
+                )
                 next_version, next_seq = row["state_version"] + 1, row["last_event_seq"] + 1
                 try:
                     updated = conn.execute(

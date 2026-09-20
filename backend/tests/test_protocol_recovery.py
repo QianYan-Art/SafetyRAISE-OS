@@ -11,7 +11,9 @@ from psycopg.types.json import Jsonb
 from app.report_harness.contracts import canonical_digest
 from app.report_harness.errors import HarnessError
 from app.report_harness.journal import JOURNAL_VERSION
-from app.report_harness.recovery import RunRecovery, can_resume_protocol
+from app.report_harness.recovery import (
+    RunRecovery, can_resume_protocol, can_resume_tool_contract,
+)
 from app.services.report_run_service import ReportRunService
 from app.schemas.report_run import CreateRunRequest
 from tests.harness_fixtures import SyntheticRoles, dependencies
@@ -94,6 +96,124 @@ def _protocol_document(*, model_results: list[dict] | None = None) -> dict:
     }
 
 
+def _tool_contract_candidate() -> dict:
+    return {
+        "version": 1,
+        "report_markdown": "完整候选",
+        "claims": [],
+        "obligation_resolutions": [],
+        "issue_responses": [],
+    }
+
+
+def _tool_contract_journal(
+    candidate: dict, *, denied_count: int = 2, generator_history: bool = False,
+) -> dict:
+    entries = {}
+
+    def committed(category: str, identity: dict, result: dict) -> None:
+        key = canonical_digest({"category": category, "identity": identity})
+        entries[key] = {
+            "category": category,
+            "fencing_token": 9,
+            "identity": identity,
+            "status": "committed",
+            "result": deepcopy(result),
+            "result_digest": canonical_digest(result),
+        }
+
+    prepare_identity = {"snapshot": "snapshot", "contract": "contract"}
+    committed("prepare", prepare_identity, {"guidance": {"ready": True}, "knowledge": []})
+    committed(
+        "tool",
+        {
+            "step": "initial_retrieval", "role": "generator", "name": "search_knowledge",
+            "call_id": "controller-initial-retrieval",
+            "arguments": {"query": "事实", "top_k": 1},
+        },
+        {"result": {"items": [], "truncated": False, "next_cursor": None},
+         "tool_state": {"registry": {}}},
+    )
+    generator_results = (
+        [{"claim_id": "arbitrary-claim", "quote": "合成片段", "type": "fact",
+          "evidence_refs": [], "knowledge_refs": []},
+         {"protocol_error": "invalid_role_response"}, candidate]
+        if generator_history else [candidate]
+    )
+    for turn, result in enumerate(generator_results):
+        context = {"candidate_version": 1, "tool_results": []}
+        if turn:
+            context["protocol_feedback"] = {
+                "repairs": [{"response_digest": canonical_digest(prior), "errors": []}
+                            for prior in generator_results[:turn]],
+            }
+        committed(
+            "model",
+            {"role": "generator", "context": context, "turn": turn},
+            result,
+        )
+    reviewer_context = {
+        "snapshot": {"case": "snapshot"},
+        "snapshot_digest": "s" * 64,
+        "candidate": deepcopy(candidate),
+        "candidate_digest": canonical_digest(candidate),
+        "unresolved_issues": [],
+        "tool_results": [],
+    }
+    calls = [
+        {"call_id": "review-read", "name": "read_evidence", "arguments": {"evidence_ids": []}},
+        *[
+            {"call_id": f"review-search-{index}", "name": "search_knowledge",
+             "arguments": {"query": "合成", "top_k": 5}}
+            for index in range(denied_count)
+        ],
+    ]
+    committed(
+        "model",
+        {"role": "reviewer", "context": reviewer_context},
+        {"tool_calls": calls},
+    )
+    committed(
+        "tool",
+        {"role": "reviewer", "context_digest": "r" * 64, "call_id": "review-read",
+         "name": "read_evidence", "arguments": {"evidence_ids": []}},
+        {"result": {"records": []}, "tool_state": {"registry": {}}},
+    )
+    for index in range(denied_count):
+        identity = {
+            "role": "reviewer", "context_digest": "r" * 64,
+            "call_id": f"review-search-{index}", "name": "search_knowledge",
+            "arguments": {"query": "合成", "top_k": 5},
+        }
+        key = canonical_digest({"category": "tool", "identity": identity})
+        entries[key] = {
+            "category": "tool", "fencing_token": 9, "identity": identity,
+            "status": "denied", "code": "retrieval_policy_exceeded",
+        }
+    return {
+        "version": JOURNAL_VERSION,
+        "attempts": {"model": len(generator_results) + 1,
+                      "tool": 2 + denied_count, "prepare": 1},
+        "entries": entries,
+    }
+
+
+def _tool_contract_document(*, denied_count: int = 2, generator_history: bool = False) -> dict:
+    candidate = _tool_contract_candidate()
+    digest = canonical_digest(candidate)
+    return {
+        "state": "failed",
+        "terminal_reason": "retrieval_policy_exceeded",
+        "review_status": "failed",
+        "candidate_version": 1,
+        "candidate": deepcopy(candidate),
+        "candidate_history": [{"version": 1, "digest": digest, "candidate": deepcopy(candidate)}],
+        "execution_journal": _tool_contract_journal(
+            candidate, denied_count=denied_count, generator_history=generator_history,
+        ),
+    }
+
+
 def _generator_entries(document: dict) -> list[dict]:
     return [
         entry for entry in document["execution_journal"]["entries"].values()
@@ -142,6 +262,126 @@ def test_can_resume_protocol_handles_multiple_known_turns_but_never_a_valid_cand
     assert not can_resume_protocol(_protocol_document(), unknown_requests=1)
 
 
+def test_can_resume_tool_contract_accepts_bound_candidate_and_multiple_denials():
+    document = _tool_contract_document(denied_count=2)
+
+    assert can_resume_tool_contract(document, unknown_requests=0)
+
+
+def test_can_resume_tool_contract_allows_known_generator_structure_repair_history():
+    document = _tool_contract_document(generator_history=True)
+
+    assert can_resume_tool_contract(document, unknown_requests=0)
+
+
+@pytest.mark.parametrize("mutation", ["missing", "unbound", "too_many"])
+def test_tool_contract_recovery_requires_saved_candidate_repair_provenance(mutation):
+    document = _tool_contract_document(generator_history=True)
+    entries = document["execution_journal"]["entries"]
+    key, entry = next((key, item) for key, item in entries.items()
+                      if item.get("result_digest") == canonical_digest(document["candidate"]))
+    context = entry["identity"]["context"]
+    if mutation == "missing":
+        context.pop("protocol_feedback")
+    elif mutation == "unbound":
+        context["protocol_feedback"]["repairs"][0]["response_digest"] = "f" * 64
+    else:
+        context["protocol_feedback"]["repairs"].append({"response_digest": "f" * 64})
+    del entries[key]
+    entries[canonical_digest({"category": entry["category"], "identity": entry["identity"]})] = entry
+    assert not can_resume_tool_contract(document, unknown_requests=0)
+
+
+@pytest.mark.parametrize("replacement", ["missing_result", "candidate_itself"])
+def test_tool_contract_recovery_rejects_an_extra_unbound_repair_digest(replacement):
+    document = _tool_contract_document(generator_history=True)
+    entries = document["execution_journal"]["entries"]
+    marker = {"protocol_error": "invalid_role_response"}
+    marker_key = next(key for key, entry in entries.items() if entry.get("result") == marker)
+    del entries[marker_key]
+    digest = canonical_digest(document["candidate"])
+    key, entry = next((key, item) for key, item in entries.items()
+                      if item.get("result_digest") == digest)
+    repairs = entry["identity"]["context"]["protocol_feedback"]["repairs"]
+    repairs[1]["response_digest"] = "f" * 64 if replacement == "missing_result" else digest
+    del entries[key]
+    entries[canonical_digest({"category": entry["category"], "identity": entry["identity"]})] = entry
+    assert not can_resume_tool_contract(document, unknown_requests=0)
+
+
+@pytest.mark.parametrize("mutation", [
+    "candidate", "generator_result", "review_result", "denied_category",
+    "denied_code", "unknown",
+])
+def test_can_resume_tool_contract_rejects_unbound_or_unsafe_history(mutation):
+    document = _tool_contract_document()
+    if mutation == "candidate":
+        document["candidate"]["report_markdown"] = "被篡改候选"
+    elif mutation == "generator_result":
+        entry = next(
+            item for item in document["execution_journal"]["entries"].values()
+            if item["category"] == "model" and item["identity"]["role"] == "generator"
+        )
+        entry["result"]["report_markdown"] = "被篡改生成结果"
+        entry["result_digest"] = canonical_digest(entry["result"])
+    elif mutation == "review_result":
+        entry = next(
+            item for item in document["execution_journal"]["entries"].values()
+            if item["category"] == "model" and item["identity"]["role"] == "reviewer"
+        )
+        entry["result"] = {
+            "candidate_digest": canonical_digest(document["candidate"]),
+            "snapshot_digest": "s" * 64,
+            "coverage_checks": [], "issues": [], "completed_checks": [],
+        }
+        entry["result_digest"] = canonical_digest(entry["result"])
+    elif mutation == "denied_category":
+        entry = next(
+            item for item in document["execution_journal"]["entries"].values()
+            if item["status"] == "denied"
+        )
+        entry["category"] = "model"
+        entry["identity"] = {"role": "generator", "context": {"candidate_version": 1}}
+    elif mutation == "denied_code":
+        entry = next(
+            item for item in document["execution_journal"]["entries"].values()
+            if item["status"] == "denied"
+        )
+        entry["code"] = "tool_not_allowed"
+    else:
+        assert mutation == "unknown"
+
+    unknown_requests = 1 if mutation == "unknown" else 0
+    assert not can_resume_tool_contract(document, unknown_requests=unknown_requests)
+
+
+def test_can_resume_tool_contract_rejects_general_failed_and_missing_denial():
+    general_failed = _tool_contract_document()
+    general_failed["terminal_reason"] = "execution_error"
+    assert not can_resume_tool_contract(general_failed, unknown_requests=0)
+
+    no_denied = _tool_contract_document(denied_count=0)
+    assert not can_resume_tool_contract(no_denied, unknown_requests=0)
+
+    extra_history = _tool_contract_document()
+    extra_history["candidate_history"].append(deepcopy(extra_history["candidate_history"][0]))
+    assert not can_resume_tool_contract(extra_history, unknown_requests=0)
+
+
+def test_public_view_keeps_can_resume_protocol_compatibility_for_tool_contract():
+    document = {
+        **_tool_contract_document(),
+        "run_id": str(uuid4()), "session_id": "session", "state_version": 54,
+        "snapshot_digest": "s" * 64, "last_event_seq": 53,
+        "quality_gate": "engineering_only", "formal_export_eligible": False,
+        "release_binding_status": "unapproved", "budget": {"unknown_requests": 0},
+    }
+
+    result = ReportRunService.public_view(document)
+
+    assert result["can_resume_protocol"] is True
+
+
 def _run_row(store, run_id: str) -> dict:
     with store.connection() as conn:
         return conn.execute(
@@ -186,6 +426,33 @@ def _service_run(pg_store, *, max_active_runs: int | None = None):
     return service, store, owner, other, run["run_id"]
 
 
+def _service_tool_contract_run(pg_store):
+    store, owner, other, session_id = pg_store
+    service = ReportRunService(store, dependencies(SyntheticRoles()))
+    run = service.create(owner, CreateRunRequest(
+        request_id=uuid4(),
+        session_id=session_id,
+        accident_data={"事实": "检索策略恢复测试"},
+        evidence_revision=0,
+    ))
+    with store.connection() as conn:
+        document = deepcopy(conn.execute(
+            "SELECT document FROM report_runs WHERE run_id=%s",
+            (run["run_id"],),
+        ).fetchone()["document"])
+    document.update({
+        key: value for key, value in _tool_contract_document().items() if key != "state"
+    })
+    with store.connection() as conn:
+        conn.execute(
+            "UPDATE report_runs SET state='failed',state_version=54,"
+            "last_event_seq=53,fencing_token=9,lease_owner=NULL,"
+            "lease_expires_at=NULL,document=%s WHERE run_id=%s",
+            (Jsonb(document), run["run_id"]),
+        )
+    return service, store, owner, other, run["run_id"]
+
+
 def test_pg_protocol_resume_preserves_owner_cas_and_original_journal(pg_store):
     service, store, owner, _, run_id = _service_run(pg_store)
     before = _run_row(store, run_id)
@@ -215,6 +482,39 @@ def test_pg_protocol_resume_preserves_owner_cas_and_original_journal(pg_store):
     assert event["state_version"] == after["state_version"]
     assert event["data"]["from_state"] == "needs_review"
     assert event["data"]["recovery_kind"] == "pre_candidate_protocol"
+
+
+def test_pg_tool_contract_resume_preserves_candidate_journal_and_event_kind(pg_store):
+    service, store, owner, _, run_id = _service_tool_contract_run(pg_store)
+    before = _run_row(store, run_id)
+    original_document = deepcopy(before["document"])
+
+    token = service.resume_claim(
+        owner, run_id, before["state_version"], retry_unknown_requests=False,
+    )
+
+    after = _run_row(store, run_id)
+    assert token == before["fencing_token"] + 1
+    assert after["state"] == "preparing"
+    assert after["state_version"] == before["state_version"] + 1
+    assert after["last_event_seq"] == before["last_event_seq"] + 1
+    assert after["fencing_token"] == token
+    assert after["document"]["candidate"] == original_document["candidate"]
+    assert after["document"]["candidate_history"] == original_document["candidate_history"]
+    assert after["document"]["execution_journal"] == original_document["execution_journal"]
+    assert after["document"]["terminal_reason"] is None
+    assert after["document"]["review_status"] == "pending"
+
+    with store.connection() as conn:
+        event = conn.execute(
+            "SELECT type,state_version,data FROM report_run_events "
+            "WHERE run_id=%s ORDER BY seq DESC LIMIT 1",
+            (run_id,),
+        ).fetchone()
+    assert event["type"] == "checkpoint"
+    assert event["state_version"] == after["state_version"]
+    assert event["data"]["from_state"] == "failed"
+    assert event["data"]["recovery_kind"] == "tool_contract"
 
 
 def test_pg_protocol_resume_rejects_wrong_owner_and_cas_without_mutation(pg_store):

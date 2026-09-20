@@ -210,6 +210,25 @@ class ControlledTools:
             "generator", {"query": query, "top_k": top_k}, initial=True,
         )
 
+    def retrieval_constraints(self, role: str) -> dict | None:
+        """返回角色后续检索请求的实际收紧约束；未配置策略时保持旧 schema。"""
+        self._validate_role(role)
+        policy = self._retrieval_policy
+        if policy is None:
+            return None
+
+        allowed_calls = policy["additional_rounds"] + (1 if role == "generator" else 0)
+        remaining_rounds = max(0, allowed_calls - self._retrieval_counts[role])
+        remaining_snippets = max(
+            0, policy["max_total_snippets"] - len(self._retrieved_ids[role]),
+        )
+        return {
+            "additional_top_k": min(_MAX_TOP_K, policy["additional_top_k"]),
+            "max_query_chars": min(_MAX_QUERY_CHARS, policy["max_query_chars"]),
+            "remaining_rounds": remaining_rounds,
+            "remaining_snippets": remaining_snippets,
+        }
+
     def execute(self, role: str, name: str, args: dict) -> dict:
         """按固定工具名称执行一次受控读取或检索。"""
         self._validate_role(role)
@@ -923,7 +942,12 @@ class ControlledTools:
                     raise HarnessError("initial_retrieval_contract_mismatch")
             elif (top_k > policy["additional_top_k"]
                   or len(normalized_query) > policy["max_query_chars"]):
-                raise HarnessError("retrieval_policy_exceeded")
+                constraints = self.retrieval_constraints(role)
+                raise HarnessError(
+                    "retrieval_policy_exceeded",
+                    422,
+                    {"role": role, **constraints},
+                )
             remaining = policy["max_total_snippets"] - len(self._retrieved_ids[role])
             if remaining <= 0:
                 raise HarnessError("retrieval_request_budget_exhausted")

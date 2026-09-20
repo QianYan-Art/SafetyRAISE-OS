@@ -94,6 +94,73 @@ def test_retrieval_limits_survive_checkpoint_and_access_reset():
     restored.execute("reviewer", "search_knowledge", query)
 
 
+def test_retrieval_constraints_follow_policy_and_current_state():
+    tools = tools_with_policy(workflow().retrieval_policy())
+    assert tools.retrieval_constraints("generator") == {
+        "additional_top_k": 3,
+        "max_query_chars": 120,
+        "remaining_rounds": 3,
+        "remaining_snippets": 9,
+    }
+    assert tools.retrieval_constraints("reviewer") == {
+        "additional_top_k": 3,
+        "max_query_chars": 120,
+        "remaining_rounds": 2,
+        "remaining_snippets": 9,
+    }
+
+    tools.initial_retrieval("合成晴天", 3)
+    assert tools.retrieval_constraints("generator") == {
+        "additional_top_k": 3,
+        "max_query_chars": 120,
+        "remaining_rounds": 2,
+        "remaining_snippets": 8,
+    }
+
+
+def test_retrieval_constraints_do_not_widen_or_exist_without_policy():
+    limited = tools_with_policy(workflow(
+        initial_top_k=1, additional_top_k=10, max_total_snippets=1,
+        max_query_chars=1000,
+    ).retrieval_policy())
+    limited.initial_retrieval("合成晴天", 1)
+    assert limited.retrieval_constraints("generator") == {
+        "additional_top_k": 10,
+        "max_query_chars": 1000,
+        "remaining_rounds": 2,
+        "remaining_snippets": 0,
+    }
+
+    snapshot = freeze_snapshot({"天气": "合成晴天"}, [], 0, "manifest")
+    without_policy = ControlledTools(snapshot, [source("manifest")])
+    assert without_policy.retrieval_constraints("generator") is None
+
+
+def test_retrieval_policy_error_details_are_safe_and_search_is_not_called():
+    calls = []
+
+    def search(query, top_k):
+        calls.append((query, top_k))
+        return [source("manifest")]
+
+    policy = workflow().retrieval_policy()
+    snapshot = freeze_snapshot({"天气": "合成晴天"}, [], 0, "manifest")
+    tools = ControlledTools(
+        snapshot, [source("manifest")], search=search, retrieval_policy=policy,
+    )
+    tools.initial_retrieval("合成晴天", 3)
+    with pytest.raises(HarnessError) as captured:
+        tools.execute("generator", "search_knowledge", {"query": "合成", "top_k": 5})
+
+    assert captured.value.code == "retrieval_policy_exceeded"
+    assert captured.value.details == {
+        "role": "generator",
+        "additional_top_k": 3,
+        "max_query_chars": 120,
+        "remaining_rounds": 2,
+        "remaining_snippets": 8,
+    }
+    assert calls == [("合成晴天", 3)]
 def test_initial_query_uses_original_accident_field_priority():
     assert workflow().initial_query({"事故经过": "  左转  碰撞 ", "天气": "晴天"}) == "左转 碰撞"
     with pytest.raises(ValueError):

@@ -59,6 +59,26 @@ class ExecutionJournal:
     def attempts(self, category: str) -> int:
         return self._journal["attempts"].get(category, 0)
 
+    def model_context(self, role: str, context: dict) -> dict:
+        """仅工具说明可升级；已保存回合其余输入必须逐项等价才能复用。"""
+        fingerprint = canonical_digest({key: value for key, value in context.items() if key != "tools"})
+        matches = []
+        for entry in self._journal["entries"].values():
+            identity = entry["identity"]
+            if entry["category"] != "model" or identity.get("role") != role:
+                continue
+            saved = identity.get("context")
+            if not isinstance(saved, dict):
+                continue
+            if canonical_digest({key: value for key, value in saved.items() if key != "tools"}) == fingerprint:
+                matches.append(saved)
+        exact = [item for item in matches if canonical_digest(item) == canonical_digest(context)]
+        if exact:
+            return deepcopy(exact[0])
+        if len(matches) > 1:
+            raise HarnessError("checkpoint_context_ambiguous")
+        return deepcopy(matches[0] if matches else context)
+
     def _persist(self, key: str, category: str, status: str, identity: dict) -> None:
         record = self.store.get(self.owner, self.run_id)
         patch = {"execution_journal": deepcopy(self._journal)}
@@ -115,6 +135,11 @@ class ExecutionJournal:
             if canonical_digest(result) != entry["result_digest"]:
                 raise HarnessError("checkpoint_digest_mismatch")
             return deepcopy(result)
+        if (entry and entry["status"] == "denied" and category == "tool"
+                and identity.get("name") == "search_knowledge"
+                and entry.get("code") == "retrieval_policy_exceeded"):
+            # 该拒绝发生在检索前，无外部副作用；保留原拒绝，不重复执行或覆盖历史。
+            raise HarnessError("retrieval_policy_exceeded")
         if (entry and entry["status"] == "intent" and category != "tool"
                 and (not self._allow_incomplete_retry or entry["fencing_token"] == self.token)):
             raise HarnessError("completion_unknown")

@@ -273,3 +273,84 @@ def test_structure_repair_feedback_is_stable_after_jsonb_key_reordering():
         assert asyncio.run(loop.run("generator", role, _candidate_context()))["version"] == 1
     assert len(requests) == 2
     assert len(journal.saved) == 2
+
+
+class PolicyTools(LocalTools):
+    def retrieval_constraints(self, role):
+        assert role in {"generator", "reviewer"}
+        return {"additional_top_k": 3, "max_query_chars": 120,
+                "remaining_rounds": 2, "remaining_snippets": 6}
+
+    def execute(self, role, name, arguments):
+        if name == "search_knowledge":
+            if arguments["top_k"] > 3:
+                raise HarnessError("retrieval_policy_exceeded")
+            return {"items": []}
+        return super().execute(role, name, arguments)
+
+
+def test_role_sees_actual_search_limits_and_receives_audited_denial_feedback():
+    calls, events = [], []
+
+    async def reviewer(context):
+        calls.append(context)
+        search = next(item for item in context["tools"] if item["name"] == "search_knowledge")
+        assert search["parameters"]["properties"]["top_k"]["maximum"] == 3
+        assert search["parameters"]["properties"]["query"]["maxLength"] == 120
+        if len(calls) == 1:
+            return {"tool_calls": [{"call_id": "too-many", "name": "search_knowledge",
+                                   "arguments": {"query": "私有查询不回显", "top_k": 5}}]}
+        feedback = context["tool_results"][0]["result"]
+        assert feedback["error"]["constraints"]["additional_top_k"] == 3
+        assert "私有查询" not in str(feedback)
+        return {"done": True}
+
+    loop = RoleLoop(PolicyTools(), lambda public, _: events.append(public), before_call=lambda: None)
+    assert asyncio.run(loop.run("reviewer", reviewer, {})) == {"done": True}
+    assert [item["status"] for item in events] == ["intent", "denied"]
+    assert loop.model_turns == 2 and loop.tool_calls == 1
+
+
+def test_policy_denial_allows_only_two_corrective_model_rounds():
+    calls = []
+
+    async def reviewer(context):
+        calls.append(context)
+        return {"tool_calls": [{"call_id": str(len(calls)), "name": "search_knowledge",
+                               "arguments": {"query": "合成", "top_k": 5}}]}
+
+    loop = RoleLoop(PolicyTools(), lambda *_: None, before_call=lambda: None)
+    with pytest.raises(HarnessError, match="invalid_role_response"):
+        asyncio.run(loop.run("reviewer", reviewer, {}))
+    assert len(calls) == 3 and loop.tool_calls == 3
+
+
+@pytest.mark.parametrize("code", [
+    "completion_unknown", "retrieval_request_budget_exhausted", "authorization_stale",
+    "resource_pressure", "tool_not_allowed",
+])
+def test_tool_feedback_never_retries_unknown_budget_access_or_resource_errors(code):
+    class DeniedTools(PolicyTools):
+        def execute(self, *_):
+            raise HarnessError(code)
+
+    calls = []
+
+    async def reviewer(context):
+        calls.append(context)
+        return {"tool_calls": [{"call_id": "one", "name": "search_knowledge",
+                               "arguments": {"query": "合成", "top_k": 1}}]}
+
+    loop = RoleLoop(DeniedTools(), lambda *_: None, before_call=lambda: None)
+    with pytest.raises(HarnessError, match=code):
+        asyncio.run(loop.run("reviewer", reviewer, {}))
+    assert len(calls) == 1
+
+
+def test_no_search_is_advertised_when_actual_role_budget_is_empty():
+    from app.report_harness.role_loop import tool_schemas
+
+    for field in ("remaining_rounds", "remaining_snippets"):
+        policy = PolicyTools().retrieval_constraints("reviewer")
+        policy[field] = 0
+        assert "search_knowledge" not in {item["name"] for item in tool_schemas(policy)}

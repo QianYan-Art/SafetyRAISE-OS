@@ -200,11 +200,14 @@ afterEach(() => {
 });
 
 describe("IntegratedReport 真实组件交互", () => {
-  it("只对服务端确认的协议故障展示继续按钮，复用恢复接口且不允许未知重试", async () => {
+  it.each([
+    ["needs_review", "invalid_review_or_candidate"],
+    ["failed", "retrieval_policy_exceeded"],
+  ] as const)("只对服务端确认的%s协议故障展示继续按钮，复用恢复接口且不允许未知重试", async (state, reason) => {
     const user = userEvent.setup();
     const stopped = run({
-      state: "needs_review", review_status: "failed", report: null,
-      terminal_reason: "invalid_review_or_candidate", can_resume_protocol: true,
+      state, review_status: "failed", report: null,
+      terminal_reason: reason, can_resume_protocol: true,
       budget: { unknown_requests: 0, remaining: 100 }, state_version: 21,
     });
     api.listReportRuns.mockResolvedValue({ runs: [stopped], next_cursor: null });
@@ -228,10 +231,13 @@ describe("IntegratedReport 真实组件交互", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "继续生成" })).toBeDefined());
   });
 
-  it("普通待复核终态和未获服务端资格的格式失败不能恢复", async () => {
+  it.each([
+    ["needs_review", "invalid_review_or_candidate"],
+    ["failed", "retrieval_policy_exceeded"],
+  ] as const)("未获服务端资格的%s终态不能恢复", async (state, reason) => {
     const stopped = run({
-      state: "needs_review", review_status: "failed", report: null,
-      terminal_reason: "invalid_review_or_candidate", can_resume_protocol: false,
+      state, review_status: "failed", report: null,
+      terminal_reason: reason, can_resume_protocol: false,
     });
     api.listReportRuns.mockResolvedValue({ runs: [stopped], next_cursor: null });
     api.fetchReportRun.mockResolvedValue(stopped);

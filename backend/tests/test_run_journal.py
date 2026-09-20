@@ -101,3 +101,132 @@ def test_incomplete_step_retry_preserves_attempt_budget(pg_store):
     rebuilt = ExecutionJournal(store, owner, run_id, new_token)
     with pytest.raises(HarnessError, match="model_turn_budget_exhausted"):
         asyncio.run(rebuilt.invoke("model", {"step": "fixed"}, interrupted, limit=1))
+
+
+def test_model_context_reuses_only_tool_description_changes(pg_store):
+    from copy import deepcopy
+
+    store, owner, run_id, token = create_run(pg_store, policy=BudgetPolicy())
+    journal = ExecutionJournal(store, owner, run_id, token)
+    original = {"snapshot": {"fixed": True}, "tools": [{"maximum": 10}], "tool_results": []}
+
+    async def model():
+        return {"done": True}
+
+    asyncio.run(journal.invoke("model", {"role": "generator", "context": original}, model))
+    rebuilt = ExecutionJournal(store, owner, run_id, token)
+    updated = {**deepcopy(original), "tools": [{"maximum": 3}]}
+    assert rebuilt.model_context("generator", updated) == original
+    assert rebuilt.model_context("reviewer", updated) == updated
+    different = {**updated, "snapshot": {"fixed": False}}
+    assert rebuilt.model_context("generator", different) == different
+    assert updated["tools"] == [{"maximum": 3}]
+
+    asyncio.run(journal.invoke("model", {"role": "generator", "context": updated}, model))
+    ambiguous = ExecutionJournal(store, owner, run_id, token)
+    assert ambiguous.model_context("generator", updated) == updated
+    with pytest.raises(HarnessError, match="checkpoint_context_ambiguous"):
+        ambiguous.model_context("generator", {**updated, "tools": [{"maximum": 2}]})
+
+
+def test_saved_pre_search_denial_is_not_reexecuted_or_rewritten(pg_store):
+    store, owner, run_id, token = create_run(pg_store, policy=BudgetPolicy())
+    journal = ExecutionJournal(store, owner, run_id, token)
+    identity = {"role": "reviewer", "context_digest": "a" * 64, "call_id": "denied",
+                "name": "search_knowledge", "arguments": {"query": "合成", "top_k": 5}}
+    calls = []
+
+    async def denied():
+        calls.append(True)
+        raise HarnessError("retrieval_policy_exceeded")
+
+    with pytest.raises(HarnessError, match="retrieval_policy_exceeded"):
+        asyncio.run(journal.invoke("tool", identity, denied, limit=1))
+    before = store.events(owner, run_id)
+    rebuilt = ExecutionJournal(store, owner, run_id, token)
+    with pytest.raises(HarnessError, match="retrieval_policy_exceeded"):
+        asyncio.run(rebuilt.invoke("tool", identity, denied, limit=1))
+    assert calls == [True]
+    assert rebuilt.attempts("tool") == 1
+    assert store.events(owner, run_id) == before
+    assert list(rebuilt._journal["entries"].values())[0]["status"] == "denied"
+
+
+def test_legacy_tool_contract_recovery_reuses_models_and_denials_across_restart(pg_store):
+    store, owner, run_id, token = create_run(pg_store, policy=BudgetPolicy())
+    model_calls, tool_calls = [], []
+
+    class ContractTools:
+        def __init__(self, upgraded):
+            self.upgraded = upgraded
+
+        def retrieval_constraints(self, role):
+            if not self.upgraded:
+                return None
+            return {"additional_top_k": 3, "max_query_chars": 120,
+                    "remaining_rounds": 2, "remaining_snippets": 6}
+
+        def execute(self, *_):
+            tool_calls.append(True)
+            raise HarnessError("retrieval_policy_exceeded")
+
+    async def model(context):
+        model_calls.append(context)
+        if not context["tool_results"]:
+            return {"tool_calls": [{"call_id": "old-five", "name": "search_knowledge",
+                                   "arguments": {"query": "合成", "top_k": 5}}]}
+        search = next(item for item in context["tools"] if item["name"] == "search_knowledge")
+        assert search["parameters"]["properties"]["top_k"]["maximum"] == 3
+        assert context["tool_results"][0]["result"]["error"]["code"] == "retrieval_policy_exceeded"
+        return {"done": True}
+
+    def loop(upgraded):
+        return RoleLoop(
+            ContractTools(upgraded), lambda *_: pytest.fail("使用持久日志"),
+            before_call=lambda: store.assert_active(owner, run_id, token),
+            journal=ExecutionJournal(store, owner, run_id, token),
+            max_model_turns=2, max_tool_calls=1,
+        )
+
+    with pytest.raises(HarnessError, match="retrieval_policy_exceeded"):
+        asyncio.run(loop(False).run("reviewer", model, {"fixed": True}))
+    assert asyncio.run(loop(True).run("reviewer", model, {"fixed": True})) == {"done": True}
+    before = store.events(owner, run_id)
+    assert asyncio.run(loop(True).run("reviewer", model, {"fixed": True})) == {"done": True}
+    assert store.events(owner, run_id) == before
+    assert len(model_calls) == 2 and len(tool_calls) == 1
+
+
+def test_tool_repair_exhaustion_is_reconstructed_without_new_calls_after_restart(pg_store):
+    store, owner, run_id, token = create_run(pg_store, policy=BudgetPolicy())
+    calls = {"model": 0, "tool": 0}
+
+    class RejectedTools:
+        def retrieval_constraints(self, role):
+            return {"additional_top_k": 3, "max_query_chars": 120,
+                    "remaining_rounds": 2, "remaining_snippets": 6}
+
+        def execute(self, *_):
+            calls["tool"] += 1
+            raise HarnessError("retrieval_policy_exceeded")
+
+    async def model(context):
+        calls["model"] += 1
+        return {"tool_calls": [{"call_id": f"denied-{len(context['tool_results'])}",
+                               "name": "search_knowledge",
+                               "arguments": {"query": "合成", "top_k": 5}}]}
+
+    def execute():
+        loop = RoleLoop(
+            RejectedTools(), lambda *_: None, before_call=lambda: None,
+            journal=ExecutionJournal(store, owner, run_id, token),
+        )
+        with pytest.raises(HarnessError, match="invalid_role_response"):
+            asyncio.run(loop.run("reviewer", model, {"fixed": True}))
+
+    execute()
+    before = store.events(owner, run_id)
+    assert calls == {"model": 3, "tool": 3}
+    execute()
+    assert calls == {"model": 3, "tool": 3}
+    assert store.events(owner, run_id) == before

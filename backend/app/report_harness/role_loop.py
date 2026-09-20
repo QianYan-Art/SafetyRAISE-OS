@@ -13,7 +13,7 @@ from app.report_harness.errors import HarnessError
 from app.schemas.base import StrictModel
 
 
-def tool_schemas() -> list[dict]:
+def tool_schemas(retrieval_constraints: dict | None = None) -> list[dict]:
     """角色只获四个只读动作，不暴露执行环境或发布操作。"""
     ids = {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 10}
     definitions = [
@@ -25,10 +25,28 @@ def tool_schemas() -> list[dict]:
         }, ["query", "top_k"]),
         ("read_knowledge", {"chunk_ids": ids, "cursor": {"type": "string"}}, ["chunk_ids"]),
     ]
-    return [{"name": name, "parameters": {
+    schemas = [{"name": name, "parameters": {
         "type": "object", "properties": properties, "required": required,
         "additionalProperties": False,
     }} for name, properties, required in definitions]
+    if retrieval_constraints is not None:
+        constraints = retrieval_constraints
+        if constraints["remaining_rounds"] <= 0 or constraints["remaining_snippets"] <= 0:
+            return [item for item in schemas if item["name"] != "search_knowledge"]
+        search = next(item for item in schemas if item["name"] == "search_knowledge")
+        properties = search["parameters"]["properties"]
+        properties["top_k"]["maximum"] = min(
+            properties["top_k"]["maximum"], constraints["additional_top_k"],
+            constraints["remaining_snippets"],
+        )
+        properties["query"]["maxLength"] = min(
+            properties["query"]["maxLength"], constraints["max_query_chars"],
+        )
+        search["description"] = (
+            f"本角色剩余{constraints['remaining_rounds']}次检索；"
+            f"最多再返回{constraints['remaining_snippets']}个检索条目。"
+        )
+    return schemas
 
 
 class ToolCall(StrictModel):
@@ -103,6 +121,24 @@ class RoleLoop:
     async def run(self, role: str, invoke: Callable[[dict], Awaitable[dict]], context: dict) -> dict:
         results = []
         repairs = []
+        tool_repair_rounds = 0
+
+        def retrieval_constraints():
+            describe = getattr(self.tools, "retrieval_constraints", None)
+            return describe(role) if describe is not None else None
+
+        def tool_error(call: ToolCall, exc: HarnessError) -> dict:
+            constraints = retrieval_constraints()
+            if (call.name != "search_knowledge" or exc.code != "retrieval_policy_exceeded"
+                    or constraints is None):
+                raise exc
+            if tool_repair_rounds >= 2:
+                raise HarnessError("invalid_role_response") from exc
+            return {"error": {
+                "code": exc.code, "constraints": constraints,
+                "instruction": "检索尚未执行。按实际条目数和查询长度限制修改参数，"
+                               "或使用已读取资料完成审查；不得补造检索结果。",
+            }}
 
         async def invoke_role(current):
             try:
@@ -124,13 +160,15 @@ class RoleLoop:
         while self.journal is not None or self.model_turns < self.max_model_turns:
             self.before_call()
             current = {**deepcopy(context), "tool_results": deepcopy(results),
-                       "tools": tool_schemas()}
+                       "tools": tool_schemas(retrieval_constraints())}
             if repairs:
                 current["protocol_feedback"] = {
                     "instruction": "上次响应不符合完整响应结构。返回完整response_schema对象，"
                                    "或完整tool_calls对象；不要仅返回字段、断言片段或思考。",
                     "repairs": deepcopy(repairs),
                 }
+            if self.journal is not None and hasattr(self.journal, "model_context"):
+                current = self.journal.model_context(role, current)
             if self.journal is None:
                 self.model_turns += 1
                 response = await invoke_role(current)
@@ -183,6 +221,7 @@ class RoleLoop:
                     } for item in errors[:16]],
                 })
                 continue
+            denied_in_turn = False
             for call in turn.tool_calls:
                 self.before_call()
                 if self.journal is not None:
@@ -192,12 +231,20 @@ class RoleLoop:
                         )
                         return {"result": result, "tool_state": self.tools.checkpoint_state()}
 
-                    saved = await self.journal.invoke(
-                        "tool", {"role": role, "context_digest": canonical_digest(current),
-                                 "call_id": call.call_id, "name": call.name,
-                                 "arguments": deepcopy(call.arguments)},
-                        execute_tool, limit=self.max_tool_calls,
-                    )
+                    try:
+                        saved = await self.journal.invoke(
+                            "tool", {"role": role, "context_digest": canonical_digest(current),
+                                     "call_id": call.call_id, "name": call.name,
+                                     "arguments": deepcopy(call.arguments)},
+                            execute_tool, limit=self.max_tool_calls,
+                        )
+                    except HarnessError as exc:
+                        error_result = tool_error(call, exc)
+                        self.tool_calls = self.journal.attempts("tool")
+                        results.append({"call_id": call.call_id, "name": call.name,
+                                        "result": error_result})
+                        denied_in_turn = True
+                        continue
                     self.tools.restore_checkpoint_state(saved["tool_state"])
                     self.tool_calls = self.journal.attempts("tool")
                     results.append({
@@ -231,12 +278,17 @@ class RoleLoop:
                         {**call_record, "status": "denied", "code": exc.code},
                         private_call,
                     )
-                    raise
+                    results.append({"call_id": call.call_id, "name": call.name,
+                                    "result": tool_error(call, exc)})
+                    denied_in_turn = True
+                    continue
                 self.checkpoint(
                     {**call_record, "status": "completed", "result_digest": canonical_digest(result)},
                     {**private_call, "result": deepcopy(result)},
                 )
                 results.append({"call_id": call.call_id, "name": call.name, "result": result})
+            if denied_in_turn:
+                tool_repair_rounds += 1
         raise HarnessError("model_turn_budget_exhausted")
 
 
