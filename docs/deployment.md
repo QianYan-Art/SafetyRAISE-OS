@@ -239,32 +239,66 @@ sh deployment/docker/server-compose.sh up -d --build
 ### 正式harness覆盖
 
 完成真实业务核验和批准材料准备后，使用同一个Compose项目显式叠加覆盖文件，
-不要另建长期并行生产服务。先核验以下外部路径，再用两个 `-f` 参数执行
-`docker compose --env-file .env.server ... config --quiet`；不要公开完整配置输出。
+不要另建长期并行生产服务。212当前只有 `docker-compose 1.29.2`，先核验以下外部路径，
+再用两个 `-f` 参数执行 `docker-compose --env-file .env.server ... config --quiet`；
+不要公开完整配置输出，也不要使用 Compose v2 的 `additional_contexts`。
 
 - `HARNESS_WORKFLOW_CONFIG_HOST_PATH`：显式启用harness的完整服务端配置。
 - `HARNESS_MANIFEST_HOST_PATH`：只读挂载为 `/run/safetyraise/harness/runtime-manifest.json`。
 - `HARNESS_RELEASE_DIR_HOST_PATH`：包含实际角色模板、构建清单、批准表和验收证据的只读目录。
 - `HARNESS_LOCAL_LEDGER_HOST_DIR`：212本地持久盘，容器路径 `/var/lib/safetyraise/ledger`，
   不是来自213的SSHFS目录。必须迁移原账本，不能用空文件重新开始费用计数。
+- `HARNESS_LOCAL_TMP_HOST_DIR`：212本地受控临时盘，容器路径
+  `/var/lib/safetyraise/harness-tmp`，必须与费用账本目录分开，也不能指向213的
+  `runtime`、`kbase`或其他共享业务目录。宿主目录须预先给运行身份可写权限。
+- `BACKEND_RUNTIME_BASE_IMAGE`：212本机已核验的完整 backend 运行镜像ID，覆盖层会将其
+  映射为 `RUNTIME_BASE_IMAGE`，并使用 `safetyraise-backend:harness-runtime`；缺失时必须失败，
+  不得回退到可变标签或联网拉取。
+- `FRONTEND_RUNTIME_CONTEXT_HOST_PATH`：212本地预构建前端运行时 context，目录内只能有
+  `Dockerfile`、`nginx.frontend.conf` 和 `dist`。发布准备步骤应从仓内
+  `frontend.runtime.Dockerfile`、默认配置和已核验的 `frontend/dist` 复制生成该目录；
+  不要把仓库根目录、213共享目录或带有其他源码/凭证的目录作为 context。
 
 覆盖默认身份为 `HARNESS_UID=10001/HARNESS_GID=10001`，根文件系统只读、移除全部
-capability、禁止提权，`TMPDIR=/tmp`，仅允许128MiB的 `/tmp` tmpfs及明确的数据挂载写入。
+capability、禁止提权，`TMPDIR=/var/lib/safetyraise/harness-tmp`；`/tmp`仍保留
+128MiB小型tmpfs，仅供小型进程临时文件使用。这样不缩小既有1200m上传上限，
+Starlette `UploadFile`的大文件临时内容落到212本地受控目录，而不是占满`/tmp`。
 宿主写目录须预先配置权限。若旧SSHFS目录只有root可写，可显式选择UID/GID 0，
 但必须保留全部只读隔离约束，实测应用对批准表及其父目录 `os.access(W_OK)` 为false。
 不能递归更改共享资产权限，也不能把可写Git检出目录当成批准源。
 
-完整新构建仍使用 `backend.Dockerfile`；覆盖强制保留 `INSTALL_VIDEO_DEPS=true`，
-不能用缺少视频依赖的新镜像替换已有完整服务。为节约小主机下载与存储，
-可用 `backend.runtime.Dockerfile` 复用已核实的本机运行镜像，并显式传入
-`RUNTIME_BASE_IMAGE`。操作前固定并记录基础镜像完整ID，构建时禁止拉取或联网，
-避免可变标签悄悄换源；构建后再次记录实际基础与成品ID。
+基础 `docker-compose.server.yml` 仍使用 `backend.Dockerfile`，默认值刻意保留
+`INSTALL_VIDEO_DEPS=false`；正式 harness 覆盖改用 `backend.runtime.Dockerfile`，并强制
+`INSTALL_VIDEO_DEPS=true`、将必填 `BACKEND_RUNTIME_BASE_IMAGE` 映射为
+`RUNTIME_BASE_IMAGE`，输出镜像标签为 `safetyraise-backend:harness-runtime`。
+不能用缺少视频依赖的新镜像替换已有完整服务。操作前固定并记录基础镜像完整ID，构建时
+禁止拉取或联网，避免可变标签悄悄换源；构建后再次记录实际基础与成品ID。
 该路径清除新镜像内旧应用源码后复制本次源码，使用
 `verify-runtime-dependencies.py` 核验版本、视频模块及配置中的ffmpeg/ffprobe实际执行，
 再运行 `pip check`，不自动安装依赖。
 native库通过 `COPY --from` 从核实的基础阶段继承，仅可在原生源码已核实一致时复用；
 依赖或原生源码变化须回到完整构建。
 这两种构建都不能替代镜像内源码清单、批准权限、真实视频链路和上线资源验收。
+
+前端正式覆盖使用 `deployment/docker/frontend.runtime.Dockerfile`，通过必填
+`FRONTEND_RUNTIME_BASE_IMAGE` 复用212本机已核验的完整Nginx镜像ID；当前已核实的值为
+`sha256:a063c54671daf163bcb8e41fab2dc657546ac98c0b32e4769ca245dbf1d1c344`，部署前仍须
+确认该镜像在本机存在。旧版 `docker-compose 1.29.2` 不支持 `additional_contexts`，因此
+构建时把仓内 Dockerfile 复制为 context 根的 `Dockerfile`，并从同一 context 直接复制
+`dist` 和 `nginx.frontend.conf`。该路径不执行 `npm ci`、不拉取Node依赖。构建时必须
+显式禁止拉取（使用 `--pull=false` 或等价的离线构建选项），并记录完整基础镜像ID与成品ID。
+隔离配置下前端离线构建和 `nginx -t` 已通过，129MiB Starlette 临时上传也已在
+64MiB `/tmp` 下转入本地临时盘并在请求关闭后清空。2026-09-20另用临时容器只读挂载
+现有正式站点配置、证书和ACME目录，`nginx -t`通过；未启动监听端口或切换正式服务，
+实际公网请求、代理上传和业务链路仍须在发布时验证。
+该Dockerfile只写入镜像层；正式运行仍可按现有Compose继承挂载已核验的站点配置、证书
+和ACME目录，全部保持只读，不修改宿主配置或证书。
+
+212根盘当前 `df` 实测约12GB可用；约1.44GiB是可用内存，不是磁盘余量。仍必须持续保护
+空闲空间。清理临时文件前先确认没有活动上传或正在
+使用该目录的请求；只允许清理 `HARNESS_LOCAL_TMP_HOST_DIR` 对应目录的内容，不能泛删
+`/tmp`、费用账本、213共享runtime/kbase或业务媒体/输出目录。清理策略不得作为后台服务
+自动运行，必须在有界、可核验的维护窗口执行。
 
 ## backend 配置切换
 

@@ -3,9 +3,14 @@
 services:
   backend:
     build:
+      # 复用已核实的本机运行镜像；基础 Compose 仍保留完整联网构建路径。
+      context: ../..
+      dockerfile: deployment/docker/backend.runtime.Dockerfile
       # 正式镜像必须保留已核实的视频依赖；基础 Compose 的默认值刻意为 false。
       args:
         INSTALL_VIDEO_DEPS: "true"
+        RUNTIME_BASE_IMAGE: "${BACKEND_RUNTIME_BASE_IMAGE:?set the verified local backend image ID}"
+    image: safetyraise-backend:harness-runtime
     # 默认使用专用非 root 身份；如需兼容现有 root:root、755 的 SSHFS 子目录，
     # 可显式设 HARNESS_UID=0、HARNESS_GID=0，但只能在下方只读隔离约束全部生效，
     # 且已实测 root 对 release 目录和批准表的 os.access(W_OK) 均为 false 时使用。
@@ -21,7 +26,8 @@ services:
       # 该外部配置必须显式包含 report_harness.enabled/online_enabled=true、
       # 绝对 runtime_manifest_path 和 resource_paths，不在覆盖层自行编造模型合同。
       WORKFLOW_CONFIG_PATH: /run/safetyraise/harness/workflow.server.yaml
-      TMPDIR: /tmp
+      # 大于128MiB的Starlette UploadFile临时文件必须落到212本地受控盘。
+      TMPDIR: /var/lib/safetyraise/harness-tmp
       # 不在覆盖层关闭 INSTALL_VIDEO_DEPS；正式镜像须保留已验证的视频依赖。
     # 基础镜像 CMD 带有 --config；显式覆盖它，避免环境变量被命令行参数遮蔽。
     command:
@@ -45,3 +51,17 @@ services:
       # 这是 212 本地持久费用盘，不得指向 213 SSHFS runtime/kbase 目录。
       # manifest 的 ledger_path 应使用 /var/lib/safetyraise/ledger/<filename>。
       - "${HARNESS_LOCAL_LEDGER_HOST_DIR:?set the dedicated local 212 ledger directory}:/var/lib/safetyraise/ledger:rw"
+      # 这是独立的 212 本地临时盘；不得与 ledger 或 213 共享 runtime/kbase 混用。
+      - "${HARNESS_LOCAL_TMP_HOST_DIR:?set the dedicated local 212 temporary directory}:/var/lib/safetyraise/harness-tmp:rw"
+
+  frontend:
+    # 只复制发布准备好的本地预构建 context；正式部署不得在 212 上执行 npm ci 或拉取 Node 依赖。
+    # 212 只有 docker-compose 1.29.2，不使用 Compose v2 additional_contexts。
+    build:
+      # 该目录只能包含 Dockerfile、nginx.frontend.conf 和 dist；不得指向仓库根目录或共享目录。
+      context: "${FRONTEND_RUNTIME_CONTEXT_HOST_PATH:?set the prepared frontend runtime context directory}"
+      dockerfile: Dockerfile
+      args:
+        # 必须是本机已核验的完整 Nginx 镜像 ID；构建命令使用 --pull=false。
+        RUNTIME_BASE_IMAGE: "${FRONTEND_RUNTIME_BASE_IMAGE:?set the verified local nginx image ID}"
+    image: safetyraise-frontend:harness-runtime
