@@ -2343,10 +2343,10 @@ function WorkspaceApp({
     return (
       <div ref={accountMenuRef} className="account-popover" role="menu" aria-label="账号菜单">
         <div className="account-popover-header">
-          <span>{currentUser.username}</span>
+          <span title={currentUser.username}>{currentUser.username}</span>
+          {renderThemeToggle()}
         </div>
         <div className="account-popover-actions">
-          {renderThemeToggle()}
           {isAdminUser ? (
             <button
               type="button"

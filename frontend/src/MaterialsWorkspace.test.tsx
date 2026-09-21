@@ -108,6 +108,16 @@ afterEach(() => {
 });
 
 describe("MaterialsWorkspace", () => {
+  it("将本机暂存提示的锁图标与完整说明放在同一布局容器", () => {
+    renderWorkspace(createGroups());
+
+    const copy = screen.getByText("生成前，资料暂存在本机");
+    const note = copy.closest(".materials-category-note");
+    expect(note).not.toBeNull();
+    expect(copy.parentElement).toBe(note);
+    expect(note?.querySelector(":scope > svg")).not.toBeNull();
+  });
+
   it("显示全部加八类真实分组，并在全部模式明确默认添加归类", async () => {
     const user = userEvent.setup();
     const onAdd = vi.fn();

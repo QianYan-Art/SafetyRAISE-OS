@@ -128,6 +128,7 @@
 
 .materials-category-note {
   display: flex;
+  align-items: center;
   margin-top: auto;
   gap: 6px;
   padding: 16px 9px 4px;
@@ -135,6 +136,10 @@
   color: var(--materials-meta);
   font-size: 12px;
   line-height: 1.6;
+}
+
+.materials-category-note svg {
+  flex: 0 0 auto;
 }
 
 .materials-category-note span {

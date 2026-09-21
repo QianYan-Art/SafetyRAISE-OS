@@ -338,7 +338,7 @@ export function AdminConsole(props: AdminConsoleProps) {
           </div>
 
           {usersError ? <div className="account-alert account-alert-error" role="alert">{usersError}</div> : null}
-          <div className="account-admin-table-wrap">
+          <div className="account-admin-table-wrap" role="region" aria-label="用户列表" tabIndex={0}>
             <table className="account-admin-table">
               <thead>
                 <tr>
@@ -440,7 +440,7 @@ export function AdminConsole(props: AdminConsoleProps) {
           </div>
 
           {spacesError ? <div className="account-alert account-alert-error" role="alert">{spacesError}</div> : null}
-          <div className="account-admin-table-wrap">
+          <div className="account-admin-table-wrap" role="region" aria-label="空间列表" tabIndex={0}>
             <table className="account-admin-table account-space-table">
               <thead>
                 <tr>

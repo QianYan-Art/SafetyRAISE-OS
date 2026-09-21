@@ -33,6 +33,7 @@
 .evidence-workspace .workspace-icon:hover,.evidence-workspace .archive-trigger:hover{background:var(--bg-subtle);color:var(--primary-color)}
 .evidence-workspace .page-header-actions{gap:5px;flex-shrink:0;flex-wrap:nowrap}
 .evidence-workspace .theme-toggle-btn{width:32px;height:36px;border:0;border-radius:5px;background:none;box-shadow:none;min-height:0;color:var(--workbench-muted)}
+.evidence-workspace .account-popover-header .theme-toggle-btn{width:32px;height:32px;min-height:32px;flex:0 0 32px}
 .evidence-workspace .workspace-username{max-width:116px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;margin-left:6px;color:var(--workbench-muted)}
 .evidence-workspace .page-header-actions select{max-width:100px;border:1px solid var(--border-color);border-radius:5px;padding:6px;font:inherit;font-size:12px;background:var(--workbench-surface);color:inherit}
 .evidence-workspace .admin-header-tabs{border:0;border-radius:0;background:transparent;box-shadow:none}

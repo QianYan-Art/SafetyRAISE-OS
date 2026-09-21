@@ -32,7 +32,20 @@ try {
         { id: "ui-user", username: "admin_test", display_name: "", role: "admin", is_active: true, created_at: "2026-09-20T00:00:00Z", updated_at: "2026-09-20T00:00:00Z" },
         { id: "analyst", username: "analyst_test", display_name: "", role: "user", is_active: true, created_at: "2026-09-20T00:00:00Z", updated_at: "2026-09-20T00:00:00Z" },
       ];
-      else if (endpoint === "/api/v1/admin/spaces") body = [{ session_id: session.id, title: "测试档案", owner_user_id: "analyst", owner_username: "analyst_test", created_at: 1000, updated_at: 1000, session_state: "draft", source_type: "image", source_name: "logo.png", message_count: 2, linked_artifact_count: 1, redacted: false }];
+      else if (endpoint === "/api/v1/admin/spaces") body = Array.from({ length: 36 }, (_, index) => ({
+        session_id: `${session.id}-${index + 1}`,
+        title: index === 0 ? "测试档案" : `测试档案 ${String(index + 1).padStart(2, "0")}`,
+        owner_user_id: "analyst",
+        owner_username: "analyst_test",
+        created_at: 1000 - index,
+        updated_at: 1000 - index,
+        session_state: "draft",
+        source_type: index % 2 === 0 ? "image" : "video",
+        source_name: index % 2 === 0 ? "logo.png" : "sample.mp4",
+        message_count: index + 1,
+        linked_artifact_count: index % 3,
+        redacted: false,
+      }));
       else if (endpoint === "/api/v1/user/model-configs") {
         if (method === "PUT") for (const item of req.postDataJSON().items) {
           const previous = configuration.capabilities.find(value => value.capability === item.capability);
@@ -81,6 +94,18 @@ try {
     const chooser = await chooserPromise;
     await chooser.setFiles(path.resolve("public/logo.png"));
     await page.getByText("logo.png", { exact: true }).first().waitFor();
+    const storageNote = page.locator(".materials-category-note");
+    if (await storageNote.isVisible()) {
+      const noteAlignment = await storageNote.evaluate(node => {
+        const icon = node.querySelector(":scope > svg");
+        const copy = node.querySelector(":scope > span");
+        if (!icon || !copy) return null;
+        const iconBox = icon.getBoundingClientRect();
+        const copyBox = copy.getBoundingClientRect();
+        return Math.abs((iconBox.top + iconBox.height / 2) - (copyBox.top + copyBox.height / 2));
+      });
+      assert(noteAlignment !== null && noteAlignment <= 1.5, `${role}/${width}本机暂存锁图标未相对整段文字居中`);
+    }
     await screenshot("materials");
     const materialTrigger = page.getByRole("button", { name: "打开资料详情：logo.png" });
     await materialTrigger.click();
@@ -106,6 +131,19 @@ try {
     await page.getByRole("button", { name: "新建事故档案", exact: true }).click();
     assert.equal(sessionWrites(), writesBefore, "生成中不得创建新档案");
     await page.getByRole("button", { name: "打开账号菜单", exact: true }).click();
+    const accountHeader = page.locator(".account-popover-header");
+    const accountThemeToggle = accountHeader.getByRole("button", { name: /切换为(深|浅)色模式/ });
+    assert.equal(await accountThemeToggle.count(), 1, "主题按钮必须位于账号菜单头部");
+    assert(await accountHeader.evaluate(node => {
+      const username = node.querySelector(":scope > span");
+      const toggle = node.querySelector(":scope > button");
+      if (!username || !toggle) return false;
+      const usernameBox = username.getBoundingClientRect();
+      const toggleBox = toggle.getBoundingClientRect();
+      return usernameBox.left < toggleBox.left
+        && Math.abs((usernameBox.top + usernameBox.height / 2) - (toggleBox.top + toggleBox.height / 2)) <= 1.5;
+    }), `${role}/${width}用户名与主题按钮未左右居中对齐`);
+    await screenshot("account-menu");
     await page.getByRole("button", { name: "退出登录", exact: true }).click();
     assert(await page.evaluate(() => Boolean(localStorage.getItem("traffic-accident-auth-token"))), "生成中不得退出");
     await page.keyboard.press("Escape");
@@ -163,6 +201,22 @@ try {
       await page.getByRole("button", { name: "取消", exact: true }).click();
       await page.getByRole("tab", { name: "空间管理", exact: true }).click();
       await page.getByText("测试档案", { exact: true }).first().waitFor();
+      await page.getByLabel("每页条数", { exact: true }).selectOption("50");
+      const spaceRegion = page.getByRole("region", { name: "空间列表", exact: true });
+      await spaceRegion.focus();
+      assert(await spaceRegion.evaluate(node => node === document.activeElement), "空间列表应支持键盘聚焦滚动");
+      const scrollMetrics = await spaceRegion.evaluate(node => {
+        node.scrollTop = node.scrollHeight;
+        return { clientHeight: node.clientHeight, scrollHeight: node.scrollHeight, scrollTop: node.scrollTop };
+      });
+      assert(scrollMetrics.scrollHeight > scrollMetrics.clientHeight + 1, `${width}px空间列表未形成独立滚动区`);
+      assert(scrollMetrics.scrollTop > 0, `${width}px空间列表不能独立滚动`);
+      assert(await page.evaluate(() => {
+        const root = document.scrollingElement;
+        return Boolean(root)
+          && root.scrollHeight <= root.clientHeight + 1
+          && document.body.scrollHeight <= innerHeight + 1;
+      }), `${width}px空间管理不应让整个页面滚动`);
       await screenshot("spaces");
       await page.getByTitle("模型配置调整", { exact: true }).click();
       await page.getByRole("button", { name: "返回管理中心", exact: true }).click();

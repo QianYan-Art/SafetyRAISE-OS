@@ -779,12 +779,28 @@ button {
 }
 
 .account-popover-header {
-  padding: 10px 12px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 6px 6px 10px 12px;
 }
 
 .account-popover-header span {
+  min-width: 0;
+  overflow: hidden;
   color: #64748b;
   font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-popover-header .theme-toggle-btn {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  min-height: 34px;
+  box-shadow: none;
 }
 
 .account-popover-actions {

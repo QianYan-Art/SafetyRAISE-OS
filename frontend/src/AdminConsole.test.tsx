@@ -88,6 +88,17 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe("AdminConsole", () => {
+  it("将用户和空间列表暴露为可聚焦的独立滚动区域", async () => {
+    const { rerender } = render(<AdminConsole currentUser={currentUser} activeTab="users" />);
+
+    const userRegion = await screen.findByRole("region", { name: "用户列表" });
+    expect(userRegion.getAttribute("tabindex")).toBe("0");
+
+    rerender(<AdminConsole currentUser={currentUser} activeTab="spaces" />);
+    const spaceRegion = await screen.findByRole("region", { name: "空间列表" });
+    expect(spaceRegion.getAttribute("tabindex")).toBe("0");
+  });
+
   it("当前管理员不能在界面降权或停用自己", async () => {
     const user = userEvent.setup();
     render(<AdminConsole currentUser={currentUser} activeTab="users" />);
