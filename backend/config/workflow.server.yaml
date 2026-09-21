@@ -41,20 +41,19 @@ input:
 
 models:
   expert_local:
-    # 默认走服务器宿主机上的 OpenAI 兼容接口，方便直接复用本机 LM Studio / 本地模型服务。
-    provider: "lmstudio"
+    # 服务器默认走 Modal 上的 OpenAI 兼容专家端点；可通过环境变量切换到其他兼容服务。
+    provider: "${EXPERT_LOCAL_PROVIDER:-openai_compatible}"
     # 默认模型仓库：
     # https://huggingface.co/suyuan37/SafetyRAISE-TS-Qwen3
     # 必须填写推理服务实际暴露的模型名。
     model: "${EXPERT_LOCAL_MODEL:-suyuan37/SafetyRAISE-TS-Qwen3}"
     # 支持填写根地址、/v1 或完整 /chat/completions 地址。
-    # 默认使用容器内可访问的宿主机别名 host.docker.internal。
-    base_url: "${EXPERT_LOCAL_BASE_URL:-http://host.docker.internal:1234/v1}"
-    # 本地 LM Studio 若不需要鉴权，可保持为空字符串。
-    api_key_env: "${EXPERT_LOCAL_API_KEY_ENV:-}"
+    base_url: "${EXPERT_LOCAL_BASE_URL:-https://qianyan-art--safetyraise-qwen3-expert-serve.eu-west.modal.run/v1}"
+    # 值是保存裸 Proxy Auth token 的环境变量名，运行时统一添加 Bearer 前缀。
+    api_key_env: "${EXPERT_LOCAL_API_KEY_ENV:-MODAL_EXPERT_PROXY_TOKEN}"
     timeout_seconds: 1800
-    # 当前建议与 embedding 一起常驻；前提是工作站 LM Studio 已关闭“仅保留最后一个即时加载模型”。
-    lmstudio_ttl_seconds: 1800
+    # 云端按需缩容；显式切回 LM Studio 时可在自定义配置中重新设置 ttl。
+    lmstudio_ttl_seconds:
     prewarm_enabled: false
 
   report_external:

@@ -165,7 +165,12 @@ class ReportRunService:
                 "snapshot": deepcopy(record["snapshot"]), "endpoints": [],
                 "knowledge_collections": [],
             }
-        return catalog.preview(record)
+        preview = catalog.preview(record)
+        preview["endpoints"] = [
+            endpoint for endpoint in preview["endpoints"]
+            if endpoint.get("role") != "expert"
+        ]
+        return preview
 
     def authorize(self, owner: str, run_id: str, request: AuthorizationRequest) -> dict:
         with self.store.locked(owner, run_id) as (conn, row):

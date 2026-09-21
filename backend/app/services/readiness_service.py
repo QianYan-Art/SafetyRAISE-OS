@@ -1,13 +1,18 @@
 from __future__ import annotations
 
-import subprocess
 import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
 import httpx
 
-from app.core.settings import ModelEndpointSettings, ReportModelSettings, Settings, get_api_key
+from app.core.settings import (
+    ModelEndpointSettings,
+    ReportModelSettings,
+    Settings,
+    get_api_key,
+)
 from app.providers.llm.lmstudio_compat import (
     build_chat_completions_url,
     build_models_url,
@@ -218,7 +223,7 @@ class ReadinessService:
                 "message": "embedding 服务可访问。",
                 **probe,
             }
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             return {
                 "ok": False,
                 "enabled": True,
@@ -249,7 +254,7 @@ class ReadinessService:
                 "message": "reranker 服务可访问。",
                 **probe,
             }
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             return {
                 "ok": False,
                 "enabled": True,
@@ -306,16 +311,36 @@ class ReadinessService:
     def _check_expert_model_endpoint(self, model_settings: ModelEndpointSettings) -> dict[str, Any]:
         try:
             api_key = get_api_key(model_settings.api_key_env) if model_settings.api_key_env else ""
-        except Exception as exc:  # noqa: BLE001
+        except Exception:
             return {
                 "ok": False,
-                "message": "模型 API Key 不可用。",
-                "model": model_settings.model,
-                "endpoint": "expert_local",
-                "detail": str(exc),
+                "message": "系统指导服务凭据不可用。",
+                "reason": "api_key_unavailable",
             }
 
-        return self._probe_model_endpoint(
+        try:
+            compatibility = resolve_lmstudio_compatibility(
+                base_url_or_endpoint=model_settings.base_url,
+                provider_name=model_settings.provider,
+                host_allowlist=self.settings.app.lmstudio_host_allowlist,
+                ttl_seconds=model_settings.lmstudio_ttl_seconds,
+            )
+            build_chat_completions_url(model_settings.base_url)
+        except Exception:
+            return {
+                "ok": False,
+                "message": "系统指导服务地址配置无效。",
+                "reason": "endpoint_invalid",
+            }
+
+        # Modal 等按需 GPU 端点不能被 readiness 轮询唤醒；真实可用性由业务请求与部署烟测确认。
+        if not compatibility.enabled:
+            return {
+                "ok": True,
+                "message": "系统指导服务已配置，将在需要时按需启动。",
+            }
+
+        result = self._probe_model_endpoint(
             endpoint_name="expert_local",
             endpoint_url=model_settings.base_url,
             provider_name=model_settings.provider,
@@ -323,6 +348,13 @@ class ReadinessService:
             api_key=api_key,
             ttl_seconds=model_settings.lmstudio_ttl_seconds,
         )
+        if result.get("ok"):
+            return {"ok": True, "message": "系统指导服务可用。"}
+        return {
+            "ok": False,
+            "message": "系统指导服务不可用。",
+            "reason": "endpoint_unavailable",
+        }
 
     def _check_model_endpoints(self, model_settings: ReportModelSettings) -> dict[str, Any]:
         endpoint_results: list[dict[str, Any]] = []
@@ -334,7 +366,7 @@ class ReadinessService:
                 else:
                     api_key_env = endpoint.api_key_env or model_settings.api_key_env
                     api_key = get_api_key(api_key_env) if api_key_env else ""
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 endpoint_results.append(
                     {
                         "ok": False,
@@ -384,7 +416,7 @@ class ReadinessService:
                 host_allowlist=self.settings.app.lmstudio_host_allowlist,
                 ttl_seconds=ttl_seconds,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             return {
                 "ok": False,
                 "message": "模型端点地址无效。",
@@ -403,7 +435,7 @@ class ReadinessService:
                         chat_completions_url=lmstudio.chat_completions_url,
                         model_name=model_name,
                     )
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 return {
                     "ok": False,
                     "message": "LM Studio 模型列表探测失败。",
@@ -459,7 +491,7 @@ class ReadinessService:
                     "models_url": health_url,
                 },
             }
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             return {
                 "ok": False,
                 "message": "模型端点不可访问。",

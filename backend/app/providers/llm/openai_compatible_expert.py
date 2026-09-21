@@ -1,17 +1,21 @@
+import json
 import logging
+
 import httpx
 
 from app.core.exceptions import ProviderError
 from app.core.settings import ModelEndpointSettings
 from app.providers.llm.base import BaseLLMProvider
 from app.providers.llm.lmstudio_compat import (
-    build_chat_completions_url,
     build_lmstudio_models_urls,
     build_models_url,
     probe_lmstudio_model,
     resolve_lmstudio_compatibility,
 )
-from app.providers.lmstudio_residency import LMStudioResidencyManager, LMStudioResidencySpec
+from app.providers.lmstudio_residency import (
+    LMStudioResidencyManager,
+    LMStudioResidencySpec,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -73,18 +77,23 @@ class OpenAICompatibleExpertProvider(BaseLLMProvider):
             data = response.json()
             self._warmed = True
             return self._extract_message_content(data)
-        except Exception as exc:  # noqa: BLE001
+        except ProviderError:
+            raise
+        except Exception as exc:
             logger.exception("调用 OpenAI 兼容专家模型失败")
+            retryable = self._is_retryable_failure(exc)
             if self._lmstudio.enabled:
                 raise ProviderError(
                     f"LM Studio 专家模型调用失败: {exc}",
                     public_message="专家小模型当前调用失败，请确认目标模型存在且可自动加载后重试。",
                     details={"provider": "lmstudio", "error": str(exc)},
+                    retryable=retryable,
                 ) from exc
             raise ProviderError(
                 f"OpenAI 兼容专家模型调用失败: {exc}",
                 public_message="专家小模型当前调用失败，请稍后重试。",
                 details={"provider": self._provider_name or "openai_compatible", "error": str(exc)},
+                retryable=retryable,
             ) from exc
 
     def health_check(self) -> bool:
@@ -97,10 +106,10 @@ class OpenAICompatibleExpertProvider(BaseLLMProvider):
                     )
                     response.raise_for_status()
                     return True
-                except Exception:  # noqa: BLE001
+                except Exception:
                     continue
             return False
-        except Exception:  # noqa: BLE001
+        except Exception:
             return False
 
     def close(self) -> None:
@@ -172,15 +181,42 @@ class OpenAICompatibleExpertProvider(BaseLLMProvider):
         return [self._models_url]
 
     @staticmethod
+    def _is_retryable_failure(exc: Exception) -> bool:
+        if isinstance(exc, httpx.ReadTimeout):
+            return False
+        if isinstance(
+            exc,
+            (
+                httpx.ConnectError,
+                httpx.ConnectTimeout,
+                httpx.ReadError,
+                httpx.RemoteProtocolError,
+                httpx.WriteError,
+                httpx.WriteTimeout,
+                json.JSONDecodeError,
+            ),
+        ):
+            return True
+        if isinstance(exc, httpx.HTTPStatusError):
+            response = getattr(exc, "response", None)
+            status_code = getattr(response, "status_code", 0)
+            return status_code in {408, 425, 429} or status_code >= 500
+        return False
+
+    @staticmethod
     def _extract_message_content(payload: dict) -> str:
         choices = payload.get("choices") or []
         if not choices:
-            raise ProviderError("OpenAI 兼容专家模型返回为空。")
+            raise ProviderError(
+                "OpenAI 兼容专家模型返回为空。",
+                code="EXPERT_EMPTY_RESPONSE",
+                retryable=True,
+            )
 
         content = choices[0].get("message", {}).get("content", "")
         if isinstance(content, str):
-            return content.strip()
-        if isinstance(content, list):
+            result = content.strip()
+        elif isinstance(content, list):
             text_parts: list[str] = []
             for item in content:
                 if isinstance(item, dict):
@@ -189,5 +225,14 @@ class OpenAICompatibleExpertProvider(BaseLLMProvider):
                         text_parts.append(text)
                 elif isinstance(item, str) and item.strip():
                     text_parts.append(item.strip())
-            return "\n".join(text_parts).strip()
-        return str(content).strip()
+            result = "\n".join(text_parts).strip()
+        else:
+            result = str(content).strip()
+
+        if not result:
+            raise ProviderError(
+                "OpenAI 兼容专家模型未返回可用正文。",
+                code="EXPERT_EMPTY_RESPONSE",
+                retryable=True,
+            )
+        return result

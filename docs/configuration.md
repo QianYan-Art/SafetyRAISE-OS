@@ -92,9 +92,11 @@ base_url: "${RETRIEVAL_EMBEDDING_BASE_URL:-http://127.0.0.1:1234/v1}"
 
 | 变量 | 作用 |
 | --- | --- |
+| `EXPERT_LOCAL_PROVIDER` | 专家模型提供器；服务器默认 `openai_compatible`，本地 LM Studio 可显式覆盖 |
 | `EXPERT_LOCAL_MODEL` | 专家模型名称 |
 | `EXPERT_LOCAL_BASE_URL` | 专家模型服务地址 |
 | `EXPERT_LOCAL_API_KEY_ENV` | 若服务端需要鉴权，指向真实 key 的环境变量名 |
+| `MODAL_EXPERT_PROXY_TOKEN` | 默认 Modal Proxy Auth 裸 token；程序统一添加 `Bearer` 前缀，不提交仓库 |
 
 ### 2. lite 档位模型（已下线）
 

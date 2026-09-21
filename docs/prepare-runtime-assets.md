@@ -40,12 +40,17 @@ manifest 不包含新预算授权；迁移时不得丢弃旧请求或未知预�
 
 用途：生成专家指导意见，作为报告链路的前置分析节点。
 
-默认值：
+服务器默认值：
 
 ```text
+EXPERT_LOCAL_PROVIDER=openai_compatible
 EXPERT_LOCAL_MODEL=suyuan37/SafetyRAISE-TS-Qwen3
-EXPERT_LOCAL_BASE_URL=http://127.0.0.1:1234/v1
+EXPERT_LOCAL_BASE_URL=https://qianyan-art--safetyraise-qwen3-expert-serve.eu-west.modal.run/v1
+EXPERT_LOCAL_API_KEY_ENV=MODAL_EXPERT_PROXY_TOKEN
 ```
+
+本地开发若使用 LM Studio，可把 provider、base URL 和凭据变量覆盖为本地端点；
+这不是服务器默认路径。
 
 模型仓库：
 

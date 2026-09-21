@@ -159,7 +159,6 @@ class WorkflowNodes:
             "sections": sections,
             "citations": [item.get("id", "") for item in all_snippets if item.get("id")],
                 "meta": {
-                    "expert_model": self.settings.models.expert_local.model,
                     "report_model": getattr(
                         self.report_provider,
                         "last_used_model",
@@ -680,13 +679,23 @@ class WorkflowNodes:
                 result = provider.generate(system_prompt=system_prompt, user_prompt=user_prompt)
                 self._raise_if_cancelled()
                 return result
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 if self._is_cancelled():
                     raise RequestCancelledError("客户端连接已断开，报告生成已取消。") from exc
-                logger.warning("%s 失败（第 %s/%s 次）: %s", stage_name, i, attempts, exc)
+                retryable = bool(getattr(exc, "retryable", False))
+                logger.warning(
+                    "%s 失败（第 %s/%s 次，可重试=%s）: %s",
+                    stage_name,
+                    i,
+                    attempts,
+                    retryable,
+                    exc,
+                )
                 last_exc = exc
-                if i < attempts:
+                if i < attempts and retryable:
                     time.sleep(backoff * i)
+                    continue
+                break
 
         raise WorkflowError(f"{stage_name} 阶段失败: {last_exc}") from last_exc
 
@@ -733,22 +742,8 @@ class WorkflowNodes:
         raw: str,
         guidance_prompt: str,
     ) -> tuple[dict[str, Any], str]:
-        try:
-            return extract_json_from_text(raw), raw
-        except InputValidationError as first_exc:
-            logger.warning("指导意见 JSON 解析失败，准备发起一次修复重试: %s", first_exc)
-
-        repaired_raw = self._retry_generate(
-            provider=self.expert_provider,
-            system_prompt=guidance_prompt,
-            user_prompt=(
-                "你刚才的输出不是合法 JSON。"
-                "请删除所有思考过程、解释、代码块和多余文字，"
-                "只重新输出一个可解析的 JSON 对象，键名必须完全保持不变。"
-            ),
-            stage_name="guidance_repair",
-        )
-        return extract_json_from_text(repaired_raw), repaired_raw
+        del guidance_prompt
+        return extract_json_from_text(raw), raw
 
     def _render_guidance_prompt(self, accident_data: dict[str, Any]) -> str:
         return render_guidance_prompt(self._load_guidance_prompt(), accident_data)

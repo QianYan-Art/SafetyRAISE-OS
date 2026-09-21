@@ -422,7 +422,7 @@ sh deployment/docker/setup-https.sh
 
 1. YOLO：下载 `yolo11n.pt`，挂到 `MODELS_HOST_PATH`
 2. embedding：按 `RETRIEVAL_EMBEDDING_BASE_URL` 和 `RETRIEVAL_EMBEDDING_MODEL` 配置；`.env.server` 可按实际部署端点覆盖代码默认值
-3. 专家模型：按 `EXPERT_LOCAL_BASE_URL` 和 `EXPERT_LOCAL_MODEL` 配置，模型名必须与实际服务加载的名称一致；`.env.server` 可覆盖代码默认值
+3. 专家模型：服务器默认使用 `EXPERT_LOCAL_PROVIDER=openai_compatible` 和 Modal `/v1` 端点；`EXPERT_LOCAL_API_KEY_ENV` 默认指向 root-only 的 `MODAL_EXPERT_PROXY_TOKEN`，模型名必须与实际服务加载名称一致。本地 LM Studio 仅作为显式覆盖路径
 4. 报告 / 视觉模型：优先用远端 API，减少显存和部署复杂度
 5. reranker：当前不作为必需资产
 6. 会话与运行时状态：当前已改为 PostgreSQL 持久化
@@ -441,7 +441,8 @@ sh deployment/docker/setup-https.sh
 4. 远端挂载后的运行时目录
 5. YOLO 权重目录
 6. 若启用视频链路，不要求 GPU，但要确认镜像按 CPU 版 `torch/torchvision` 构建
-7. 若模型跑在宿主机，还要保证容器能访问到对应端口
+7. Modal Proxy Auth token 只保存在 root 可读的服务器配置中，不进入镜像、仓库或前端
+8. 若显式改回宿主机模型，还要保证容器能访问对应端口
 
 ### 213
 
@@ -493,6 +494,7 @@ sh deployment/docker/setup-https.sh
 部署后在本地`frontend`目录运行`node tests/production-workspace-smoke.mjs`，
 用合成账号和会话检查真实生产前端、鉴权、事实保存、用户模型配置与管理员接口；
 脚本不调用视觉、专家或报告模型，结束时删除合成数据，清理失败也会令烟测失败。
+Modal 专家端点采用按需 GPU，`/ready` 只验证配置并避免探活唤醒容器；其真实可用性需另用一次受控合成业务请求或部署烟测确认。
 
 ```powershell
 $env:PRODUCTION_SMOKE_URL = 'https://<PRODUCTION_HOST>'

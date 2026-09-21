@@ -125,6 +125,7 @@ npm install
 2. `deployment/docker/docker-compose.server.yml` 已为 `frontend / backend` 显式设置 `json-file` 日志策略；可通过 `.env.server` 的 `DOCKER_LOG_MAX_SIZE` / `DOCKER_LOG_MAX_FILE` 调整上限。
 3. `deployment/docker/provision-212.sh` 会用 `EOF` heredoc 预写 `/etc/docker/daemon.json`，把应用机宿主 Docker 默认日志限制为 `20m * 5`。
 4. `deployment/docker/setup-https.sh` 通过 `LOGROTATE_FILE=/etc/logrotate.d/safetyraise-cert-renew` 写入证书续期日志轮转规则。
+5. 服务器统一专家模型默认使用 `qianyan-art--safetyraise-qwen3-expert-serve.eu-west.modal.run` 的按需 Modal 端点；该系统级链路不进入普通用户或管理员的模型配置界面。
 5. 前端本地会话缓存按 `user.id` 分桶，键前缀为 `SESSION_STORAGE_KEY_PREFIX`；落盘使用 `SYNC_DEBOUNCE_MS=300` 防抖，并在组件卸载/切账号前强制 flush。
 
 ## 当前限制

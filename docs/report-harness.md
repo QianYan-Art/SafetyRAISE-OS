@@ -25,6 +25,7 @@
   草稿字段未就绪时保存返回警告，创建 run 时无效 JSON Pointer 必须拒绝。
 - 所有者可读取 `/api/v1/report-runs/{run_id}/authorization-preview`；
   缺少完整的服务端端点描述或获批知识清单时明确不可批准，不返回密钥或自动探测端点。
+  专家端点仍参与服务端摘要、预算与执行绑定，但作为系统级隐藏能力不会出现在用户可见预览中。
 - authorize 必须确认快照、端点配置和知识清单三个服务端摘要。
   授权与事实核实状态互相独立，不能由模型写入 approved，也不会增加预算。
 - 未初始化正式运行依赖时，公开生产入口的 outbound 返回 `outbound_transport_unavailable`。

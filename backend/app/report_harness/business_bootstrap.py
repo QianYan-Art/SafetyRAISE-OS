@@ -10,18 +10,24 @@ from pydantic import Field, field_validator
 
 from app.core.exceptions import ConfigurationError
 from app.core.settings import get_api_key
+from app.providers.llm.lmstudio_compat import build_chat_completions_url
 from app.report_harness.authorization import AuthorizationCatalog, EndpointDescription
 from app.report_harness.business_workflow import BusinessWorkflow
 from app.report_harness.contracts import canonical_digest
 from app.report_harness.errors import HarnessError
 from app.report_harness.knowledge_assets import load_knowledge_assets
 from app.report_harness.money_guard import (
-    VersionedMoneyGuardHTTPAttemptClient, read_billing_contract,
+    VersionedMoneyGuardHTTPAttemptClient,
+    read_billing_contract,
 )
 from app.report_harness.runtime_factory import build_business_dependencies
 from app.report_harness.runtime_profiles import (
-    capacity_from_expert_metadata, capacity_from_metadata, price_upper_cny,
-    openrouter_price_filter, capacity_budget, capacity_from_local_embedding_metadata,
+    capacity_budget,
+    capacity_from_expert_metadata,
+    capacity_from_local_embedding_metadata,
+    capacity_from_metadata,
+    openrouter_price_filter,
+    price_upper_cny,
 )
 from app.schemas.base import StrictModel
 from app.schemas.report_run import BudgetPolicy
@@ -100,7 +106,7 @@ def assemble_business_runtime(settings, manifest: BusinessRuntimeManifest, *, re
         if profiles[role].extra_body:
             raise HarnessError("runtime_request_options_unapproved")
     endpoints = {
-        "expert": expert.base_url.rstrip("/") + "/chat/completions",
+        "expert": build_chat_completions_url(expert.base_url),
         "embedding": embedding.base_url.rstrip("/") + "/embeddings",
         **{role: profile.url for role, profile in profiles.items()},
     }
