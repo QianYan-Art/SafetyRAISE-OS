@@ -5,7 +5,7 @@ import json
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Callable
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urljoin, urlsplit
 
 import httpx
 
@@ -30,7 +30,7 @@ class RequestBound:
 
 
 class HTTPAttemptClient:
-    """每次调用只有一个 HTTP attempt；无自动重试、重定向、代理或端点回退。"""
+    """每次调用只有一个模型 attempt；无自动重试、通用重定向、代理或端点回退。"""
 
     def __init__(self, endpoints: dict[str, str], headers: dict[str, dict] | None = None):
         self._endpoints = deepcopy(endpoints)
@@ -48,16 +48,28 @@ class HTTPAttemptClient:
     async def attempt(self, role: str, payload: dict, timeout: float) -> dict:
         if role not in self._endpoints:
             raise HarnessError("endpoint_role_unregistered")
+        headers = self._headers.get(role, {})
+        content = bytearray()
         async with self._client.stream(
             "POST", self._endpoints[role], json=payload,
-            headers=self._headers.get(role, {}), timeout=timeout,
+            headers=headers, timeout=timeout,
         ) as response:
-            response.raise_for_status()
-            content = bytearray()
-            async for chunk in response.aiter_bytes():
-                content.extend(chunk)
-                if len(content) > 1024 * 1024:
-                    raise HarnessError("physical_response_too_large")
+            recovery_url = self._modal_attempt_result_url(response)
+            if recovery_url is None:
+                if response.is_redirect:
+                    raise HarnessError("physical_redirect_rejected")
+                response.raise_for_status()
+                content = await self._read_content(response)
+        if recovery_url is not None:
+            async with self._client.stream(
+                "GET", recovery_url, headers=headers, timeout=timeout,
+            ) as response:
+                if response.is_redirect:
+                    raise HarnessError("physical_redirect_rejected")
+                if response.is_error:
+                    raise HarnessError("physical_attempt_retrieval_failed")
+                content = await self._read_content(response)
+
         def reject_nonfinite(value):
             raise HarnessError("invalid_physical_response")
 
@@ -65,6 +77,47 @@ class HTTPAttemptClient:
         if not isinstance(result, dict):
             raise HarnessError("invalid_physical_response")
         return result
+
+    @staticmethod
+    async def _read_content(response: httpx.Response) -> bytearray:
+        content = bytearray()
+        async for chunk in response.aiter_bytes():
+            content.extend(chunk)
+            if len(content) > 1024 * 1024:
+                raise HarnessError("physical_response_too_large")
+        return content
+
+    @staticmethod
+    def _modal_attempt_result_url(response: httpx.Response) -> str | None:
+        if response.status_code != 303:
+            return None
+        location = response.headers.get("location")
+        if not location:
+            raise HarnessError("physical_redirect_rejected")
+        source = urlsplit(str(response.request.url))
+        target = urlsplit(urljoin(str(response.request.url), location))
+        query = parse_qsl(target.query, keep_blank_values=True)
+        same_origin = (
+            source.scheme == target.scheme == "https"
+            and source.hostname == target.hostname
+            and source.port == target.port
+        )
+        modal_host = bool(source.hostname) and (
+            source.hostname == "modal.run" or source.hostname.endswith(".modal.run")
+        )
+        if (
+            not same_origin
+            or not modal_host
+            or source.path != target.path
+            or target.username
+            or target.password
+            or target.fragment
+            or len(query) != 1
+            or query[0][0] != "__modal_attempt_token"
+            or not query[0][1]
+        ):
+            raise HarnessError("physical_redirect_rejected")
+        return target.geturl()
 
     async def close(self):
         await self._client.aclose()
