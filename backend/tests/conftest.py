@@ -7,10 +7,9 @@ from uuid import uuid4
 
 import psycopg
 import pytest
-from psycopg.rows import dict_row
-
 from app.report_harness.store import RunStore
 from app.report_harness.test_database import migrate_test_database, validate_test_dsn
+from psycopg.rows import dict_row
 
 
 @pytest.fixture(autouse=True)
@@ -37,9 +36,19 @@ def pg_store():
             );
             CREATE TABLE IF NOT EXISTS chat_sessions (
                 id text PRIMARY KEY,
+                title text NOT NULL DEFAULT '',
                 owner_user_id uuid REFERENCES users(id),
                 owner_username text,
-                draft_json text NOT NULL DEFAULT ''
+                created_at bigint NOT NULL DEFAULT 0,
+                updated_at bigint NOT NULL DEFAULT 0,
+                sort_order integer,
+                source_type text,
+                source_name text,
+                messages jsonb NOT NULL DEFAULT '[]'::jsonb,
+                draft_json text NOT NULL DEFAULT '',
+                draft_meta jsonb,
+                report_result jsonb,
+                session_state text NOT NULL DEFAULT 'draft'
             );
         """)
     migrate_test_database(dsn)
