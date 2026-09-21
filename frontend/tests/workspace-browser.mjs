@@ -95,7 +95,8 @@ try {
     await chooser.setFiles(path.resolve("public/logo.png"));
     await page.getByText("logo.png", { exact: true }).first().waitFor();
     const storageNote = page.locator(".materials-category-note");
-    if (await storageNote.isVisible()) {
+    if (width > 600) {
+      assert(await storageNote.isVisible(), `${role}/${width}桌面端应显示本机暂存说明`);
       const noteAlignment = await storageNote.evaluate(node => {
         const icon = node.querySelector(":scope > svg");
         const copy = node.querySelector(":scope > span");
@@ -105,6 +106,8 @@ try {
         return Math.abs((iconBox.top + iconBox.height / 2) - (copyBox.top + copyBox.height / 2));
       });
       assert(noteAlignment !== null && noteAlignment <= 1.5, `${role}/${width}本机暂存锁图标未相对整段文字居中`);
+    } else {
+      assert.equal(await storageNote.isVisible(), false, `${role}/${width}移动端应沿用紧凑分类栏`);
     }
     await screenshot("materials");
     const materialTrigger = page.getByRole("button", { name: "打开资料详情：logo.png" });
@@ -144,6 +147,13 @@ try {
         && Math.abs((usernameBox.top + usernameBox.height / 2) - (toggleBox.top + toggleBox.height / 2)) <= 1.5;
     }), `${role}/${width}用户名与主题按钮未左右居中对齐`);
     await screenshot("account-menu");
+    await accountThemeToggle.click();
+    assert(await page.locator(".evidence-workspace").evaluate(node => node.classList.contains("theme-dark")), "主题按钮应切换到深色模式");
+    assert(await accountHeader.evaluate(node => getComputedStyle(node.parentElement).backgroundColor !== "rgba(255, 255, 255, 0.96)"), "深色账号菜单不能保留浅色背景");
+    await page.waitForFunction(() => getComputedStyle(document.querySelector(".account-popover-item")).backgroundColor === "rgb(41, 44, 49)");
+    assert.equal(await page.locator(".account-popover-item").first().evaluate(node => getComputedStyle(node).backgroundColor), "rgb(41, 44, 49)", "深色账号菜单操作项应使用深色表面");
+    await screenshot("account-menu-dark");
+    await accountHeader.getByRole("button", { name: "切换为浅色模式", exact: true }).click();
     await page.getByRole("button", { name: "退出登录", exact: true }).click();
     assert(await page.evaluate(() => Boolean(localStorage.getItem("traffic-accident-auth-token"))), "生成中不得退出");
     await page.keyboard.press("Escape");
@@ -211,6 +221,9 @@ try {
       });
       assert(scrollMetrics.scrollHeight > scrollMetrics.clientHeight + 1, `${width}px空间列表未形成独立滚动区`);
       assert(scrollMetrics.scrollTop > 0, `${width}px空间列表不能独立滚动`);
+      assert(await page.locator(".main-content, .account-admin-shell, .account-admin-surface").evaluateAll(nodes => nodes.every(node => (
+        node.scrollTop === 0 && node.scrollHeight <= node.clientHeight + 1
+      ))), `${width}px空间管理外层容器不应滚动`);
       assert(await page.evaluate(() => {
         const root = document.scrollingElement;
         return Boolean(root)
@@ -218,6 +231,14 @@ try {
           && document.body.scrollHeight <= innerHeight + 1;
       }), `${width}px空间管理不应让整个页面滚动`);
       await screenshot("spaces");
+      await page.getByRole("button", { name: "打开档案列表", exact: true }).click();
+      await page.getByRole("button", { name: "打开账号菜单", exact: true }).click();
+      await page.getByRole("button", { name: "切换为深色模式", exact: true }).click();
+      await page.keyboard.press("Escape");
+      await page.keyboard.press("Escape");
+      await page.getByRole("dialog", { name: "档案导航" }).waitFor({ state: "hidden" });
+      assert(await page.locator(".account-admin-surface").evaluate(node => getComputedStyle(node).backgroundColor === "rgb(32, 34, 38)"), "深色管理员页面应使用工作台深色表面");
+      await screenshot("spaces-dark");
       await page.getByTitle("模型配置调整", { exact: true }).click();
       await page.getByRole("button", { name: "返回管理中心", exact: true }).click();
       assert(await page.getByRole("tab", { name: "空间管理", exact: true }).isVisible());

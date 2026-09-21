@@ -95,8 +95,19 @@
 .evidence-workspace .materials-category-button{padding-left:12px}
 .evidence-workspace .materials-workspace{min-height:0}
 .evidence-workspace.theme-dark .materials-workspace{--materials-ink:#e4e6e9;--materials-muted:#a5abb4;--materials-meta:#a5abb4;--materials-line:#373a41;--materials-surface:#202226;--materials-subtle:#292c31;--materials-blue-soft:#243757}
-.evidence-workspace.theme-dark :is(.account-model-overlay,.account-admin,.account-drawer,.account-modal,.account-model-footer){background:var(--workbench-surface);color:var(--workbench-text)}
+.evidence-workspace.theme-dark :is(.account-model-overlay,.account-admin-shell,.account-admin-surface,.account-drawer,.account-modal,.account-model-footer,.account-popover){background:var(--workbench-surface);color:var(--workbench-text);border-color:var(--border-color)}
 .evidence-workspace.theme-dark :is(.account-input,.account-select){background:var(--bg-subtle);color:var(--workbench-text);border-color:var(--border-color)}
+.evidence-workspace.theme-dark :is(.account-admin-heading h1,.account-admin-user-copy strong,.account-admin-space-title){color:var(--workbench-text)}
+.evidence-workspace.theme-dark :is(.account-admin-heading p,.account-admin-count,.account-admin-toolbar-note,.account-admin-pagination,.account-admin-user-copy small,.account-popover-header span){color:var(--workbench-muted)}
+.evidence-workspace.theme-dark .account-search-field{background:var(--bg-subtle);color:var(--workbench-text);border-color:var(--border-color)}
+.evidence-workspace.theme-dark .account-popover .account-popover-item{background-color:#292c31;color:var(--workbench-text);border-color:var(--border-color)}
+.evidence-workspace.theme-dark .account-search-field input{color:var(--workbench-text)}
+.evidence-workspace.theme-dark :is(.account-admin-table thead,.account-admin-table th){background:var(--bg-subtle);color:var(--workbench-muted);border-color:var(--border-color)}
+.evidence-workspace.theme-dark .account-admin-table td{color:var(--workbench-muted);border-color:var(--border-color)}
+.evidence-workspace.theme-dark .account-admin-table tr:hover td{background:#25282d}
+.evidence-workspace.theme-dark .account-popover{box-shadow:0 24px 60px rgba(0,0,0,.34)}
+.evidence-workspace.theme-dark .account-popover .account-popover-item:hover{background-color:#343840;color:var(--workbench-text)}
+.evidence-workspace.theme-dark .account-popover .account-popover-item.is-danger{color:var(--danger-color)}
 @media(max-width:1100px){.evidence-workspace .page-header{padding-inline:24px;gap:10px}.workspace-stages{gap:3px}.workspace-stages button{font-size:12px;padding:7px 5px;gap:5px}.workspace-stages button>svg{margin-left:2px}.evidence-workspace .workspace-username{max-width:80px}}
 @media(min-width:601px) and (max-width:1100px){.evidence-workspace .materials-category-rail{padding-left:12px;padding-right:12px}}
 @media(max-width:820px){.evidence-workspace .workspace-username{display:none}.workspace-stages button>svg{display:none}}
