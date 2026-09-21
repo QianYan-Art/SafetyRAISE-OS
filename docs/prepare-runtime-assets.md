@@ -67,6 +67,10 @@ POST /v1/chat/completions
 1. 程序里填写的是推理服务实际加载后的模型名
 2. 不是直接请求 Hugging Face 页面
 3. 可以由 LM Studio、vLLM、Ollama 兼容服务或其他 OpenAI 兼容服务承载
+4. 当前 Modal 部署使用持久卷 `safetyraise-qwen3-f16`，模型目录为卷内 `/models/TS-Qwen3`
+5. 当前 vLLM 以 F16、`12288` 上下文和单并发运行；该上下文按系统实际的一轮专家输入设置，不沿用本地设备上的 `32000`
+6. 专家请求不发送输出 token 上限；模型自身的 generation config 决定生成行为，程序只在取得结果后清理可识别的独立思维字段
+7. 该端点是系统级隐藏能力，普通用户和管理员都不能通过模型配置界面替换
 
 ### YOLO 检测模型
 

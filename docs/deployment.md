@@ -416,6 +416,22 @@ sh deployment/docker/setup-https.sh
 3. frontend 容器定位按 compose service label，不再依赖旧容器名
 4. 不再 `source .env.server`，只读取续期实际需要的少数字段
 
+## Modal 专家服务
+
+服务器默认专家服务由 `deployment/modal/qwen3_expert.py` 部署。脚本要求已有持久卷 `safetyraise-qwen3-f16`，并从卷内 `/models/TS-Qwen3` 读取完整模型；`create_if_missing=False` 会在卷不存在时直接失败，避免误建空卷后发布不可用端点。
+
+```powershell
+modal volume create safetyraise-qwen3-f16
+modal volume put safetyraise-qwen3-f16 <LOCAL_MODEL_DIR> /models/TS-Qwen3
+modal deploy deployment/modal/qwen3_expert.py
+```
+
+生产参数由脚本固定：vLLM `0.21.0`、L4、EU 路由、F16、单容器、单并发、60 秒空闲缩容和 1800 秒启动等待。vLLM 命令使用 `--port 8000`、`--served-model-name suyuan37/SafetyRAISE-TS-Qwen3`、`--dtype float16`、`--max-model-len 12288`、`--max-num-seqs 1`、`--gpu-memory-utilization 0.88`、`--generation-config /model-volume/models/TS-Qwen3`、`--reasoning-parser qwen3` 与 `--enforce-eager`。
+
+脚本不设置 `--max-tokens`、`--max-new-tokens` 或 `--max-output-tokens`。`12288` 只限制单次请求可用上下文，按系统实际传给专家模型的一轮提示和事故信息选取；专家链路不复用上一轮会话。Proxy Auth token 通过 Modal 控制台创建，只保存到 212 的 root-only `.env.server`，不写入仓库、镜像、前端或日志。
+
+Modal 冷启动可能让首次 `POST` 返回 `303` 和 `__modal_attempt_token`。Harness 只接受 HTTPS、同源 `.modal.run`、同路径且仅含一个非空 attempt token 的响应，再用一次 `GET` 取得同一物理尝试的结果；其他重定向全部拒绝，且不会再发送第二个 `POST`。`/api/v1/ready` 只核验配置，不会为探活唤醒 GPU；真实可用性应通过一次受控合成业务请求确认。
+
 ## 模型资产建议
 
 如果你希望服务器部署尽量接近当前默认配置，建议这样准备：
@@ -440,7 +456,7 @@ sh deployment/docker/setup-https.sh
 3. 远端挂载后的知识库目录
 4. 远端挂载后的运行时目录
 5. YOLO 权重目录
-6. 若启用视频链路，不要求 GPU，但要确认镜像按 CPU 版 `torch/torchvision` 构建
+6. 若启用视频链路，不要求 GPU，但镜像必须包含 CPU 版 `torch / torchvision`、`requirements-video.txt` 中的 `ultralytics / lap`，并在上线前运行 `deployment/docker/verify-runtime-dependencies.py`
 7. Modal Proxy Auth token 只保存在 root 可读的服务器配置中，不进入镜像、仓库或前端
 8. 若显式改回宿主机模型，还要保证容器能访问对应端口
 
@@ -449,6 +465,13 @@ sh deployment/docker/setup-https.sh
 1. PostgreSQL
 2. 知识库目录
 3. 备份目录
+
+## 发布保留与清理
+
+1. 212 只保留当前发布目录和一个已验证回滚点。删除旧发布前，必须用运行容器的 `com.docker.compose.project.working_dir` 标签确认 frontend 与 backend 都指向当前目录，并确认当前、回滚镜像完整存在。
+2. 发布包、构建目录和构建日志在 `health / ready`、挂载和回滚镜像核验通过后即可定点删除。镜像按明确标签或完整 ID 删除，不运行全局 Docker prune，避免误删唯一回滚层或其他服务资产。
+3. 213 的长期业务目录只承载 `kbase`、`postgres` 和 `runtime`。清理只处理能由构建记录证明无活动引用的 SafetyRAISE 缓存；不得按名称猜测删除数据库、知识库、运行时账本、审计记录、私有证据或其他服务镜像。
+4. 清理前后记录根盘可用空间、可用内存、PostgreSQL 健康、SSHFS 挂载和 212 的 `/api/v1/health`、`/api/v1/ready`，其中任一回归都应停止继续删除。
 
 ## 最容易踩的坑
 

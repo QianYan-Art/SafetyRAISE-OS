@@ -98,9 +98,13 @@ base_url: "${RETRIEVAL_EMBEDDING_BASE_URL:-http://127.0.0.1:1234/v1}"
 | `EXPERT_LOCAL_API_KEY_ENV` | 若服务端需要鉴权，指向真实 key 的环境变量名 |
 | `MODAL_EXPERT_PROXY_TOKEN` | 默认 Modal Proxy Auth 裸 token；程序统一添加 `Bearer` 前缀，不提交仓库 |
 
+服务器配置把专家模型固定为系统级能力：普通用户和管理员都不能在模型接入设置中查看或修改该端点，也不能从公开 readiness、报告响应或授权预览中取得地址和凭据。`workflow.server.yaml` 默认给单次专家请求 `1800` 秒超时，用于覆盖按需 GPU 冷启动和完整的一轮生成；请求体不发送 `max_tokens`、`max_completion_tokens` 或 `max_output_tokens`。
+
+自动重试只用于明确的连接、写入、协议中断、无效 JSON 或可重试 HTTP 状态。已经进入读取阶段但超时的请求不自动重发，避免同一台单并发专家服务同时生成两份结果。Modal 冷启动返回的同次尝试恢复由 Harness transport 单独处理，规则见 [报告 Harness](report-harness.md)。
+
 ### 2. lite 档位模型（已下线）
 
-`lite` 报告档位与 `LITE_MODEL_*` 环境变量已随档位机制移除，报告端点收敛为单一远端端点。此小节仅作历史保留，新部署无需配置 `LITE_MODEL_*`。
+`lite` 报告档位已下线，当前服务器配置与单一报告端点不读取 `LITE_MODEL_*`。`.env.example` 仍保留这些变量作为既有本地或外部配置的兼容占位；新部署无需填写，也不能依赖它们恢复多档位路由。
 
 ### 3. 报告 / 视觉模型
 
