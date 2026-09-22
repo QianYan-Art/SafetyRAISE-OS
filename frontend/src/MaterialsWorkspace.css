@@ -17,7 +17,7 @@
   overflow: hidden;
   color: var(--materials-ink);
   background: var(--materials-surface);
-  font-family: Inter, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+  font-family: var(--font-sans);
   font-size: 14px;
   font-synthesis: none;
   letter-spacing: 0;
@@ -83,7 +83,7 @@
   gap: 8px;
   padding: 8px 11px;
   border: 0;
-  border-radius: 5px;
+  border-radius: var(--radius-control);
   background: transparent;
   color: #6b7482;
   font-size: 13px;
@@ -216,6 +216,11 @@
   gap: 3px;
 }
 
+/* 工具条末尾是图标按钮时把墨迹对齐到内容右边线；末尾是「添加资料」按钮时不补偿。 */
+.materials-toolbar-actions > .materials-icon-button:last-child {
+  margin-right: -7.5px;
+}
+
 .materials-icon-button {
   display: inline-flex;
   width: 32px;
@@ -225,7 +230,7 @@
   justify-content: center;
   padding: 0;
   border: 0;
-  border-radius: 5px;
+  border-radius: var(--radius-control);
   background: transparent;
   color: #778190;
 }
@@ -339,7 +344,7 @@
   height: 73px;
   place-items: center;
   border: 1px solid #dce3ef;
-  border-radius: 7px;
+  border-radius: var(--radius-card);
   background: #fafbfe;
 }
 
@@ -416,7 +421,7 @@
   padding: 0;
   overflow: hidden;
   border: 1px solid #e2e6ed;
-  border-radius: 7px;
+  border-radius: var(--radius-card);
   background: #fff;
   text-align: left;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
@@ -710,13 +715,13 @@
 
   .materials-toolbar,
   .materials-workspace-footer {
-    padding-right: 42px;
-    padding-left: 42px;
+    padding-right: 32px;
+    padding-left: 32px;
   }
 
   .materials-surface {
-    padding-right: 42px;
-    padding-left: 42px;
+    padding-right: 32px;
+    padding-left: 32px;
   }
 
   .materials-media-grid {
@@ -741,13 +746,13 @@
 
   .materials-toolbar,
   .materials-workspace-footer {
-    padding-right: 22px;
-    padding-left: 22px;
+    padding-right: 24px;
+    padding-left: 24px;
   }
 
   .materials-surface {
-    padding-right: 22px;
-    padding-left: 22px;
+    padding-right: 24px;
+    padding-left: 24px;
   }
 
   .materials-media-grid {
@@ -847,25 +852,25 @@
 
   .materials-category-scroll {
     position: absolute;
-    top: 8px;
-    right: 5px;
+    top: 0;
+    right: 0;
+    bottom: 1px;
     z-index: 3;
     display: inline-flex;
-    width: 32px;
-    height: 34px;
+    width: 56px;
     align-items: center;
-    justify-content: center;
-    padding: 0;
-    border: 1px solid #e3e8f0;
-    border-radius: 5px;
-    background: #fff;
-    box-shadow: -4px 0 8px #ffffffc9;
+    justify-content: flex-end;
+    padding: 0 20px 0 0;
+    border: 0;
+    border-radius: 0;
+    background: linear-gradient(90deg, transparent 0%, var(--materials-surface) 45%);
+    box-shadow: none;
     color: var(--materials-blue);
   }
 
   .materials-toolbar {
     min-height: 62px;
-    padding: 0 19px;
+    padding: 0 20px;
     gap: 8px;
   }
 
@@ -894,6 +899,10 @@
     width: 28px;
   }
 
+  .materials-toolbar-actions > .materials-icon-button:last-child {
+    margin-right: -5.5px;
+  }
+
   .materials-toolbar-divider {
     margin-right: 3px;
     margin-left: 3px;
@@ -905,7 +914,7 @@
   }
 
   .materials-surface {
-    padding: 0 17px 20px;
+    padding: 0 20px 20px;
   }
 
   .materials-empty-state {
@@ -973,7 +982,7 @@
     align-items: stretch;
     justify-content: center;
     gap: 8px;
-    padding: 10px 17px;
+    padding: 10px 20px;
   }
 
   .materials-footer-note {

@@ -2,7 +2,7 @@
 .account-drawer-overlay,
 .account-modal-overlay,
 .account-toast {
-  font-family: Inter, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+  font-family: var(--font-sans);
   letter-spacing: 0;
 }
 
@@ -37,7 +37,6 @@
 .account-topbar-title,
 .account-topbar-actions,
 .account-footer-actions,
-.account-field-label-with-icon,
 .account-admin-actions,
 .account-admin-status,
 .account-admin-toolbar-note {
@@ -74,10 +73,10 @@
 
 .account-model-heading {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 20px;
-  padding: 32px 40px 24px;
+  padding: 32px 32px 24px;
 }
 
 .account-model-heading h1,
@@ -112,7 +111,7 @@
   display: flex;
   flex-shrink: 0;
   gap: 28px;
-  padding: 0 40px;
+  padding: 0 32px;
   border-bottom: 1px solid #e6e9ed;
 }
 
@@ -161,7 +160,7 @@
 
 .account-model-form {
   width: min(980px, 100%);
-  padding: 32px 40px 48px;
+  padding: 32px 32px 48px;
 }
 
 .account-model-purpose {
@@ -215,7 +214,7 @@
   display: inline-flex;
   align-items: center;
   border: 1px solid #d8e2f5;
-  border-radius: 4px;
+  border-radius: var(--radius-control);
   background: #f1f5ff;
   color: #3563b0;
   font-size: 11px;
@@ -239,7 +238,7 @@
   margin: 0 0 20px;
   padding: 10px 12px;
   border: 1px solid #dbe3ef;
-  border-radius: 5px;
+  border-radius: var(--radius-control);
   font-size: 12px;
   line-height: 1.7;
 }
@@ -269,16 +268,6 @@
   grid-column: 1 / -1;
 }
 
-.account-field-label-with-icon {
-  gap: 6px;
-}
-
-.account-field-label-with-icon svg {
-  width: 14px;
-  height: 14px;
-  color: #687587;
-}
-
 .account-field small {
   color: #748094;
   font-size: 12px;
@@ -290,7 +279,7 @@
 .account-search-field input {
   min-width: 0;
   border: 1px solid #d9e1eb;
-  border-radius: 5px;
+  border-radius: var(--radius-control);
   outline: 0;
   background: #fff;
   color: #35435a;
@@ -351,7 +340,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 16px 40px;
+  padding: 16px 32px;
   border-top: 1px solid #e6e9ed;
   background: #fff;
   color: #687587;
@@ -370,7 +359,7 @@
   gap: 8px;
   padding: 8px 14px;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   cursor: pointer;
   font-size: 12px;
   font-weight: 500;
@@ -424,7 +413,7 @@
   height: 32px;
   flex-shrink: 0;
   place-items: center;
-  border-radius: 5px;
+  border-radius: var(--radius-control);
   background: transparent;
   color: #778190;
   cursor: pointer;
@@ -464,7 +453,7 @@
   min-height: 0;
   overflow: hidden;
   color: #252b35;
-  font-family: Inter, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+  font-family: var(--font-sans);
   letter-spacing: 0;
 }
 
@@ -474,14 +463,14 @@
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  padding: 32px 36px;
+  padding: 32px 32px;
   overflow: hidden;
   background: #fff;
 }
 
 .account-admin-heading {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 20px;
 }
@@ -510,7 +499,7 @@
   gap: 8px;
   padding: 0 10px;
   border: 1px solid #dfe5ed;
-  border-radius: 5px;
+  border-radius: var(--radius-control);
   background: #fff;
 }
 
@@ -541,6 +530,7 @@
   margin-left: auto;
   color: #687587;
   font-size: 12px;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
@@ -560,11 +550,11 @@
   min-height: 0;
   overflow: auto;
   overscroll-behavior: contain;
-  scrollbar-gutter: stable;
 }
 
 .account-admin-table {
   width: 100%;
+  font-variant-numeric: tabular-nums;
   border-collapse: separate;
   border-spacing: 0;
   table-layout: fixed;
@@ -801,6 +791,7 @@
   padding: 20px 0 0;
   color: #98a2b0;
   font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 
 .account-admin-pagination-controls {
@@ -1051,32 +1042,37 @@
 }
 
 @media (max-width: 1100px) {
+  .account-topbar {
+    padding-right: 24px;
+    padding-left: 24px;
+  }
+
   .account-model-form {
-    padding-right: 28px;
-    padding-left: 28px;
+    padding-right: 24px;
+    padding-left: 24px;
   }
 
   .account-model-heading,
   .account-model-footer {
-    padding-right: 28px;
-    padding-left: 28px;
+    padding-right: 24px;
+    padding-left: 24px;
   }
 
   .account-tabs {
-    padding-right: 28px;
-    padding-left: 28px;
+    padding-right: 24px;
+    padding-left: 24px;
   }
 
   .account-admin-surface {
-    padding-right: 28px;
-    padding-left: 28px;
+    padding-right: 24px;
+    padding-left: 24px;
   }
 }
 
 @media (max-width: 700px) {
   .account-topbar {
     height: 60px;
-    padding: 0 18px;
+    padding: 0 20px;
   }
 
   .account-topbar-account {
@@ -1085,6 +1081,7 @@
 
   .account-model-heading {
     flex-direction: column;
+    align-items: flex-start;
     gap: 8px;
     padding: 24px 20px 18px;
   }
@@ -1146,7 +1143,7 @@
   }
 
   .account-admin-surface {
-    padding: 24px 17px;
+    padding: 24px 20px;
   }
 
   .account-admin-heading h1 {

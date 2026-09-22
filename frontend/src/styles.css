@@ -1,5 +1,6 @@
 :root {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", sans-serif;
+  font-family: var(--font-sans);
   line-height: 1.6;
   color: #1e293b;
   background: #f8fafc;
@@ -19,6 +20,9 @@
   --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
   --radius-md: 12px;
   --radius-lg: 16px;
+  --radius-control: 6px;
+  --radius-card: 8px;
+  --radius-overlay: 14px;
 }
 
 * {
@@ -175,7 +179,7 @@ button {
   font-size: 14px;
   font-weight: 600;
   color: #1e293b;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-family: var(--font-sans);
   white-space: nowrap;
 }
 
@@ -770,7 +774,7 @@ button {
   width: 268px;
   max-width: min(300px, calc(100vw - 32px));
   padding: 12px;
-  border-radius: 18px;
+  border-radius: var(--radius-overlay);
   background: rgba(255, 255, 255, 0.96);
   border: 1px solid rgba(226, 232, 240, 0.96);
   box-shadow: 0 24px 60px rgba(15, 23, 42, 0.16);
@@ -783,7 +787,7 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 6px 6px 10px 12px;
+  padding: 6px 0 10px 14px;
 }
 
 .account-popover-header span {
@@ -813,7 +817,7 @@ button {
   border: none;
   background: #f8fafc;
   color: #0f172a;
-  border-radius: 12px;
+  border-radius: var(--radius-card);
   padding: 12px 14px;
   text-align: left;
   font-weight: 600;
@@ -824,7 +828,13 @@ button {
 }
 
 .account-popover-item.is-danger {
-  color: #b91c1c;
+  background: transparent;
+  color: #b42318;
+}
+
+.account-popover-item.is-danger:hover {
+  background: #fef3f2;
+  color: #b42318;
 }
 
 .sidebar-account-menu-shell {
@@ -836,7 +846,8 @@ button {
   bottom: calc(100% + 12px);
   left: 0;
   right: auto;
-  width: min(288px, calc(100vw - 32px));
+  width: 100%;
+  max-width: none;
 }
 
 .drawer-overlay {
@@ -1662,7 +1673,7 @@ button {
 .session-item {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
+  align-items: stretch;
   gap: 8px;
   padding: 10px 12px;
   border-radius: var(--radius-md);
@@ -1704,6 +1715,7 @@ button {
 .session-info {
   display: flex;
   flex-direction: column;
+  justify-content: center;
   overflow: hidden;
   min-width: 0;
   gap: 6px;
@@ -1722,15 +1734,15 @@ button {
   flex-shrink: 0;
   position: relative;
   display: flex;
-  align-items: flex-start;
-  gap: 4px;
-  padding-top: 1px;
+  align-items: center;
+  gap: 2px;
 }
 
 .session-date {
   font-size: 11px;
   color: #64748b;
   line-height: 1.4;
+  font-variant-numeric: tabular-nums;
   transition: opacity 0.2s ease;
   white-space: nowrap;
 }
@@ -1778,8 +1790,10 @@ button {
   background: transparent;
   border: none;
   color: #64748b;
-  padding: 2px;
-  border-radius: 4px;
+  padding: 0;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -2664,7 +2678,7 @@ button {
   justify-content: center;
   width: 40px;
   height: 40px;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-control);
   border: none;
   background: transparent;
   color: #475569;

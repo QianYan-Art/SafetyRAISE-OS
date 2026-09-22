@@ -4,7 +4,6 @@ import {
   ArrowLeft,
   BookOpen,
   FileText,
-  KeyRound,
   Save,
   ScanLine,
   Settings2,
@@ -366,7 +365,7 @@ export function UserModelConfigDrawer(props: UserModelConfigDrawerProps) {
                   placeholder="例如 https://api.openai.com/v1"
                   disabled={saving}
                 />
-                <small>使用服务商提供的完整 API 基础地址。</small>
+                <small>填到 /v1 即可，系统会自动补全 /chat/completions。</small>
               </label>
 
               <label className="account-field">
@@ -383,7 +382,7 @@ export function UserModelConfigDrawer(props: UserModelConfigDrawerProps) {
               </label>
 
               <label className="account-field account-field-wide">
-                <span className="account-field-label-with-icon"><KeyRound aria-hidden="true" />API 密钥</span>
+                <span>API 密钥</span>
                 <input
                   className="account-input"
                   type="password"

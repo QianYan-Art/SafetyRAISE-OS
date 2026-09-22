@@ -184,7 +184,7 @@
 .safety-workbench .mobile-tab-btn.active { color: var(--primary-color); background: var(--workbench-surface); box-shadow: 0 1px 3px #0000000a; }
 .safety-workbench :is(button, input, textarea, select, [role="button"]):focus-visible { outline: 2px solid var(--primary-color); outline-offset: 3px; }
 .safety-workbench button:disabled { cursor: not-allowed; }
-.safety-workbench .session-item-wrapper { border-radius: 8px; box-shadow: none; }
+.safety-workbench .session-item-wrapper { border-radius: var(--radius-card); box-shadow: none; }
 .safety-workbench .session-title { min-width: 0; }
 .safety-workbench button.session-title { appearance: none; border: 0; background: none; padding: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .safety-workbench .markdown-report { max-width: 100%; min-width: 0; overflow-x: auto; overflow-wrap: anywhere; }
