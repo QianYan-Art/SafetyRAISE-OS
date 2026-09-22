@@ -9,7 +9,7 @@ from app.core.settings import get_api_key
 from app.schemas.user_config import (
     CapabilityConfigRecord,
     CapabilityConfigStateResponse,
-    EmbeddingTuningParams,
+    CapabilityTuningParams,
     UpdateCapabilityConfigsRequest,
 )
 from app.services.auth_service import AuthenticatedUser
@@ -18,6 +18,7 @@ from app.services.database_service import DatabaseService
 CAPABILITIES = ("vision", "embedding", "report")
 CAPABILITY_LABELS = {"vision": "视觉模型", "embedding": "嵌入模型", "report": "报告生成模型"}
 EMBEDDING_PARAM_KEYS = ("top_k", "dense_top_k_chunks", "dense_top_k_rules")
+REASONING_CAPABILITIES = ("vision", "report")
 
 
 def mask_api_key(api_key: str | None) -> Optional[str]:
@@ -43,7 +44,11 @@ class UserCapabilityConfigService:
         return CapabilityConfigStateResponse(
             role=user.role,
             capabilities=records,
-            system_defaults={"embedding": self._system_embedding_defaults()},
+            system_defaults={
+                "embedding": self._system_embedding_defaults(),
+                "vision": self._system_reasoning_defaults("accident_vision"),
+                "report": self._system_reasoning_defaults("report_external"),
+            },
         )
 
     # ---- 写 ----
@@ -278,19 +283,27 @@ class UserCapabilityConfigService:
             base_url=row.get("base_url"),
             model_name=row.get("model_name"),
             api_key_masked=mask_api_key(row.get("api_key")),
-            params=EmbeddingTuningParams(
+            params=CapabilityTuningParams(
                 top_k=params_raw.get("top_k"),
                 dense_top_k_chunks=params_raw.get("dense_top_k_chunks"),
                 dense_top_k_rules=params_raw.get("dense_top_k_rules"),
+                reasoning_effort=params_raw.get("reasoning_effort"),
             ),
         )
 
     @staticmethod
     def _normalize_params(
         capability: str,
-        incoming: EmbeddingTuningParams | None,
+        incoming: CapabilityTuningParams | None,
         previous: dict[str, Any] | None,
-    ) -> dict[str, int]:
+    ) -> dict[str, Any]:
+        if capability in REASONING_CAPABILITIES:
+            # 提交了 params 即以本次为准（含显式清空回到系统默认）；未提交则保留原值。
+            if incoming is None:
+                effort = (previous or {}).get("reasoning_effort")
+            else:
+                effort = incoming.reasoning_effort
+            return {"reasoning_effort": effort} if effort else {}
         if capability != "embedding":
             return {}
         source: dict[str, Any] = {}
@@ -303,10 +316,18 @@ class UserCapabilityConfigService:
                     source[key] = int(value)
         return {k: int(v) for k, v in source.items() if v is not None}
 
-    def _system_embedding_defaults(self) -> EmbeddingTuningParams:
+    def _system_reasoning_defaults(self, model_key: str) -> CapabilityTuningParams:
+        model_cfg = getattr(getattr(self.settings, "models", None), model_key, None)
+        endpoints = getattr(model_cfg, "endpoints", None) or []
+        endpoint = endpoints[0] if endpoints else None
+        reasoning = getattr(endpoint, "reasoning", None)
+        effort = getattr(reasoning, "effort", None) or getattr(endpoint, "reasoning_effort", None)
+        return CapabilityTuningParams(reasoning_effort=effort)
+
+    def _system_embedding_defaults(self) -> CapabilityTuningParams:
         retrieval = getattr(self.settings, "retrieval", None)
         hybrid = getattr(retrieval, "hybrid", None)
-        return EmbeddingTuningParams(
+        return CapabilityTuningParams(
             top_k=getattr(hybrid, "final_context_top_k", None),
             dense_top_k_chunks=getattr(hybrid, "dense_top_k_chunks", None),
             dense_top_k_rules=getattr(hybrid, "dense_top_k_rules", None),

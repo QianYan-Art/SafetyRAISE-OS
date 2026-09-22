@@ -80,10 +80,18 @@ class UpdateUserModelSelectionRequest(StrictModel):
 ModelCapability = Literal["vision", "embedding", "report"]
 
 
-class EmbeddingTuningParams(StrictModel):
+# 推理等级取值与 ReportEndpointSettings.reasoning_effort 对齐，另加 "off"：
+# 留空表示沿用服务端默认，"off" 表示请求体不携带推理参数（供不支持该参数的上游使用）。
+ReasoningEffortChoice = Literal["off", "none", "minimal", "low", "medium", "high", "xhigh", "max"]
+
+
+class CapabilityTuningParams(StrictModel):
+    """能力维度调参：检索项仅 embedding 使用，推理等级仅 vision / report 使用。"""
+
     top_k: Optional[int] = Field(default=None, ge=1, le=50)
     dense_top_k_chunks: Optional[int] = Field(default=None, ge=1, le=50)
     dense_top_k_rules: Optional[int] = Field(default=None, ge=1, le=50)
+    reasoning_effort: Optional[ReasoningEffortChoice] = None
 
 
 class CapabilityConfigRecord(StrictModel):
@@ -94,7 +102,7 @@ class CapabilityConfigRecord(StrictModel):
     base_url: Optional[str] = None
     model_name: Optional[str] = None
     api_key_masked: Optional[str] = None
-    params: EmbeddingTuningParams = Field(default_factory=EmbeddingTuningParams)
+    params: CapabilityTuningParams = Field(default_factory=CapabilityTuningParams)
 
 
 class UpdateCapabilityConfigItem(StrictModel):
@@ -103,7 +111,7 @@ class UpdateCapabilityConfigItem(StrictModel):
     model_name: Optional[str] = None
     # 留空或等于打码占位 → 保留原 key；非空 → 覆盖
     api_key: Optional[str] = None
-    params: Optional[EmbeddingTuningParams] = None
+    params: Optional[CapabilityTuningParams] = None
 
     @field_validator("base_url")
     @classmethod
@@ -145,4 +153,4 @@ class UpdateCapabilityConfigsRequest(StrictModel):
 class CapabilityConfigStateResponse(StrictModel):
     role: str
     capabilities: list[CapabilityConfigRecord] = Field(default_factory=list)
-    system_defaults: dict[str, EmbeddingTuningParams] = Field(default_factory=dict)
+    system_defaults: dict[str, CapabilityTuningParams] = Field(default_factory=dict)

@@ -320,10 +320,15 @@ export interface UpdateUserModelConfigItem {
 
 export type ModelCapability = "vision" | "embedding" | "report";
 
-export interface EmbeddingTuningParams {
+// 留空沿用服务端默认；"off" 表示请求不携带推理参数。
+export type ReasoningEffortChoice =
+  | "off" | "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+
+export interface CapabilityTuningParams {
   top_k?: number | null;
   dense_top_k_chunks?: number | null;
   dense_top_k_rules?: number | null;
+  reasoning_effort?: ReasoningEffortChoice | null;
 }
 
 export interface CapabilityConfigRecord {
@@ -332,13 +337,13 @@ export interface CapabilityConfigRecord {
   base_url?: string | null;
   model_name?: string | null;
   api_key_masked?: string | null;
-  params: EmbeddingTuningParams;
+  params: CapabilityTuningParams;
 }
 
 export interface CapabilityConfigState {
   role: string;
   capabilities: CapabilityConfigRecord[];
-  system_defaults: Record<string, EmbeddingTuningParams>;
+  system_defaults: Record<string, CapabilityTuningParams>;
 }
 
 export interface UpdateCapabilityConfigItem {
@@ -346,7 +351,7 @@ export interface UpdateCapabilityConfigItem {
   base_url?: string | null;
   model_name?: string | null;
   api_key?: string | null;
-  params?: EmbeddingTuningParams | null;
+  params?: CapabilityTuningParams | null;
 }
 
 export interface UpdateCapabilityConfigsPayload {

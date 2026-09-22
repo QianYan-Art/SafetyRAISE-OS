@@ -75,7 +75,8 @@ base_url: "${RETRIEVAL_EMBEDDING_BASE_URL:-http://127.0.0.1:1234/v1}"
 
 报告生成端点已收敛为**单一端点**（默认端点名 `openrouter_primary`，当前模型 `tencent/hy4-preview`）。`max/pro/lite` 档位与 `selector_label` 已下线。
 
-默认报告模型使用 `reasoning.effort=high`，默认视觉模型 `openai/gpt-5.6-luna` 使用 `reasoning.effort=max`。报告与视觉请求不发送 `max_tokens`、`max_completion_tokens` 或 `max_output_tokens`；指定推理等级时不同时发送 `reasoning.max_tokens`。旧配置字段仍可解析，但不作为输出截断参数。供应商容量仍用于 harness 内部费用预留，费用、轮数和未知请求保护不因此取消。
+默认报告模型使用 `reasoning.effort=high`，默认视觉模型 `openai/gpt-5.6-luna` 使用 `reasoning.effort=max`；
+用户未在能力配置中选择推理等级时沿用该默认值。报告与视觉请求不发送 `max_tokens`、`max_completion_tokens` 或 `max_output_tokens`；指定推理等级时不同时发送 `reasoning.max_tokens`。旧配置字段仍可解析，但不作为输出截断参数。供应商容量仍用于 harness 内部费用预留，费用、轮数和未知请求保护不因此取消。
 
 - 系统默认报告端点 = `report_external.endpoints` 中按 `priority` 排在首位的端点。
 - 视觉 / 嵌入 / 报告模型按「每用户能力配置」（`user_capability_configs`）解析：用户在前端「模型接入设置」里填 `url + key + model`；普通用户嵌入按本人配置→首个启用管理员配置→系统默认解析，本人有配置时不再回退；视觉/报告必须由普通用户自行填写（管理员留空则用系统默认，便于测试）。
@@ -117,6 +118,9 @@ base_url: "${RETRIEVAL_EMBEDDING_BASE_URL:-http://127.0.0.1:1234/v1}"
 1. `OPENROUTER_API_KEY` 默认同时服务于单一报告端点（`openrouter_primary`）与视觉模型端点
 2. 报告端点已收敛为单一端点，旧的 `max / pro / lite` 档位及 `DUCKCODING_API_KEY` / `LITE_MODEL_*` 多档位变量均已移除
 3. 用户在前端自填 `url + key + model` 时只需填到 `/v1`，系统自动补全 `/chat/completions`（报告/视觉）或 `/embeddings`（嵌入）
+4. 视觉 / 报告可另选推理等级，存于 `user_capability_configs.params.reasoning_effort`：留空沿用上述系统默认；
+   选定 `none / minimal / low / medium / high / xhigh / max` 之一时按所选等级发送；选 `off` 时请求体不携带推理参数，
+   供不支持该参数的上游使用。系统不探查上游能力，也不自动升降等级；该项对嵌入用途不开放
 
 ### 4. embedding / reranker
 

@@ -11,7 +11,13 @@ from app.adapters.input.base import BaseInputAdapter
 from app.adapters.input.dict_input_adapter import DictInputAdapter
 from app.adapters.input.file_input_adapter import FileInputAdapter
 from app.core.exceptions import ConfigurationError, InputValidationError, RequestCancelledError
-from app.core.settings import ReportEndpointConnectionSettings, ReportEndpointSettings, Settings, get_api_key
+from app.core.settings import (
+    ReasoningSettings,
+    ReportEndpointConnectionSettings,
+    ReportEndpointSettings,
+    Settings,
+    get_api_key,
+)
 from app.providers.llm.base import BaseLLMProvider
 from app.providers.llm.lmstudio_compat import build_chat_completions_url
 from app.providers.llm.openai_compatible_expert import OpenAICompatibleExpertProvider
@@ -26,6 +32,21 @@ from app.workflow.graph import build_graph
 from app.workflow.nodes import WorkflowNodes
 
 logger = logging.getLogger(__name__)
+
+
+def resolve_reasoning_override(override: Optional[dict[str, Any]]) -> dict[str, Any]:
+    """把用户能力配置中的推理等级解析为端点字段更新。
+
+    未选择时返回空字典，端点沿用服务端默认；`off` 让请求体不携带推理参数，
+    供不支持该参数的上游使用；其余等级写入 `reasoning.effort`，同时清空
+    `reasoning_effort`，以满足端点不得同时配置两者的校验。
+    """
+    effort = ((override or {}).get("params") or {}).get("reasoning_effort")
+    if not effort:
+        return {}
+    if effort == "off":
+        return {"reasoning": None, "reasoning_effort": None}
+    return {"reasoning": ReasoningSettings(effort=effort), "reasoning_effort": None}
 
 
 class ReportService:
@@ -241,19 +262,19 @@ class ReportService:
         raw_base_url = report_override.get("base_url")
         # 用户只需填到 /v1，这里自动补全为 /v1/chat/completions；留空则沿用系统默认端点。
         resolved_url = build_chat_completions_url(raw_base_url) if raw_base_url else selected_endpoint.url
-        override_endpoint = selected_endpoint.model_copy(
-            update={
-                "name": "user_report",
-                "url": resolved_url,
-                "model": report_override.get("model_name") or selected_endpoint.model,
-                "api_key_env": None,
-                "connection": ReportEndpointConnectionSettings(
-                    connection_type="inline",
-                    key=report_override.get("api_key") or "",
-                    url=resolved_url,
-                ),
-            }
-        )
+        endpoint_update: dict[str, Any] = {
+            "name": "user_report",
+            "url": resolved_url,
+            "model": report_override.get("model_name") or selected_endpoint.model,
+            "api_key_env": None,
+            "connection": ReportEndpointConnectionSettings(
+                connection_type="inline",
+                key=report_override.get("api_key") or "",
+                url=resolved_url,
+            ),
+        }
+        endpoint_update.update(resolve_reasoning_override(report_override))
+        override_endpoint = selected_endpoint.model_copy(update=endpoint_update)
         # 单端点模式：无可切换档位
         return override_endpoint, []
 
@@ -283,17 +304,17 @@ class ReportService:
         new_url = build_chat_completions_url(raw_base_url) if raw_base_url else base.url
         new_model = override.get("model_name") or base.model or model_cfg.model
         inline_key = override.get("api_key") or ""
-        endpoint = base.model_copy(
-            update={
-                "name": name,
-                "url": new_url,
-                "model": new_model,
-                "api_key_env": None,
-                "connection": ReportEndpointConnectionSettings(
-                    connection_type="inline", key=inline_key, url=new_url
-                ),
-            }
-        )
+        endpoint_update: dict[str, Any] = {
+            "name": name,
+            "url": new_url,
+            "model": new_model,
+            "api_key_env": None,
+            "connection": ReportEndpointConnectionSettings(
+                connection_type="inline", key=inline_key, url=new_url
+            ),
+        }
+        endpoint_update.update(resolve_reasoning_override(override))
+        endpoint = base.model_copy(update=endpoint_update)
         config = model_cfg.model_copy(update={"endpoints": [endpoint], "model": new_model})
         return config, {name: inline_key}
 

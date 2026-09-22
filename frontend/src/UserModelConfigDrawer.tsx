@@ -14,7 +14,8 @@ import type { LucideIcon } from "lucide-react";
 import type {
   CapabilityConfigRecord,
   CapabilityConfigState,
-  EmbeddingTuningParams,
+  CapabilityTuningParams,
+  ReasoningEffortChoice,
   ModelCapability,
   UpdateCapabilityConfigsPayload,
 } from "./types";
@@ -57,10 +58,23 @@ interface CapabilityDraft {
   baseUrl: string;
   modelName: string;
   apiKey: string;
+  reasoningEffort: string;
   topK: string;
   denseChunks: string;
   denseRules: string;
 }
+
+// 顺序即界面顺序；留空表示沿用服务端默认。
+const REASONING_CHOICES: { value: ReasoningEffortChoice; label: string }[] = [
+  { value: "max", label: "max（最高）" },
+  { value: "xhigh", label: "xhigh" },
+  { value: "high", label: "high" },
+  { value: "medium", label: "medium" },
+  { value: "low", label: "low" },
+  { value: "minimal", label: "minimal" },
+  { value: "none", label: "none（不推理）" },
+  { value: "off", label: "不发送该参数" },
+];
 
 function recordToDraft(record: CapabilityConfigRecord | undefined): CapabilityDraft {
   const params = record?.params ?? {};
@@ -68,6 +82,7 @@ function recordToDraft(record: CapabilityConfigRecord | undefined): CapabilityDr
     baseUrl: record?.base_url ?? "",
     modelName: record?.model_name ?? "",
     apiKey: "",
+    reasoningEffort: params.reasoning_effort ?? "",
     topK: params.top_k != null ? String(params.top_k) : "",
     denseChunks: params.dense_top_k_chunks != null ? String(params.dense_top_k_chunks) : "",
     denseRules: params.dense_top_k_rules != null ? String(params.dense_top_k_rules) : "",
@@ -115,6 +130,7 @@ export function UserModelConfigDrawer(props: UserModelConfigDrawerProps) {
   const embeddingDefaults = state?.system_defaults?.embedding ?? {};
 
   const [activeCapability, setActiveCapability] = useState<ModelCapability>("vision");
+  const systemReasoningEffort = state?.system_defaults?.[activeCapability]?.reasoning_effort ?? null;
   const [draft, setDraft] = useState<Record<ModelCapability, CapabilityDraft>>(() => buildDraftMap(state));
   const [dirty, setDirty] = useState(false);
   const [localError, setLocalError] = useState("");
@@ -233,7 +249,7 @@ export function UserModelConfigDrawer(props: UserModelConfigDrawerProps) {
         base_url: string | null;
         model_name: string | null;
         api_key: string | null;
-        params?: EmbeddingTuningParams | null;
+        params?: CapabilityTuningParams | null;
       } = {
         capability,
         base_url: value.baseUrl.trim() || null,
@@ -245,6 +261,10 @@ export function UserModelConfigDrawer(props: UserModelConfigDrawerProps) {
           top_k: toNumberOrNull(value.topK),
           dense_top_k_chunks: toNumberOrNull(value.denseChunks),
           dense_top_k_rules: toNumberOrNull(value.denseRules),
+        };
+      } else {
+        item.params = {
+          reasoning_effort: (value.reasoningEffort || null) as ReasoningEffortChoice | null,
         };
       }
       return item;
@@ -380,6 +400,27 @@ export function UserModelConfigDrawer(props: UserModelConfigDrawerProps) {
                   disabled={saving}
                 />
               </label>
+
+              {activeCapability !== "embedding" ? (
+                <label className="account-field">
+                  <span>推理等级</span>
+                  <select
+                    className="account-select"
+                    aria-label="推理等级"
+                    value={activeDraft.reasoningEffort}
+                    onChange={(event) => patch(activeCapability, "reasoningEffort", event.target.value)}
+                    disabled={saving}
+                  >
+                    <option value="">
+                      {systemReasoningEffort ? `跟随系统默认（${systemReasoningEffort}）` : "跟随系统默认"}
+                    </option>
+                    {REASONING_CHOICES.map((choice) => (
+                      <option key={choice.value} value={choice.value}>{choice.label}</option>
+                    ))}
+                  </select>
+                  <small>上游不支持推理参数时选「不发送该参数」。</small>
+                </label>
+              ) : null}
 
               <label className="account-field account-field-wide">
                 <span>API 密钥</span>

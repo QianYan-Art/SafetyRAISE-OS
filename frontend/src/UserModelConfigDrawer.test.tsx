@@ -103,7 +103,42 @@ describe("UserModelConfigDrawer", () => {
     await user.type(screen.getByPlaceholderText("例如 https://api.openai.com/v1"), "https://vision.example/v1");
     await user.type(screen.getByLabelText("模型名称"), "vision");
     await user.click(screen.getByRole("button", { name: "保存配置" }));
-    expect(onSave).toHaveBeenCalledWith({ items: [{ capability: "vision", base_url: "https://vision.example/v1", model_name: "vision", api_key: null }] });
+    expect(onSave).toHaveBeenCalledWith({ items: [{ capability: "vision", base_url: "https://vision.example/v1", model_name: "vision", api_key: null, params: { reasoning_effort: null } }] });
+  });
+
+  it("推理等级默认跟随系统，选定后随配置提交", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    renderDrawer({
+      onSave,
+      state: { role: "user", capabilities: [], system_defaults: { vision: { reasoning_effort: "max" } } },
+    });
+    const select = screen.getByLabelText("推理等级") as HTMLSelectElement;
+    expect(select.value).toBe("");
+    expect(screen.getByRole("option", { name: "跟随系统默认（max）" })).toBeTruthy();
+
+    await user.type(screen.getByPlaceholderText("例如 https://api.openai.com/v1"), "https://vision.example/v1");
+    await user.type(screen.getByLabelText("模型名称"), "vision");
+    await user.selectOptions(select, "low");
+    await user.click(screen.getByRole("button", { name: "保存配置" }));
+    expect(onSave).toHaveBeenCalledWith({
+      items: [expect.objectContaining({ capability: "vision", params: { reasoning_effort: "low" } })],
+    });
+  });
+
+  it("上游不支持推理参数时可选不发送，嵌入用途不显示该项", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    renderDrawer({ onSave, state: { role: "user", capabilities: [], system_defaults: {} } });
+    await user.type(screen.getByPlaceholderText("例如 https://api.openai.com/v1"), "https://vision.example/v1");
+    await user.selectOptions(screen.getByLabelText("推理等级"), "off");
+    await user.click(screen.getByRole("button", { name: "保存配置" }));
+    expect(onSave).toHaveBeenCalledWith({
+      items: [expect.objectContaining({ capability: "vision", params: { reasoning_effort: "off" } })],
+    });
+
+    await user.click(screen.getByRole("tab", { name: /知识库检索/ }));
+    expect(screen.queryByLabelText("推理等级")).toBeNull();
   });
 
   it("切换用途和关闭页面时确认放弃未保存修改", async () => {
