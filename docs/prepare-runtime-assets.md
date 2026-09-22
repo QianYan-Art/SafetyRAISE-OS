@@ -179,7 +179,7 @@ POST /rerank
 
 1. `report_external.endpoints` 至少保留一个端点，系统取 `priority` 最高者为系统默认报告端点
 2. 不再有 `selector_label` 与 `max/pro/lite` 档位
-3. 视觉 / 嵌入 / 报告模型按「每用户能力配置」解析（前端「模型接入设置」填 `url + key + model`）
+3. 视觉 / 嵌入 / 报告模型按「每用户能力配置」解析（前端「模型接入设置」填 `url + key + model`，视觉 / 报告可另选推理等级）
 
 替换报告供应商：直接改该端点的 `name`、`url`、`model`、`api_key_env` 或 `connection` 即可。
 
