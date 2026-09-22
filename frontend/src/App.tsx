@@ -2855,7 +2855,7 @@ function WorkspaceApp({
             </nav>
           )}
           <div className="page-header-actions">
-            {appView === "workspace" && <button type="button" className="workspace-icon" title="处理记录" aria-pressed={isActivityOpen} onClick={() => setIsActivityOpen(value => !value)}><History size={18} /></button>}
+            {appView === "workspace" && <button type="button" className="workspace-icon" title="当前档案处理记录" aria-label="当前档案处理记录" aria-pressed={isActivityOpen} onClick={() => setIsActivityOpen(value => !value)}><History size={18} /></button>}
             <button type="button" className="workspace-icon" title="模型配置调整" onClick={() => setIsUserModelDrawerOpen(true)}><Settings2 size={18} /></button>
             {renderHeaderAdminToggle()}
             <span className="workspace-username" title={`${currentUser.username} · ${isAdminUser ? "管理员" : "普通用户"}`}>{currentUser.username}</span>
@@ -2879,10 +2879,10 @@ function WorkspaceApp({
             ) : (
               <>
             <div className="workspace workspace-grid">
-              <section className="panel conversation-panel" hidden={!isActivityOpen} aria-label="处理记录">
+              <section className="panel conversation-panel" hidden={!isActivityOpen} aria-label="当前档案处理记录">
                 <div className="panel-header">
-                  <h2>处理记录</h2>
-                  <button type="button" className="workspace-icon" title="关闭处理记录" onClick={() => setIsActivityOpen(false)}><X size={18} /></button>
+                  <h2>当前档案处理记录</h2>
+                  <button type="button" className="workspace-icon" title="关闭当前档案处理记录" aria-label="关闭当前档案处理记录" onClick={() => setIsActivityOpen(false)}><X size={18} /></button>
                 </div>
                 <div className="panel-body chat-list" ref={chatListRef}>
                   {activeSession.messages.length === 0 && (
@@ -3047,7 +3047,7 @@ function WorkspaceApp({
                     onStatusChange={setIntegratedReportStatus}
                   />}
 
-                  {!harnessOnline && !activeSession.reportResult && <div className="stage-empty"><FileText size={40} /><h2>{isGeneratingReport ? "正在生成分析报告" : "尚无分析报告"}</h2>{isGeneratingReport ? <><p>专家意见与报告生成可能需要一些时间，处理记录会持续更新。</p><button type="button" className="btn-danger" onClick={handleStopReportGeneration}>停止生成</button></> : <button type="button" className="btn-secondary" onClick={() => setWorkspaceStage("facts")}>核对事实</button>}</div>}
+                  {!harnessOnline && !activeSession.reportResult && <div className="stage-empty"><FileText size={40} /><h2>{isGeneratingReport ? "正在生成分析报告" : "尚无分析报告"}</h2>{isGeneratingReport ? <><p>专家意见与报告生成可能需要一些时间，当前档案处理记录会持续更新。</p><button type="button" className="btn-danger" onClick={handleStopReportGeneration}>停止生成</button></> : <button type="button" className="btn-secondary" onClick={() => setWorkspaceStage("facts")}>核对事实</button>}</div>}
                   {activeSession.reportResult && !harnessOnline && (
                 <div>
                   <div className="report-export-ribbon">
