@@ -78,7 +78,7 @@ try {
     assert.equal(await page.getByRole("dialog", { name: "档案导航" }).isVisible(), false);
     assert.equal(await page.getByLabel("报告模式").count(), 0);
     assert.equal(await page.getByTitle("打开管理控制台").isVisible(), role === "admin");
-    assert.equal(await page.getByRole("region", { name: "处理记录" }).isVisible(), false);
+    assert.equal(await page.getByRole("region", { name: "当前档案处理记录" }).isVisible(), false);
     const before = await page.locator(".review-panel").boundingBox();
     await page.getByRole("button", { name: "打开档案列表", exact: true }).click();
     assert.deepEqual(await page.locator(".review-panel").boundingBox(), before);
@@ -185,9 +185,9 @@ try {
     await screenshot("facts");
     await page.getByRole("button", { name: /查看报告/ }).click();
     await screenshot("report-empty");
-    await page.getByTitle("处理记录", { exact: true }).click();
-    assert(await page.getByRole("region", { name: "处理记录" }).isVisible());
-    await page.getByTitle("关闭处理记录", { exact: true }).click();
+    await page.getByTitle("当前档案处理记录", { exact: true }).click();
+    assert(await page.getByRole("region", { name: "当前档案处理记录" }).isVisible());
+    await page.getByTitle("关闭当前档案处理记录", { exact: true }).click();
     await page.getByTitle("模型配置调整", { exact: true }).click();
     const modelDialog = page.getByRole("dialog", { name: "模型配置", exact: true });
     assert(await modelDialog.evaluate(node => node.contains(document.activeElement)));
@@ -248,7 +248,7 @@ try {
     assert.equal(traffic.some(item => /report-runs|report-evidence/.test(item)), false, "禁用harness不得发请求");
     assert.deepEqual(unexpected, []);
     assert.deepEqual(errors, []);
-    result.checks.push(`${role}/${width}: 实际组件布局、覆盖导航、真实用户名、分类上传请求、事实保存与往返、处理记录、配置入口、禁用能力零请求`);
+    result.checks.push(`${role}/${width}: 实际组件布局、覆盖导航、真实用户名、分类上传请求、事实保存与往返、当前档案处理记录、配置入口、禁用能力零请求`);
     await context.close();
   }
   result.passed = true;
