@@ -499,6 +499,7 @@ class RunRecovery:
             document["recovery_count"] = document.get("recovery_count", 0) + 1
             document["active_started_at"] = resume_now.isoformat()
             document["terminal_reason"] = None
+            document.pop("terminal_detail", None)
             event = {
                 "reason": "resume",
                 "from_state": row["state"],

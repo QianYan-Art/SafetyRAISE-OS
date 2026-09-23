@@ -73,6 +73,21 @@ class ToolTurn(StrictModel):
         return self
 
 
+class ResponseRejected(ValueError):
+    """结构完整、但违反本轮取证约定的最终响应；逐项反馈给模型补读或改引，不放宽约定。"""
+
+    def __init__(self, code: str, problems: list[tuple[tuple, str]]):
+        if not problems:
+            raise ValueError("拒绝响应必须列出具体问题。")
+        super().__init__(problems[0][1])
+        self.code = code
+        self.problems = list(problems)
+
+    def errors(self) -> list[dict]:
+        return [{"type": self.code, "loc": list(loc), "msg": message}
+                for loc, message in self.problems]
+
+
 def normalize_tool_response(response: dict) -> dict:
     """只兼容精确的单工具对象；仍由原工具白名单和参数校验决定是否执行。"""
     if set(response) == {"call_id", "name", "arguments"}:
@@ -126,7 +141,9 @@ class RoleLoop:
         self.tools.restore_checkpoint_state(saved["tool_state"])
         return saved["result"]
 
-    async def run(self, role: str, invoke: Callable[[dict], Awaitable[dict]], context: dict) -> dict:
+    async def run(self, role: str, invoke: Callable[[dict], Awaitable[dict]], context: dict, *,
+                  accept: Callable[[Any], None] | None = None) -> dict:
+        """accept 在结构校验后检查本轮取证；抛出 ResponseRejected 时按协议修复反馈重试。"""
         results = []
         repairs = []
         tool_repair_rounds = 0
@@ -171,8 +188,9 @@ class RoleLoop:
                        "tools": tool_schemas(retrieval_constraints())}
             if repairs:
                 current["protocol_feedback"] = {
-                    "instruction": "上次响应不符合完整响应结构。返回完整response_schema对象，"
-                                   "或完整tool_calls对象；不要仅返回字段、断言片段或思考。",
+                    "instruction": "上次响应未通过程序校验，按repairs逐项修正：结构问题返回完整"
+                                   "response_schema对象；本轮未读原文的来源先返回tool_calls读取，"
+                                   "或删去该引用；不要仅返回字段、断言片段或思考。",
                     "repairs": deepcopy(repairs),
                 }
             if self.journal is not None and hasattr(self.journal, "model_context"):
@@ -206,15 +224,20 @@ class RoleLoop:
                         raise ValueError("响应未能解析为完整JSON对象。")
                     if "response_schema" in context:
                         model = {"generator": CandidateReport, "reviewer": ReviewResult}[role]
-                        model.model_validate(response)
+                        parsed = model.model_validate(response)
+                        if accept is not None:
+                            accept(parsed)
                     return response
                 turn = ToolTurn.model_validate(response)
             except (ValidationError, ValueError) as exc:
                 if len(repairs) >= self.max_protocol_repairs:
                     raise HarnessError("invalid_role_response") from exc
-                errors = exc.errors(include_input=False, include_url=False) if isinstance(
-                    exc, ValidationError,
-                ) else [{"type": "invalid_json", "loc": [], "msg": str(exc)}]
+                if isinstance(exc, ValidationError):
+                    errors = exc.errors(include_input=False, include_url=False)
+                elif isinstance(exc, ResponseRejected):
+                    errors = exc.errors()
+                else:
+                    errors = [{"type": "invalid_json", "loc": [], "msg": str(exc)}]
                 # JSONB会重排对象键；反馈排序固定，崩溃重放才能命中原请求摘要。
                 errors.sort(key=lambda item: json.dumps(
                     [list(item["loc"]), item["type"]], ensure_ascii=False, separators=(",", ":"),

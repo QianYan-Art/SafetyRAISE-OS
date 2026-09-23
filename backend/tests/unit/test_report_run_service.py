@@ -228,3 +228,85 @@ def test_close_failure_does_not_replace_published_result(caplog):
     run = create(service)
     assert asyncio.run(service.execute("owner", run["run_id"], 0))["state"] == "published"
     assert "报告角色资源关闭失败" in caplog.text
+
+
+class StaleCitationRoles(KnowledgeCitationRoles):
+    """修订稿沿用上一版读过的知识引用；reread 时收到协议反馈后才重新读取。"""
+
+    def __init__(self, reread):
+        super().__init__("full")
+        self.reread = reread
+        self.generator_feedback = []
+
+    async def generate(self, context):
+        version = context["candidate_version"]
+        if version > 1:
+            self.generator_feedback.append(context.get("protocol_feedback"))
+        if version == 1 or (self.reread and "protocol_feedback" in context):
+            result = await super().generate(context)
+        else:
+            result = await SyntheticRoles.generate(self, context)
+            result["claims"][0]["type"] = "knowledge"
+            result["claims"][0]["knowledge_refs"] = [self.chunk_id]
+        if version > 1 and "tool_calls" not in result:
+            result["issue_responses"] = [{
+                "issue_id": context["unresolved_issues"][0]["issue_id"], "action": "revised",
+                "explanation": "合成修订：已按原文明确不确定性。", "source_refs": [self.chunk_id],
+            }]
+        return result
+
+    async def review(self, context):
+        result = await super().review(context)
+        if "tool_calls" in result:
+            return result
+        if context["candidate"]["version"] == 1:
+            result["issues"] = [{
+                "issue_id": "model-proposed-id", "category": "reasoning", "severity": "major",
+                "target": "claim-1", "explanation": "合成检查：需要明确不确定性。",
+                "source_refs": context["snapshot"]["fact_obligations"][0]["source_refs"],
+                "closure_condition": "明确给定事实不能支持确定因果。", "status": "open",
+            }]
+        else:
+            issue = dict(context["unresolved_issues"][0])
+            issue.update(status="resolved", explanation="合成复查：闭合条件满足。")
+            result["issues"] = [issue]
+        return result
+
+
+def stale_citation_run(reread):
+    roles = StaleCitationRoles(reread)
+    base = dependencies(roles)
+    text = "合成法律原文：转弯车辆应当让直行车辆先行。"
+    source = {
+        "id": roles.chunk_id, "document_id": "legal-doc", "version": "v1",
+        "text": text, "digest": canonical_digest(text),
+        "manifest_digest": base.knowledge_manifest_digest,
+    }
+    service = ReportRunService(MemoryStore(), replace(base, knowledge_chunks=(source,)))
+    run = create(service)
+    result = asyncio.run(service.execute("owner", run["run_id"], 0))
+    return result, roles, service.store.get("owner", run["run_id"])
+
+
+def test_revision_citing_previous_round_source_is_told_to_reread_instead_of_failing():
+    result, roles, _record = stale_citation_run(reread=True)
+    assert result["state"] == "published", result["terminal_reason"]
+    assert result["candidate_version"] == 2
+    first, retry = roles.generator_feedback[0], roles.generator_feedback[1]
+    assert first is None
+    errors = retry["repairs"][0]["errors"]
+    assert {tuple(item["path"]) for item in errors} == {
+        ("claims", 0, "knowledge_refs"), ("issue_responses", 0, "source_refs"),
+    }
+    assert all(item["type"] == "source_not_read" and roles.chunk_id in item["message"]
+               for item in errors)
+
+
+def test_revision_that_never_rereads_stops_with_recorded_reason():
+    result, _roles, record = stale_citation_run(reread=False)
+    assert result["state"] == "needs_review"
+    assert result["terminal_reason"] == "invalid_role_response"
+    assert "report" not in result
+    detail = record["terminal_detail"]
+    assert detail["kind"] == "source_not_read"
+    assert all("legal-rule" in item["message"] for item in detail["errors"])

@@ -354,3 +354,55 @@ def test_no_search_is_advertised_when_actual_role_budget_is_empty():
         policy = PolicyTools().retrieval_constraints("reviewer")
         policy[field] = 0
         assert "search_knowledge" not in {item["name"] for item in tool_schemas(policy)}
+
+
+def test_rejected_final_response_gets_itemized_feedback_and_may_read_before_resubmitting():
+    from app.report_harness.role_loop import ResponseRejected
+
+    requests, read = [], set()
+
+    class ReadingTools(LocalTools):
+        def execute(self, role, name, arguments):
+            read.update(arguments["evidence_ids"])
+            return super().execute(role, name, arguments)
+
+    async def role(context):
+        requests.append(context)
+        if "protocol_feedback" in context and not context["tool_results"]:
+            return {"tool_calls": [{"call_id": "read-1", "name": "read_evidence",
+                                    "arguments": {"evidence_ids": ["accident:/天气"]}}]}
+        return {"version": 1, "report_markdown": "合成正文"}
+
+    def accept(_candidate):
+        if "accident:/天气" not in read:
+            raise ResponseRejected("source_not_read", [
+                (("claims", 0, "evidence_refs"), "accident:/天气：本轮尚未读取该事实原文"),
+            ])
+
+    loop = RoleLoop(ReadingTools(), lambda *_: None, before_call=lambda: None)
+    assert asyncio.run(loop.run("generator", role, _candidate_context(), accept=accept))["version"] == 1
+    assert len(requests) == 3 and loop.tool_calls == 1
+    assert requests[1]["protocol_feedback"]["repairs"][0]["errors"] == [{
+        "type": "source_not_read", "path": ["claims", 0, "evidence_refs"],
+        "message": "accident:/天气：本轮尚未读取该事实原文",
+    }]
+    assert requests[2]["protocol_feedback"] == requests[1]["protocol_feedback"]
+
+
+def test_rejection_that_is_never_fixed_stops_after_two_repairs():
+    from app.report_harness.role_loop import ResponseRejected
+
+    calls = []
+
+    async def role(context):
+        calls.append(context)
+        return {"version": 1, "report_markdown": "合成正文"}
+
+    def accept(_candidate):
+        raise ResponseRejected("source_not_read", [((), "synthetic-rule：本轮尚未读取")])
+
+    loop = RoleLoop(LocalTools(), lambda *_: None, before_call=lambda: None)
+    with pytest.raises(HarnessError, match="invalid_role_response") as raised:
+        asyncio.run(loop.run("generator", role, _candidate_context(), accept=accept))
+    assert len(calls) == 3
+    assert isinstance(raised.value.__cause__, ResponseRejected)

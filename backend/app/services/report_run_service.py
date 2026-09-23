@@ -20,7 +20,8 @@ from app.report_harness.evidence import freeze_snapshot
 from app.report_harness.errors import HarnessError
 from app.report_harness.execution import ReportExecutionDependencies
 from app.report_harness.controlled_tools import ControlledTools
-from app.report_harness.role_loop import RoleLoop, role_context, tool_schemas
+from app.report_harness.role_loop import ResponseRejected, RoleLoop, role_context, tool_schemas
+from app.report_harness.source_access import check_generator_access, check_reviewer_access
 from app.report_harness.journal import ExecutionJournal, JOURNAL_VERSION
 from app.report_harness.recovery import (
     RunRecovery, can_resume_protocol, can_resume_tool_contract,
@@ -35,6 +36,24 @@ from app.schemas.report import ReportResult
 from app.schemas.report_run import CandidateReport, CreateRunRequest, ReviewResult
 
 logger = logging.getLogger(__name__)
+
+
+def _failure_detail(exc: BaseException | None) -> dict | None:
+    """终止原因的诊断摘要，只存异常类别、字段路径和程序固定提示，不存模型输出或事故原文。"""
+    if isinstance(exc, ValidationError):
+        return {"kind": "schema", "errors": [
+            {"type": item["type"], "loc": [str(part)[:80] for part in item["loc"][:10]]}
+            for item in exc.errors(include_input=False, include_url=False)[:16]
+        ]}
+    if isinstance(exc, ResponseRejected):
+        return {"kind": exc.code, "errors": [
+            {"loc": [str(part)[:80] for part in item["loc"]], "message": item["msg"][:200]}
+            for item in exc.errors()[:16]
+        ]}
+    if isinstance(exc, ValueError):
+        return {"kind": "rejected", "message": str(exc)[:200]}
+    return None
+
 
 class ReportRunService:
     def __init__(self, store: RunStore, dependencies: ReportExecutionDependencies):
@@ -120,7 +139,7 @@ class ReportRunService:
     @staticmethod
     def _contract_digest() -> str:
         return canonical_digest({
-            "controller_version": 5, "journal_version": JOURNAL_VERSION,
+            "controller_version": 6, "journal_version": JOURNAL_VERSION,
             "candidate": CandidateReport.model_json_schema(),
             "review": ReviewResult.model_json_schema(), "tools": tool_schemas(),
         })
@@ -498,7 +517,8 @@ class ReportRunService:
             raise
         except (ValidationError, ValueError, TimeoutError) as exc:
             reason = "budget_exhausted" if isinstance(exc, TimeoutError) else "invalid_review_or_candidate"
-            self._stop_if_owned(owner, run_id, token, "needs_review", reason)
+            self._stop_if_owned(owner, run_id, token, "needs_review", reason,
+                                detail=_failure_detail(exc))
             return self.get(owner, run_id)
         except HarnessError as exc:
             if exc.code in {"usage_unknown", "completion_unknown", "authorization_stale",
@@ -511,7 +531,8 @@ class ReportRunService:
                             "budget_exhausted", "usage_exceeded", "physical_request_budget_exhausted",
                             "retrieval_request_budget_exhausted", "token_budget_exhausted"}:
                 reason = "budget_exhausted" if exc.code.endswith("budget_exhausted") else exc.code
-                self._stop_if_owned(owner, run_id, token, "needs_review", reason)
+                self._stop_if_owned(owner, run_id, token, "needs_review", reason,
+                                    detail=_failure_detail(exc.__cause__))
                 return self.get(owner, run_id)
             if exc.code != "lease_lost":
                 self._stop_if_owned(owner, run_id, token, "failed", exc.code)
@@ -549,15 +570,13 @@ class ReportRunService:
             "unresolved_issues": ledger.unresolved(),
             "review_feedback": deepcopy(feedback),
             "initial_knowledge_snippets": deepcopy(initial_snippets),
-        }))
+        }, accept=lambda draft: check_generator_access(
+            draft, inline_evidence | tools.accessed_evidence("generator"),
+            tools.accessed_knowledge("generator"),
+        )))
         if candidate.version != version:
             raise ValueError("候选版本不匹配。")
         candidate_data = candidate.model_dump(mode="json")
-        generator_evidence = inline_evidence | tools.accessed_evidence("generator")
-        generator_knowledge = tools.accessed_knowledge("generator")
-        for response in candidate.issue_responses:
-            if not set(response.source_refs) <= generator_evidence | generator_knowledge:
-                raise ValueError("生成者回应引用了未取得原文的来源。")
         ledger.record_responses(candidate.issue_responses)
         current = self.store.get(owner, run_id)
         candidate_history = self._record_version(current.get("candidate_history", []), {
@@ -572,13 +591,20 @@ class ReportRunService:
         )
         # 每个版本重新构造审查上下文，不传生成者私有历史、自评或专家指导。
         tools.reset_access("reviewer")
+        obligations = snapshot["fact_obligations"]
+        required_evidence = {ref for item in obligations for ref in item["source_refs"]}
+        candidate_knowledge = {ref for claim in candidate.claims for ref in claim.knowledge_refs}
         review = ReviewResult.model_validate(await loop.run("reviewer", roles.review, {
             "instructions": record["role_prompts"]["reviewer"],
             "response_schema": ReviewResult.model_json_schema(),
             "snapshot": deepcopy(context_snapshot), "snapshot_digest": record["snapshot_digest"],
             "candidate": deepcopy(candidate_data), "candidate_digest": canonical_digest(candidate_data),
             "unresolved_issues": ledger.unresolved(),
-        }))
+        }, accept=lambda _review: check_reviewer_access(
+            required_evidence, candidate_knowledge,
+            inline_evidence | tools.accessed_evidence("reviewer"),
+            tools.accessed_knowledge("reviewer"),
+        )))
         self.store.transition(owner, run_id, token, "checking",
                               {"review": review.model_dump(mode="json")},
                               "review", {"candidate_version": version})
@@ -589,20 +615,9 @@ class ReportRunService:
             else record["knowledge_source"],
             ledger.history(),
         )))
-        obligations = snapshot["fact_obligations"]
+        # 取证约定已由角色循环在接受最终响应前检查（source_access）。
         reviewer_evidence = inline_evidence | tools.accessed_evidence("reviewer")
         reviewer_knowledge = tools.accessed_knowledge("reviewer")
-        for claim in candidate.claims:
-            if (not set(claim.evidence_refs) <= generator_evidence
-                    or not set(claim.knowledge_refs) <= tools.accessed_knowledge("generator")):
-                raise ValueError("生成者引用了未取得原文的来源。")
-        if not {ref for item in obligations for ref in item["source_refs"]} <= reviewer_evidence:
-            raise ValueError("审查者尚未取得全部必要事实原文。")
-        candidate_knowledge_refs = {
-            ref for claim in candidate.claims for ref in claim.knowledge_refs
-        }
-        if not candidate_knowledge_refs <= reviewer_knowledge:
-            raise ValueError("审查者尚未完整读取候选引用的知识原文。")
         check_args = (
             record["snapshot_digest"], {item["obligation_id"] for item in obligations},
             reviewer_evidence, reviewer_knowledge,
@@ -660,10 +675,12 @@ class ReportRunService:
             )
 
     def _stop_if_owned(self, owner: str, run_id: str, token: int,
-                       state: str, reason: str) -> None:
+                       state: str, reason: str, *, detail: dict | None = None) -> None:
+        patch = {"terminal_reason": reason, "review_status": "failed"}
+        if detail is not None:
+            patch["terminal_detail"] = detail
         try:
-            self.store.transition(owner, run_id, token, state,
-                                  {"terminal_reason": reason, "review_status": "failed"},
+            self.store.transition(owner, run_id, token, state, patch,
                                   "error", {"reason": reason})
         except HarnessError as exc:
             # 取消或租约抢占已经建立更强屏障，不覆盖其终态。
