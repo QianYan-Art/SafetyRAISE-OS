@@ -80,6 +80,18 @@ class ReportExecutionDependencies:
                 raise ValueError("开发 outbound 依赖不得携带正式发布绑定。")
 
 
+def outbound_ready(runtime) -> bool:
+    """已完整装配可外发的业务运行时：正式批准模式，或强制工程稿的演示/开发模式。
+
+    app.state 上的任意其他对象都视为未就绪，不改变离线旧接口语义。
+    """
+    if getattr(runtime, "production_outbound_enabled", False) is True:
+        return True
+    return (getattr(runtime, "development_outbound_enabled", False) is True
+            and getattr(runtime, "force_engineering_exports", False) is True
+            and getattr(runtime, "business_workflow", None) is not None)
+
+
 def production_dependencies(config: dict) -> None:
     """正式入口只接受服务端运行配置，不接受测试执行器或客户端批准表。"""
     if config.get("execution_profile") == "synthetic_test" or config.get("test_release_bindings"):

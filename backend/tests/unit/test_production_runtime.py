@@ -111,3 +111,44 @@ def test_production_rejects_relative_manifest_or_missing_resources(ready):
         production.assemble_production_runtime(
             settings, config.model_copy(update={"resource_paths": []}),
         )
+
+
+def test_demo_mode_runs_engineering_only_without_reading_release_registry(ready, monkeypatch):
+    from app.report_harness.execution import outbound_ready
+
+    settings, config, _ = ready
+
+    def registry_must_not_be_read():
+        raise AssertionError("演示模式不得读取批准表")
+
+    monkeypatch.setattr(production, "FileReleaseRegistry", registry_must_not_be_read)
+    monkeypatch.setattr(production, "verified_code_digest", registry_must_not_be_read)
+    runtime = production.assemble_production_runtime(
+        settings, config.model_copy(update={"release_mode": "demo"}),
+    )
+    assert outbound_ready(runtime)
+    assert not runtime.production_outbound_enabled
+    assert runtime.development_outbound_enabled and runtime.force_engineering_exports
+    assert runtime.release_registry is None and runtime.code_digest is None
+    runtime.resource_check()
+
+
+def test_demo_mode_still_blocks_after_manifest_change(ready):
+    from pathlib import Path
+    import json
+
+    settings, config, _ = ready
+    runtime = production.assemble_production_runtime(
+        settings, config.model_copy(update={"release_mode": "demo"}),
+    )
+    path = Path(config.runtime_manifest_path)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["experiment_id"] = "changed"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(HarnessError, match="authorization_stale"):
+        runtime.resource_check()
+
+
+def test_unknown_release_mode_is_rejected():
+    with pytest.raises(ValueError):
+        ReportHarnessSettings(release_mode="approved-by-default")

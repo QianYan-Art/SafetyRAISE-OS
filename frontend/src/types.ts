@@ -485,6 +485,7 @@ export interface ReportRunView {
   last_event_seq: number;
   quality_gate: "engineering_only" | "quality_validated" | string;
   formal_export_eligible: boolean;
+  export_kind?: ReportExportKind | null;
   release_binding_status: string;
   execution_profile?: "outbound" | "synthetic_test" | string;
   budget_policy?: ReportBudgetPolicy | null;
@@ -590,3 +591,49 @@ export interface AuthorizeReportRunPayload {
 }
 
 export type ReportExportMode = "formal" | "engineering";
+
+/** 后端按同一导出策略给出的可下载方式；null 表示当前没有可导出的正文。 */
+export type ReportExportKind = "formal" | "engineering" | "unreviewed";
+
+export type ReportFeedbackVerdict = "usable" | "needs_revision" | "unusable";
+
+export type ReportFeedbackTag =
+  | "fact_error" | "missing_fact" | "liability" | "legal_citation" | "reasoning" | "format" | "other";
+
+export interface ReportFeedbackDraft {
+  reviewer_name: string;
+  verdict: ReportFeedbackVerdict;
+  issue_tags: ReportFeedbackTag[];
+  comment: string;
+}
+
+/** revision 为 0 表示尚未填写。 */
+export type ReportFeedback =
+  | { run_id: string; revision: 0 }
+  | (ReportFeedbackDraft & { run_id: string; revision: number; updated_at: string });
+
+export interface AdminReportFeedbackItem extends ReportFeedbackDraft {
+  run_id: string;
+  revision: number;
+  updated_at: string;
+  author_username: string;
+  run_context: {
+    session_title?: string | null;
+    state?: string;
+    quality_gate?: string;
+    run_created_at?: string;
+    [key: string]: unknown;
+  };
+}
+
+export interface AdminReportFeedbackPage {
+  total: number;
+  items: AdminReportFeedbackItem[];
+}
+
+export interface AdminReportFeedbackFilters {
+  verdict?: ReportFeedbackVerdict;
+  tag?: ReportFeedbackTag;
+  limit?: number;
+  offset?: number;
+}

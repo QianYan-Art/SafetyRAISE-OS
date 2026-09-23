@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, Request
 
 from app.api.deps import get_current_user, get_settings
 from app.core.settings import Settings
+from app.report_harness.lifecycle import active_outbound_runtime
 from app.schemas.workflow import (
     PublicAppConfigResponse,
     PublicReportModelResponse,
@@ -20,23 +21,14 @@ def get_public_app_config(
     request: Request = None,
 ):
     config = getattr(settings, "report_harness", None)
-    runtime = (getattr(request.app.state, "report_harness_runtime", None)
-               if request is not None else None)
-    development = (getattr(request.app.state, "report_harness_development_runtime", None)
-                   if request is not None else None)
-    development_ready = bool(
-        development and development.development_outbound_enabled
-        and development.force_engineering_exports and development.business_workflow is not None
-    )
+    runtime = active_outbound_runtime(request.app.state) if request is not None else None
     return PublicAppConfigResponse(
         upload_limits=_build_public_upload_limits(settings),
         report_model=_build_public_report_model(settings, current_user=current_user),
         report_harness=PublicReportHarnessResponse(
-            enabled=bool((config and config.enabled) or development_ready),
-            online_enabled=bool((config and config.online_enabled)
-                                or (runtime and runtime.production_outbound_enabled)
-                                or development_ready),
-            available=bool((runtime and runtime.production_outbound_enabled) or development_ready),
+            enabled=bool((config and config.enabled) or runtime),
+            online_enabled=bool((config and config.online_enabled) or runtime),
+            available=runtime is not None,
         ),
     )
 

@@ -23,10 +23,12 @@ const api = vi.hoisted(() => ({
   fetchReportEvidence: vi.fn(),
   fetchReportRun: vi.fn(),
   fetchReportRunCandidate: vi.fn(),
+  fetchReportRunFeedback: vi.fn(),
   formatApiErrorMessage: vi.fn(),
   listReportRuns: vi.fn(),
   resumeReportRunStream: vi.fn(),
   saveReportEvidence: vi.fn(),
+  saveReportRunFeedback: vi.fn(),
 }));
 
 vi.mock("./api", async () => ({
@@ -180,6 +182,7 @@ beforeEach(() => {
     display_status: "candidate",
   });
   api.fetchAuthorizationPreview.mockResolvedValue(authorizationPreview());
+  api.fetchReportRunFeedback.mockImplementation(async (runId: string) => ({ run_id: runId, revision: 0 }));
   api.authorizeReportRun.mockImplementation(async (runId: string) => run({ run_id: runId, state: "generating" }));
   api.executeReportRunStream.mockResolvedValue(undefined);
   api.resumeReportRunStream.mockResolvedValue(undefined);
@@ -627,5 +630,36 @@ describe("IntegratedReport 真实组件交互", () => {
     expect(persist).toHaveBeenCalledTimes(1);
     expect(api.createReportRun).not.toHaveBeenCalled();
     persistDeferred.resolve();
+  });
+});
+
+describe("IntegratedReport 按导出策略下载", () => {
+  async function renderWith(value: ReportRunView) {
+    api.listReportRuns.mockResolvedValue({ runs: [value], next_cursor: null });
+    api.fetchReportRun.mockResolvedValue(value);
+    api.downloadReportRunExport.mockResolvedValue({ blob: new Blob(["x"]), fileName: "report.docx" });
+    render(<IntegratedReport sessionId="session-1" onPersistDraft={vi.fn()} onBusyChange={vi.fn()} />);
+    await waitForInitialLoad();
+  }
+
+  it("演示稿附说明并按工程模式下载，同时显示质量反馈", async () => {
+    const user = userEvent.setup();
+    await renderWith(run({ quality_gate: "engineering_only", export_kind: "engineering" }));
+    expect(screen.getByText(/演示样本：报告未经质量验收/)).not.toBeNull();
+    await user.click(screen.getByRole("button", { name: "下载PDF" }));
+    await waitFor(() => expect(api.downloadReportRunExport).toHaveBeenCalledWith("run-1", "pdf", "engineering"));
+    expect(await screen.findByRole("heading", { name: "质量反馈" })).not.toBeNull();
+  });
+
+  it("审查未通过的候选稿也可下载，并提示带有未通过审查标记", async () => {
+    await renderWith(run({ state: "needs_review", candidate_version: 1, report: null, export_kind: "unreviewed" }));
+    expect(screen.getByText(/独立审查未通过：可下载最后一版候选稿/)).not.toBeNull();
+    expect(screen.getByRole("button", { name: "下载Word" })).not.toBeNull();
+  });
+
+  it("没有可导出正文时不显示下载和反馈", async () => {
+    await renderWith(run({ state: "failed", export_kind: null }));
+    expect(screen.queryByRole("button", { name: "下载Word" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "质量反馈" })).toBeNull();
   });
 });

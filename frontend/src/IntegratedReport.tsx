@@ -12,8 +12,22 @@ import {
   buildAuthorizationPayload, createEmptyEvidenceRecord, createEvidenceId,
   parseAccidentData, RUN_TERMINAL_STATES,
 } from "./ReportHarnessPanel";
-import type { ReportEvidenceResponse, ReportExportFormat, ReportRunCandidate, ReportRunView } from "./types";
+import { ReportFeedback } from "./ReportFeedback";
+import { EXPORT_NOTICES } from "./feedbackOptions";
+import type {
+  ReportEvidenceResponse, ReportExportFormat, ReportExportKind, ReportRunCandidate, ReportRunView,
+} from "./types";
 import "./integratedReport.css";
+
+const EXPORT_FORMATS: ReadonlyArray<{ format: ReportExportFormat; label: string }> = [
+  { format: "docx", label: "Word" }, { format: "pdf", label: "PDF" }, { format: "md", label: "MD" },
+];
+
+/** 下载方式以后端导出策略为准；旧后端没有 export_kind 时，只有正式资格可下载。 */
+function exportKindOf(run: ReportRunView): ReportExportKind | null {
+  if (run.export_kind !== undefined) return run.export_kind;
+  return run.state === "published" && run.formal_export_eligible ? "formal" : null;
+}
 
 export interface IntegratedReportHandle {
   generate: (json: string) => Promise<void>;
@@ -262,11 +276,13 @@ export const IntegratedReport = forwardRef<IntegratedReportHandle, {
   }
 
   async function download(format: ReportExportFormat) {
-    if (!run?.formal_export_eligible || exporting) return;
+    const kind = run ? exportKindOf(run) : null;
+    if (!run || !kind || exporting) return;
     setExporting(true);
     setError("");
     try {
-      const result = await downloadReportRunExport(run.run_id, format, "formal");
+      // 下载方式由后端导出策略给出；非正式稿一律按工程模式导出并带标记。
+      const result = await downloadReportRunExport(run.run_id, format, kind === "formal" ? "formal" : "engineering");
       const url = URL.createObjectURL(result.blob);
       const link = document.createElement("a");
       link.href = url; link.download = result.fileName; link.click();
@@ -276,6 +292,7 @@ export const IntegratedReport = forwardRef<IntegratedReportHandle, {
   }
 
   const body = run?.report?.report_markdown ?? candidate?.candidate_report.report_markdown;
+  const exportKind = run && !active ? exportKindOf(run) : null;
   const issues = candidate?.review_result?.issues?.filter((item) => item.status !== "resolved") ?? [];
   return <section className="integrated-report" aria-label="事故分析报告" data-state={run?.state ?? "empty"}>
     {error && <p role="alert" className="form-error">{error}</p>}
@@ -352,11 +369,16 @@ export const IntegratedReport = forwardRef<IntegratedReportHandle, {
               await execute(value, value.state === "suspended" || value.can_resume_protocol === true);
             })}><Play size={15} aria-hidden="true" />继续生成</button>
         </>}
-        {run.formal_export_eligible && (["docx", "pdf", "md"] as const).map((format) =>
-          <button key={format} type="button" aria-label={`下载${format === "docx" ? "Word" : format.toUpperCase()}`} disabled={exporting} onClick={() => void download(format)}>
-            <Download size={16} aria-hidden="true" />{format === "docx" ? "Word" : format.toUpperCase()}
-          </button>)}
       </div>
+      {exportKind && <div className="report-export" data-kind={exportKind}>
+        {EXPORT_NOTICES[exportKind] && <p className="report-export-notice">{EXPORT_NOTICES[exportKind]}</p>}
+        <div className="report-export-actions" role="group" aria-label="下载报告">
+          {EXPORT_FORMATS.map(({ format, label }) =>
+            <button key={format} type="button" aria-label={`下载${label}`} disabled={exporting} onClick={() => void download(format)}>
+              <Download size={16} aria-hidden="true" />{label}
+            </button>)}
+        </div>
+      </div>}
       {run.terminal_reason === "budget_exhausted" && (
         <p className="report-limit-notice">本次运行达到预算或时长上限，报告未发布。</p>
       )}
@@ -365,6 +387,7 @@ export const IntegratedReport = forwardRef<IntegratedReportHandle, {
         {issues.map((issue) => <p key={issue.issue_id}>{issue.explanation}</p>)}
       </details>}
       {body && <div className="markdown-report"><ReactMarkdown remarkPlugins={[remarkGfm]}>{body}</ReactMarkdown></div>}
+      {exportKind && <ReportFeedback runId={run.run_id} />}
     </>}
   </section>;
 });

@@ -1,9 +1,9 @@
 """仅供显式本地迁移和测试验证，不读取业务配置。"""
 
-from pathlib import Path
-
 import psycopg
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
+
+from app.report_harness.schema_migrations import apply_pending
 
 
 def validate_test_dsn(dsn: str) -> str:
@@ -24,17 +24,5 @@ def validate_test_dsn(dsn: str) -> str:
 
 def migrate_test_database(dsn: str) -> None:
     dsn = validate_test_dsn(dsn)
-    directory = Path(__file__).parent / "migrations"
     with psycopg.connect(dsn) as conn, conn.transaction():
-        conn.execute("SELECT pg_advisory_xact_lock(82341901)")
-        exists = conn.execute("SELECT to_regclass('report_run_schema_version')").fetchone()[0]
-        applied = set()
-        if exists:
-            applied = {row[0] for row in conn.execute(
-                "SELECT version FROM report_run_schema_version",
-            ).fetchall()}
-        for version, filename in enumerate(
-            ("001_report_runs.sql", "002_session_deletion.sql"), start=1,
-        ):
-            if version not in applied:
-                conn.execute((directory / filename).read_text("utf-8"))
+        apply_pending(conn)

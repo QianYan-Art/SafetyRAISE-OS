@@ -8,7 +8,9 @@ import pytest
 from pypdf import PdfReader
 
 from app.report_harness.errors import HarnessError
-from app.report_harness.exports import ENGINEERING_MARKER, render_run_export
+from app.report_harness.exports import (
+    ENGINEERING_MARKER, UNREVIEWED_MARKER, available_export, render_run_export,
+)
 from app.report_harness.release_registry import (
     ReleaseBinding, binding_status, export_eligibility,
 )
@@ -183,3 +185,63 @@ def test_http_historical_revocation_updates_view_and_blocks_download(pg_store):
         assert view["quality_gate"] == "quality_validated" and view["state"] == "published"
         assert client.get(f"{path}/exports/md", headers=headers).status_code == 409
         assert client.get(f"{path}/exports/md?mode=engineering", headers=headers).status_code == 200
+
+
+def unreviewed_run():
+    record, registry = historical_report()
+    record.update(state="needs_review", quality_gate="engineering_only", release_binding=None,
+                  candidate={"report_markdown": "# 合成候选稿\n\n独立审查尚未闭合。"})
+    record.pop("report")
+    return record, registry
+
+
+@pytest.mark.parametrize("export_format", ["md", "docx", "pdf"])
+def test_unreviewed_candidate_exports_only_as_marked_engineering(export_format):
+    record, registry = unreviewed_run()
+    renderer = ReportExportService(SimpleNamespace())
+    content, _, filename = render_run_export(
+        record, export_format, mode="engineering", registry=registry, renderer=renderer,
+    )
+    assert "unreviewed" in filename
+    if export_format == "md":
+        text = content.decode("utf-8")
+        assert text.startswith(f"> {UNREVIEWED_MARKER}") and "合成候选稿" in text
+    elif export_format == "docx":
+        with ZipFile(BytesIO(content)) as archive:
+            assert UNREVIEWED_MARKER in archive.read("word/header1.xml").decode("utf-8")
+    else:
+        for page in PdfReader(BytesIO(content)).pages:
+            assert UNREVIEWED_MARKER in page.extract_text()
+    with pytest.raises(HarnessError, match="report_not_published"):
+        render_run_export(record, export_format, mode="formal", registry=registry, renderer=renderer)
+
+
+def test_available_export_is_single_source_for_view_and_download():
+    record, registry = historical_report()
+    assert available_export(record, registry) == "formal"
+    assert available_export(record, registry, force_engineering=True) == "engineering"
+    assert available_export(record, HistoricalRegistry()) == "engineering"
+    unreviewed, _ = unreviewed_run()
+    assert available_export(unreviewed, registry) == "unreviewed"
+    unreviewed.pop("candidate")
+    assert available_export(unreviewed, registry) is None
+    record["state"] = "failed"
+    assert available_export(record, registry) is None
+
+
+def test_http_unreviewed_run_view_and_download(pg_store):
+    store, owner, other, session = pg_store
+    service = ReportRunService(store, dependencies(SyntheticRoles(invalid_review=True)))
+    with _api_client(pg_store, service) as (client, headers):
+        created = client.post("/api/v1/report-runs", headers=headers, json={
+            "request_id": str(uuid4()), "session_id": session,
+            "accident_data": {"事实": "审查未闭合合成案例"}, "evidence_revision": 0,
+        }).json()
+        path = f"/api/v1/report-runs/{created['run_id']}"
+        client.post(f"{path}/execute/stream", headers=headers,
+                    json={"expected_version": created["state_version"]})
+        view = client.get(path, headers=headers).json()
+        assert view["state"] == "needs_review" and view["export_kind"] == "unreviewed"
+        assert client.get(f"{path}/exports/md", headers=headers).status_code == 409
+        exported = client.get(f"{path}/exports/pdf?mode=engineering", headers=headers)
+        assert exported.status_code == 200 and "unreviewed" in exported.headers["content-disposition"]

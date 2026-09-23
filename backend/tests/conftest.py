@@ -74,6 +74,7 @@ def pg_store():
                 "SELECT run_id FROM report_runs WHERE session_id=%s", (session,)
             ).fetchall()]
             for run_id in ids:
+                conn.execute("DELETE FROM report_run_feedback WHERE run_id=%s", (run_id,))
                 conn.execute("DELETE FROM report_run_events WHERE run_id=%s", (run_id,))
                 conn.execute("DELETE FROM report_run_requests WHERE run_id=%s", (run_id,))
                 conn.execute("DELETE FROM report_runs WHERE run_id=%s", (run_id,))

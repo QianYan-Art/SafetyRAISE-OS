@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -17,11 +17,13 @@ from app.report_harness.contracts import canonical_digest
 from app.report_harness.errors import HarnessError
 from app.report_harness.knowledge_assets import load_knowledge_assets
 from app.report_harness.money_guard import (
+    RoleBillingContract,
     VersionedMoneyGuardHTTPAttemptClient,
     read_billing_contract,
 )
 from app.report_harness.runtime_factory import build_business_dependencies
 from app.report_harness.runtime_profiles import (
+    ModelCapacity,
     capacity_budget,
     capacity_from_expert_metadata,
     capacity_from_local_embedding_metadata,
@@ -63,34 +65,30 @@ def billing_endpoint_digest(role, endpoint, capacity):
     })
 
 
-def _headers(profile, fallback_key_env=None):
-    name = profile.api_key_env or fallback_key_env
-    inline = getattr(profile, "api_key", None)
-    connection = getattr(profile, "connection", None)
-    credential = (connection.key if connection and connection.key else name)
-    try:
-        key = inline or (get_api_key(credential) if credential else None)
-    except ConfigurationError:
-        raise HarnessError("runtime_credentials_unavailable", 503) from None
-    return {"Authorization": "Bearer " + key} if key else {}
+ROLES = frozenset({"expert", "generator", "reviewer", "embedding"})
 
 
-def assemble_business_runtime(settings, manifest: BusinessRuntimeManifest, *, resource_check):
-    """只读装配；不探测模型、不注册货币合同、不初始化新预算或修改生产开关。"""
-    if set(manifest.metadata) != {"expert", "generator", "reviewer", "embedding"}:
+@dataclass(frozen=True)
+class RoleBindings:
+    """四个业务角色的端点、容量证明与报告端点配置；运行时装配与建账共用同一份计算。"""
+
+    endpoints: dict[str, str]
+    capacities: dict[str, ModelCapacity]
+    profiles: dict
+    local_embedding: bool
+
+
+def _require_role_metadata(manifest: BusinessRuntimeManifest) -> None:
+    if set(manifest.metadata) != ROLES:
         raise HarnessError("model_capacity_unverified")
-    ledger = Path(manifest.ledger_path)
-    if not ledger.is_absolute() or not ledger.is_file():
-        raise HarnessError("money_guard_ledger_missing")
-    billing = read_billing_contract(ledger, manifest.experiment_id)
-    if billing["billing_contract_digest"] != manifest.billing_contract_digest:
-        raise HarnessError("money_guard_contract_configuration_changed")
+
+
+def resolve_role_bindings(settings, manifest: BusinessRuntimeManifest, *,
+                          local_embedding: bool) -> RoleBindings:
+    _require_role_metadata(manifest)
     expert = settings.models.expert_local
     embedding = settings.models.retrieval_embedding
     report = settings.models.report_external
-    contracts = billing["contracts"]
-    local_embedding = ("embedding" in contracts
-                       and contracts["embedding"].billing_mode == "local_token_free")
     if local_embedding and embedding.base_url.rstrip("/") != expert.base_url.rstrip("/"):
         raise HarnessError("local_embedding_endpoint_unapproved")
     endpoints_by_name = {item.name: item for item in report.endpoints}
@@ -126,21 +124,67 @@ def assemble_business_runtime(settings, manifest: BusinessRuntimeManifest, *, re
         capacities[role] = capacity_from_metadata(
             manifest.metadata[role], model=profile.model or report.model, effort=effort,
         )
+    return RoleBindings(endpoints, capacities, profiles, local_embedding)
+
+
+def expected_contracts(bindings: RoleBindings, metadata: dict[str, dict], *,
+                       usd_to_cny: Decimal) -> dict[str, RoleBillingContract]:
+    """按当前端点与容量证明应登记的合同；报价取模型完整容量下的保守费用上限。"""
+    contracts = {}
+    for role, capacity in bindings.capacities.items():
+        free = role == "expert" or (role == "embedding" and bindings.local_embedding)
+        contracts[role] = RoleBillingContract(
+            role=role, model=capacity.model,
+            endpoint_digest=billing_endpoint_digest(role, bindings.endpoints[role], capacity),
+            quote_cny=Decimal(0) if free else price_upper_cny(
+                metadata[role], capacity, usd_to_cny=usd_to_cny,
+            ),
+            billing_mode="local_token_free" if free else "remote_actual",
+            usage_source="self_hosted_usage" if free else "cost_usd",
+        )
+    return contracts
+
+
+def _headers(profile, fallback_key_env=None):
+    name = profile.api_key_env or fallback_key_env
+    inline = getattr(profile, "api_key", None)
+    connection = getattr(profile, "connection", None)
+    credential = (connection.key if connection and connection.key else name)
+    try:
+        key = inline or (get_api_key(credential) if credential else None)
+    except ConfigurationError:
+        raise HarnessError("runtime_credentials_unavailable", 503) from None
+    return {"Authorization": "Bearer " + key} if key else {}
+
+
+def assemble_business_runtime(settings, manifest: BusinessRuntimeManifest, *, resource_check):
+    """只读装配；不探测模型、不注册货币合同、不初始化新预算或修改生产开关。"""
+    _require_role_metadata(manifest)
+    ledger = Path(manifest.ledger_path)
+    if not ledger.is_absolute() or not ledger.is_file():
+        raise HarnessError("money_guard_ledger_missing")
+    billing = read_billing_contract(ledger, manifest.experiment_id)
+    if billing["billing_contract_digest"] != manifest.billing_contract_digest:
+        raise HarnessError("money_guard_contract_configuration_changed")
+    expert = settings.models.expert_local
+    embedding = settings.models.retrieval_embedding
+    report = settings.models.report_external
+    contracts = billing["contracts"]
+    bindings = resolve_role_bindings(settings, manifest, local_embedding=(
+        "embedding" in contracts and contracts["embedding"].billing_mode == "local_token_free"
+    ))
+    endpoints, capacities, profiles = bindings.endpoints, bindings.capacities, bindings.profiles
+    local_embedding = bindings.local_embedding
     if set(contracts) != set(capacities):
         raise HarnessError("money_guard_roles_unregistered")
-    for role, capacity in capacities.items():
+    expected = expected_contracts(bindings, manifest.metadata, usd_to_cny=billing["usd_to_cny_upper"])
+    for role, want in expected.items():
         contract = contracts[role]
-        if (contract.model != capacity.model or contract.endpoint_digest
-                != billing_endpoint_digest(role, endpoints[role], capacity)):
+        if contract.model != want.model or contract.endpoint_digest != want.endpoint_digest:
             raise HarnessError("money_guard_contract_configuration_changed")
-        free = role == "expert" or (role == "embedding" and local_embedding)
-        expected_mode = "local_token_free" if free else "remote_actual"
-        if contract.billing_mode != expected_mode:
+        if contract.billing_mode != want.billing_mode:
             raise HarnessError("money_guard_billing_mode_invalid")
-        required = Decimal(0) if free else price_upper_cny(
-            manifest.metadata[role], capacity, usd_to_cny=billing["usd_to_cny_upper"],
-        )
-        if contract.quote_cny < required:
+        if contract.quote_cny < want.quote_cny:
             raise HarnessError("money_guard_contract_quote_invalid")
     assets = load_knowledge_assets(
         settings, approved_content_digest=manifest.knowledge_content_digest,

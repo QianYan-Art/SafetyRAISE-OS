@@ -4,11 +4,21 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 
+from app.report_harness.execution import outbound_ready
 from app.report_harness.recovery import RunRecovery
 from app.report_harness.store import RunStore
 from app.report_harness.errors import HarnessError
 
 logger = logging.getLogger(__name__)
+
+
+def active_outbound_runtime(state):
+    """主应用装配的运行时优先，其次是 business_server 显式登记的开发运行时。"""
+    for name in ("report_harness_runtime", "report_harness_development_runtime"):
+        runtime = getattr(state, name, None)
+        if outbound_ready(runtime):
+            return runtime
+    return None
 
 
 async def reconcile_loop(recovery: RunRecovery, stop: asyncio.Event,

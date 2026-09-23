@@ -154,3 +154,4 @@
   .evidence-workspace .artifact-wall-panel{padding:20px}
   .evidence-workspace .artifact-wall-grid{grid-template-columns:minmax(0,1fr)}
 }
+@media(max-width:380px){.evidence-workspace .admin-header-tab svg{display:none}}

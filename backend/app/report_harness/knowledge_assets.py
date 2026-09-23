@@ -104,6 +104,11 @@ def knowledge_asset_paths(settings) -> dict[str, Path]:
     return paths
 
 
+def knowledge_content_digest(paths: dict[str, Path]) -> str:
+    """知识库全部检索文件的内容摘要；运行清单据此批准一个确定的知识版本。"""
+    return canonical_digest({name: file_digest(path) for name, path in paths.items()})
+
+
 def load_knowledge_assets(settings, *, approved_content_digest: str) -> KnowledgeAssets:
     """只从固定配置读取已批准资产；不下载、不构建索引、不自动回退演示知识。"""
     if settings.retrieval.provider != "hybrid_local" or settings.models.retrieval_reranker.enabled:
@@ -112,7 +117,7 @@ def load_knowledge_assets(settings, *, approved_content_digest: str) -> Knowledg
     paths = knowledge_asset_paths(settings)
     try:
         identities = {path: _identity(path) for path in paths.values()}
-        content_digest = canonical_digest({name: file_digest(path) for name, path in paths.items()})
+        content_digest = knowledge_content_digest(paths)
     except OSError as exc:
         raise HarnessError("knowledge_dependencies_unavailable", 503) from exc
     if content_digest != approved_content_digest:

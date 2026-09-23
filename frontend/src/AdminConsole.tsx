@@ -3,10 +3,7 @@ import { useDialogFocus } from "./useDialogFocus";
 import {
   AlertTriangle,
   CheckCircle2,
-  ChevronLeft,
-  ChevronRight,
   CircleAlert,
-  FolderOpen,
   Pencil,
   Search,
   ShieldAlert,
@@ -28,9 +25,11 @@ import {
   updateAdminUser,
 } from "./api";
 import type { AdminCreateUserPayload, AdminSpaceRecord, AdminUpdateUserPayload, AdminUserRecord, UserSummary } from "./types";
+import { AdminFeedback } from "./AdminFeedback";
+import { EmptyState, formatDateTime, paginate, TablePagination } from "./adminTableParts";
 import "./account-workspace.css";
 
-type AdminTab = "users" | "spaces";
+export type AdminTab = "users" | "spaces" | "feedback";
 
 interface AdminConsoleProps {
   currentUser: UserSummary;
@@ -79,8 +78,6 @@ const SOURCE_LABELS: Record<string, string> = {
   video: "视频",
   mixed: "混合",
 };
-
-const PAGE_SIZE_OPTIONS = [10, 20, 50] as const;
 
 export function AdminConsole(props: AdminConsoleProps) {
   const { currentUser, activeTab } = props;
@@ -305,7 +302,7 @@ export function AdminConsole(props: AdminConsoleProps) {
 
   return (
     <div className="account-admin-shell">
-      {activeTab === "users" ? (
+      {activeTab === "users" && (
         <section className="account-admin-surface" aria-labelledby="admin-users-title">
           <header className="account-admin-heading">
             <div>
@@ -401,7 +398,8 @@ export function AdminConsole(props: AdminConsoleProps) {
           </div>
           <TablePagination total={filteredUsers.length} page={normalizedUserPage} pageCount={userPageCount} pageSize={userPageSize} onPageChange={setUserPage} onPageSizeChange={setUserPageSize} />
         </section>
-      ) : (
+      )}
+      {activeTab === "spaces" && (
         <section className="account-admin-surface" aria-labelledby="admin-spaces-title">
           <header className="account-admin-heading">
             <div>
@@ -480,6 +478,7 @@ export function AdminConsole(props: AdminConsoleProps) {
           <TablePagination total={filteredSpaces.length} page={normalizedSpacePage} pageCount={spacePageCount} pageSize={spacePageSize} onPageChange={setSpacePage} onPageSizeChange={setSpacePageSize} />
         </section>
       )}
+      {activeTab === "feedback" && <AdminFeedback />}
 
       {userDrawer ? <UserDrawer drawer={userDrawer} currentUserId={currentUser.id} saving={saving} errorMessage={usersError} onClose={() => { if (!saving) setUserDrawer(null); }} onSubmit={handleSubmitUser} /> : null}
       {spaceDrawer ? <SpaceDrawer space={spaceDrawer} users={users} saving={saving} errorMessage={spacesError} onClose={() => { if (!saving) setSpaceDrawer(null); }} onSubmit={handleSubmitSpace} /> : null}
@@ -690,16 +689,6 @@ function SpaceDrawer(props: {
   );
 }
 
-function EmptyState(props: { title: string; description: string }) {
-  return (
-    <div className="account-empty-state">
-      <FolderOpen aria-hidden="true" />
-      <strong>{props.title}</strong>
-      <span>{props.description}</span>
-    </div>
-  );
-}
-
 function ConfirmDialog(props: {
   title: string;
   description: string;
@@ -739,17 +728,6 @@ function ToastBanner(props: { toast: NonNullable<ToastState>; onClose: () => voi
   );
 }
 
-function formatDateTime(value: string | number) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  const year = date.getFullYear();
-  const month = `${date.getMonth() + 1}`.padStart(2, "0");
-  const day = `${date.getDate()}`.padStart(2, "0");
-  const hours = `${date.getHours()}`.padStart(2, "0");
-  const minutes = `${date.getMinutes()}`.padStart(2, "0");
-  return `${year}-${month}-${day} ${hours}:${minutes}`;
-}
-
 function sortTimestamp(value: string | number) {
   if (typeof value === "number") return value;
   const numeric = Number(value);
@@ -769,37 +747,4 @@ function resolveSourceBadgeClass(sourceType?: string | null) {
   if (normalized === "video") return "account-source-video";
   if (normalized === "mixed") return "account-source-mixed";
   return "account-source-image";
-}
-
-function paginate<T>(items: T[], page: number, pageSize: number): T[] {
-  const safePage = Math.max(1, page);
-  const start = (safePage - 1) * pageSize;
-  return items.slice(start, start + pageSize);
-}
-
-function TablePagination(props: {
-  total: number;
-  page: number;
-  pageCount: number;
-  pageSize: number;
-  onPageChange: (page: number) => void;
-  onPageSizeChange: (pageSize: number) => void;
-}) {
-  const { total, page, pageCount, pageSize, onPageChange, onPageSizeChange } = props;
-  return (
-    <div className="account-admin-pagination">
-      <span>共 {total} 条 · 每页 {pageSize} 条</span>
-      <div className="account-admin-pagination-controls">
-        <label className="account-pagination-size">
-          <span className="account-sr-only">每页条数</span>
-          <select className="account-select" value={pageSize} onChange={(event) => onPageSizeChange(Number(event.target.value))} aria-label="每页条数">
-            {PAGE_SIZE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
-          </select>
-        </label>
-        <button type="button" className="account-icon-button" onClick={() => onPageChange(Math.max(1, page - 1))} disabled={page <= 1} aria-label="上一页" title="上一页"><ChevronLeft aria-hidden="true" /></button>
-        <span>{page} / {pageCount}</span>
-        <button type="button" className="account-icon-button" onClick={() => onPageChange(Math.min(pageCount, page + 1))} disabled={page >= pageCount} aria-label="下一页" title="下一页"><ChevronRight aria-hidden="true" /></button>
-      </div>
-    </div>
-  );
 }

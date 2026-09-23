@@ -133,11 +133,13 @@ export function canExecuteReportRun(run: ReportRunView, authorized: boolean): bo
   return run.execution_profile === "synthetic_test" || authorized;
 }
 
+/** 正式导出看批准资格；工程导出以后端导出策略给出的 export_kind 为准。 */
 export function canExportReportRun(run: ReportRunView, mode: ReportExportMode): boolean {
-  if (run.state !== "published") {
-    return false;
+  if (mode === "formal") {
+    return run.state === "published" && run.formal_export_eligible === true;
   }
-  return mode === "formal" ? run.formal_export_eligible === true : true;
+  // 旧后端没有 export_kind 字段时，保持“仅已发布可导出”的原规则。
+  return run.export_kind !== undefined ? Boolean(run.export_kind) : run.state === "published";
 }
 
 export function toggleEvidenceConflict(

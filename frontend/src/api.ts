@@ -1,6 +1,8 @@
 import type {
   AdminCleanupSpacesResponse,
   AdminCreateUserPayload,
+  AdminReportFeedbackFilters,
+  AdminReportFeedbackPage,
   AdminSpaceRecord,
   AdminUpdateSpacePayload,
   AdminUpdateUserPayload,
@@ -22,6 +24,8 @@ import type {
   ReportEvidenceResponse,
   ReportExportMode,
   ReportExportFormat,
+  ReportFeedback,
+  ReportFeedbackDraft,
   ReportRunCandidate,
   ReportRunEvent,
   ReportRunEventsPage,
@@ -693,6 +697,64 @@ export async function downloadReportRunExport(
       response.headers.get("content-disposition"),
       `report-run-${runId}-${mode}.${exportFormat}`,
     ),
+  };
+}
+
+export async function fetchReportRunFeedback(runId: string): Promise<ReportFeedback> {
+  const response = await authFetch(
+    `${API_BASE}/api/v1/report-runs/${encodeURIComponent(runId)}/feedback`,
+    { method: "GET" },
+  );
+  return parseJsonResponse<ReportFeedback>(response);
+}
+
+export async function saveReportRunFeedback(
+  runId: string,
+  expectedRevision: number,
+  draft: ReportFeedbackDraft,
+): Promise<ReportFeedback> {
+  const response = await authFetch(
+    `${API_BASE}/api/v1/report-runs/${encodeURIComponent(runId)}/feedback`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ expected_revision: expectedRevision, ...draft }),
+    },
+  );
+  return parseJsonResponse<ReportFeedback>(response);
+}
+
+function adminFeedbackQuery(filters: AdminReportFeedbackFilters): string {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters)) {
+    if (value !== undefined && value !== "") query.set(key, String(value));
+  }
+  return query.size ? `?${query.toString()}` : "";
+}
+
+export async function listAdminReportFeedback(
+  filters: AdminReportFeedbackFilters = {},
+): Promise<AdminReportFeedbackPage> {
+  const response = await authFetch(
+    `${API_BASE}/api/v1/admin/report-feedback${adminFeedbackQuery(filters)}`,
+    { method: "GET" },
+  );
+  return parseJsonResponse<AdminReportFeedbackPage>(response);
+}
+
+export async function downloadAdminReportFeedback(
+  filters: Pick<AdminReportFeedbackFilters, "verdict" | "tag"> = {},
+): Promise<DownloadReportExportResult> {
+  const response = await authFetch(
+    `${API_BASE}/api/v1/admin/report-feedback/export${adminFeedbackQuery(filters)}`,
+    { method: "GET" },
+  );
+  if (!response.ok) {
+    throw await buildApiError(response);
+  }
+  return {
+    blob: await response.blob(),
+    fileName: parseDownloadFileName(response.headers.get("content-disposition"), "report-feedback.csv"),
   };
 }
 

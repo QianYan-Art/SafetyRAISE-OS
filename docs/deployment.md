@@ -31,7 +31,16 @@ Linux 内存检查同时考虑宿主 `MemAvailable` 与 cgroup v2 剩余额度�
 主应用另有默认关闭的正式装配入口：服务端同时设置
 `report_harness.enabled=true`、`online_enabled=true`，提供绝对路径
 `runtime_manifest_path` 与 `resource_paths`。启动时验证数据库 schema、既有四角色合同、
-知识摘要、实际代码清单和只读批准绑定；不是运行开发服务器后自动切换正式模式。
+知识摘要，`formal` 模式另验实际代码清单和只读批准绑定；`release_mode=demo` 不读批准表，
+报告固定为带标记的工程稿。不是运行开发服务器后自动切换正式模式。
+
+启用顺序（均不发送模型请求）：
+1. `python -m app.report_harness.migrate` 查看待执行版本，确认后加 `--confirm`。
+2. `python -m app.report_harness.provision --metadata <四角色元数据> --ledger <本地账本> --experiment <ID> --output <清单>`
+   先 dry-run 核对合同与知识摘要，再加 `--confirm`；新预算只能用新实验 ID 加 `--create-experiment` 建立，
+   已有实验只追加合同。知识库或模型配置变化后重新执行生成新清单。
+3. 212 发布目录的 `compose.json` 是展开后的完整配置：为 backend 增加清单（只读）与 212 本地账本目录挂载，
+   在发布目录的 `workflow.server.yaml` 增加 `report_harness` 段，再按常规发布流程切换。
 
 正式Docker部署须显式叠加 `deployment/docker/docker-compose.harness.yml`。
 它不会被基础脚本自动加载，不创建批准或预算；外部配置的命令行 `--config`
@@ -39,7 +48,7 @@ Linux 内存检查同时考虑宿主 `MemAvailable` 与 cgroup v2 剩余额度�
 
 批准目录及其父目录必须对应用身份不可写。构建产物须包含代码清单核对的后端源码、
 前端源码与依赖清单；不能用缺文件的镜像绕过校验。费用 SQLite 必须放在运行主机本地盘，
-不要放入 SSHFS 共享目录；迁移原账本需保留所有已知、未知和预留记录，不新建空账本重置额度。
+不要放入 SSHFS 共享目录；迁移原账本需保留所有已知、未知和预留记录，不在原实验上重置额度。
 资源默认阈值为2048MiB磁盘、256MiB内存，执行期间持续复核；查阅和取消不因空间不足被拒绝。
 启动时仅资源不足或资源探针失败允许降级到查阅和取消，生成入口保持关闭。
 释放资源后重启服务重新装配；不会自动恢复或重试付费请求。

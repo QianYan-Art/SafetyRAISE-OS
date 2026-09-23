@@ -28,6 +28,7 @@ from app.report_harness.recovery import (
 from app.report_harness.review_ledger import IssueLedger
 from app.report_harness.prompts import load_role_prompts
 from app.report_harness.request_ledger import RequestLedger
+from app.report_harness.exports import available_export
 from app.report_harness.release_registry import export_eligibility
 from app.report_harness.store import RunStore
 from app.schemas.report import ReportResult
@@ -129,6 +130,10 @@ class ReportRunService:
         eligible, status = export_eligibility(record, self.dependencies.release_registry)
         result["formal_export_eligible"] = eligible
         result["release_binding_status"] = status
+        result["export_kind"] = available_export(
+            record, self.dependencies.release_registry,
+            force_engineering=self.dependencies.force_engineering_exports,
+        )
         if "budget_policy" in record and hasattr(self.store, "connection"):
             result["budget"] = {
                 **RequestLedger(self.store).view(owner, record["run_id"]),

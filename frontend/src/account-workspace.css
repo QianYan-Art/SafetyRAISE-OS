@@ -1041,6 +1041,96 @@
   border: 0;
 }
 
+/* 质量反馈列表：徽标沿用管理中心来源徽标的配色体系 */
+.account-feedback-session,
+.account-feedback-reviewer {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.account-feedback-session strong,
+.account-feedback-reviewer strong {
+  overflow: hidden;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-feedback-session small,
+.account-feedback-reviewer small {
+  color: #8a98aa;
+  font-size: 11px;
+}
+
+.account-feedback-verdict {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border: 1px solid #cfe9da;
+  border-radius: var(--radius-control);
+  background: #effaf4;
+  color: #258456;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.account-feedback-verdict::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.account-feedback-verdict[data-tone="warning"] {
+  border-color: #ede3c8;
+  background: #fff9e9;
+  color: #9a6a23;
+}
+
+.account-feedback-verdict[data-tone="danger"] {
+  border-color: #efdada;
+  background: #fff8f8;
+  color: #b64040;
+}
+
+.account-feedback-table th:nth-child(1) { width: 24%; }
+.account-feedback-table th:nth-child(2) { width: 12%; }
+.account-feedback-table th:nth-child(3) { width: 18%; }
+.account-feedback-table th:nth-child(5) { width: 15%; }
+
+.account-feedback-reviewer small {
+  white-space: nowrap;
+}
+
+.account-feedback-tags {
+  color: #63728a;
+  font-size: 12px;
+}
+
+.account-feedback-comment {
+  max-width: 360px;
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.account-feedback-comment summary {
+  cursor: pointer;
+}
+
+.account-feedback-comment details[open] summary {
+  color: #8a98aa;
+}
+
+.account-feedback-comment p {
+  margin: 6px 0 0;
+}
+
 @media (max-width: 1100px) {
   .account-topbar {
     padding-right: 24px;
@@ -1251,6 +1341,37 @@
   .account-admin-table td.account-admin-empty {
     grid-column: 1 / -1;
     height: 160px;
+  }
+
+  .account-feedback-table td:nth-child(1) {
+    grid-column: 1 / -1;
+  }
+
+  .account-feedback-table td:nth-child(2) {
+    grid-column: 1;
+  }
+
+  .account-feedback-table td:nth-child(3) {
+    grid-column: 1 / -1;
+    grid-row: auto;
+    text-align: left;
+  }
+
+  .account-feedback-table td.account-feedback-tags[data-empty="true"] {
+    display: none;
+  }
+
+  .account-feedback-table td:nth-child(4) {
+    grid-column: 1 / -1;
+    max-width: none;
+    color: inherit;
+    font-size: 12px;
+  }
+
+  .account-feedback-table td:nth-child(5) {
+    grid-column: 2;
+    grid-row: 2;
+    text-align: right;
   }
 
   .account-space-table td:nth-child(1),

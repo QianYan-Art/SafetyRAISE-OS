@@ -23,7 +23,7 @@ import {
   register,
   updateUserModelConfigs,
 } from "./api";
-import { AdminConsole } from "./AdminConsole";
+import { AdminConsole, type AdminTab } from "./AdminConsole";
 import { AuthScreen } from "./AuthScreen";
 import type {
   ChatMessage,
@@ -124,6 +124,13 @@ const UsersTabIcon = () => (
   </svg>
 );
 
+const FeedbackTabIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M20 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2z" />
+    <path d="M8.5 8.5h7M8.5 12h4.5" />
+  </svg>
+);
+
 const SpacesTabIcon = () => (
   <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     <rect x="3" y="3.6" width="8" height="7.2" rx="2" />
@@ -132,6 +139,12 @@ const SpacesTabIcon = () => (
     <rect x="13" y="13.2" width="8" height="7.2" rx="2" />
   </svg>
 );
+
+const ADMIN_TABS: ReadonlyArray<{ id: AdminTab; label: string; Icon: () => JSX.Element }> = [
+  { id: "users", label: "用户管理", Icon: UsersTabIcon },
+  { id: "spaces", label: "空间管理", Icon: SpacesTabIcon },
+  { id: "feedback", label: "质量反馈", Icon: FeedbackTabIcon },
+];
 
 const DragHandleIcon = () => (
   <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
@@ -291,7 +304,6 @@ type ArtifactPreviewState = {
 };
 
 type AppView = "workspace" | "admin";
-type AdminTab = "users" | "spaces";
 type WorkspaceMode = "legacy" | "report-harness";
 
 const PDF_COVER_TITLE = "道路交通事故分析报告";
@@ -2289,26 +2301,19 @@ function WorkspaceApp({
           <ArrowLeftIcon />
         </button>
         <div className="admin-header-tabs" role="tablist" aria-label="管理控制台标签">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={adminTab === "users"}
-            className={`admin-header-tab ${adminTab === "users" ? "is-active" : ""}`}
-            onClick={() => setAdminTab("users")}
-          >
-            <UsersTabIcon />
-            <span>用户管理</span>
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={adminTab === "spaces"}
-            className={`admin-header-tab ${adminTab === "spaces" ? "is-active" : ""}`}
-            onClick={() => setAdminTab("spaces")}
-          >
-            <SpacesTabIcon />
-            <span>空间管理</span>
-          </button>
+          {ADMIN_TABS.map(({ id, label, Icon }) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={adminTab === id}
+              className={`admin-header-tab ${adminTab === id ? "is-active" : ""}`}
+              onClick={() => setAdminTab(id)}
+            >
+              <Icon />
+              <span>{label}</span>
+            </button>
+          ))}
         </div>
       </div>
     );

@@ -101,6 +101,105 @@
 .integrated-report .markdown-report h1 { font-size: 20px; }
 .integrated-report .markdown-report h2 { font-size: 17px; }
 .integrated-report .markdown-report h3 { font-size: 15px; }
+/* 下载：非正式稿附一条说明，沿用页面已有的浅底色条提示 */
+.report-export { display: grid; gap: 10px; margin: -6px 0 20px; }
+.report-export-notice {
+  margin: 0;
+  padding: 10px 12px;
+  border-left: 3px solid var(--warning-color);
+  background: var(--bg-subtle);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.report-export[data-kind="unreviewed"] .report-export-notice { border-left-color: var(--danger-color); }
+.report-export-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* 质量反馈 */
+.report-feedback {
+  display: grid;
+  gap: 14px;
+  margin-top: 28px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border-color);
+}
+.report-feedback-hint,
+.report-feedback-state { margin: 0; color: var(--workbench-muted, #67717e); font-size: 13px; line-height: 1.6; }
+.report-feedback-notice { margin: 0; color: var(--warning-color); font-size: 13px; }
+.report-feedback-group { min-width: 0; margin: 0; padding: 0; border: 0; }
+.report-feedback-group legend { margin-bottom: 8px; padding: 0; font-size: 13px; font-weight: 500; }
+.report-feedback-optional { margin-left: 8px; color: var(--workbench-muted, #67717e); font-weight: 400; }
+.report-feedback-group:disabled { opacity: .6; }
+
+.feedback-verdict-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  max-width: 520px;
+  overflow: hidden;
+  border: 1px solid var(--workbench-control-border, #c7cdd4);
+  border-radius: 6px;
+}
+.integrated-report .feedback-verdict-option {
+  --tone: var(--success-color);
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 8px 10px;
+  font-size: 13px;
+  background: var(--workbench-surface, #fff);
+  cursor: pointer;
+  transition: background-color .15s ease, color .15s ease, box-shadow .15s ease;
+}
+.feedback-verdict-option[data-tone="warning"] { --tone: var(--warning-color); }
+.feedback-verdict-option[data-tone="danger"] { --tone: var(--danger-color); }
+.feedback-verdict-option + .feedback-verdict-option { border-left: 1px solid var(--workbench-control-border, #c7cdd4); }
+.feedback-verdict-option::before {
+  content: "";
+  flex: 0 0 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--tone);
+}
+.integrated-report .feedback-verdict-option input,
+.integrated-report .feedback-tag input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; padding: 0; border: 0; opacity: 0; cursor: inherit; }
+.feedback-verdict-option:hover { background: var(--bg-subtle); }
+.integrated-report .feedback-verdict-option[data-checked="true"] {
+  background: var(--bg-subtle);
+  background: color-mix(in srgb, var(--tone) 10%, var(--workbench-surface, #fff));
+  color: var(--tone);
+  font-weight: 600;
+  box-shadow: inset 0 -3px 0 var(--tone);
+}
+.feedback-verdict-option:focus-within,
+.feedback-tag:focus-within { outline: 2px solid var(--primary-color); outline-offset: -2px; }
+
+.feedback-tag-options { display: flex; flex-wrap: wrap; gap: 8px; }
+.integrated-report .feedback-tag {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 36px;
+  padding: 6px 12px;
+  border: 1px solid var(--workbench-control-border, #c7cdd4);
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 400;
+  background: var(--workbench-surface, #fff);
+  cursor: pointer;
+}
+.feedback-tag:hover { background: var(--bg-subtle); }
+.integrated-report .feedback-tag[data-checked="true"] {
+  border-color: var(--primary-color);
+  background: var(--primary-soft);
+  color: var(--primary-color);
+}
+
+.report-feedback-footer { display: flex; align-items: flex-end; gap: 12px; }
+.integrated-report .report-feedback-reviewer { flex: 0 1 240px; }
+
 @media (max-width: 640px) {
   .integrated-report button, .integrated-report select { min-height: 48px; }
   .integrated-report button.report-icon-button { width: 48px; height: 48px; }
@@ -108,4 +207,9 @@
   .integrated-report-toolbar select { flex: 1 1 100%; width: 100%; }
   .integrated-report-toolbar .report-status { flex-basis: 100%; }
   .integrated-report .report-checkbox { min-height: 44px; align-items: center; }
+  .integrated-report .feedback-verdict-option { min-height: 48px; }
+  .integrated-report .feedback-tag { min-height: 44px; }
+  .report-feedback-footer { flex-direction: column; align-items: stretch; }
+  .integrated-report .report-feedback-reviewer { flex-basis: auto; }
+  .report-export-actions button { flex: 1 1 0; }
 }

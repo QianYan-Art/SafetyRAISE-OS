@@ -18,6 +18,7 @@ from app.report_harness.authorization import AuthorizationRequest
 from app.report_harness.config import ReportHarnessSettings
 from app.report_harness.errors import HarnessError
 from app.report_harness.evidence_store import EvidenceStore
+from app.report_harness.lifecycle import active_outbound_runtime
 from app.report_harness.store import RunStore
 from app.schemas.chat_session import CreateChatSessionRequest, UpdateChatSessionRequest
 from app.schemas.report_run import CreateRunRequest
@@ -94,32 +95,18 @@ def get_legacy_harness_context(request: Request) -> LegacyHarnessContext | None:
     config = ReportHarnessSettings.model_validate(
         getattr(settings, "report_harness", ReportHarnessSettings())
     )
-    runtime = getattr(request.app.state, "report_harness_runtime", None)
-    development_runtime = getattr(
-        request.app.state, "report_harness_development_runtime", None,
-    )
-    blocked_reason = getattr(request.app.state, "report_harness_blocked_reason", None)
-    production_ready = bool(
-        runtime is not None
-        and getattr(runtime, "production_outbound_enabled", False) is True
-    )
-    development_ready = bool(
-        development_runtime is not None
-        and getattr(development_runtime, "development_outbound_enabled", False) is True
-        and getattr(development_runtime, "force_engineering_exports", False) is True
-        and getattr(development_runtime, "business_workflow", None) is not None
-    )
-    if production_ready:
-        selected_runtime = runtime
-    elif development_ready:
-        # 这是 business_server 显式登记的隔离开发运行时；它仍由下游
-        # engineering-only 质量门阻止正式成功和正式导出。
-        selected_runtime = development_runtime
-    elif config.online_enabled:
+    # 正式、演示或 business_server 开发运行时；后两者由下游 engineering-only
+    # 质量门阻止正式成功和正式导出。
+    selected_runtime = active_outbound_runtime(request.app.state)
+    if selected_runtime is None:
+        if not config.online_enabled:
+            # 任意未登记的 app.state 对象都不能改变离线旧接口语义。
+            return None
         # 正式运行时不可用时，历史旧产物的导出仍可依靠持久归属校验；
         # 生成请求必须继续报 503，不能借此回退 ReportService.generate。
         if "/exports/" in str(request.url.path):
             return None
+        blocked_reason = getattr(request.app.state, "report_harness_blocked_reason", None)
         if blocked_reason in {"resource_pressure", "resource_probe_failed"}:
             raise WorkflowError(
                 "正式报告运行时因资源检查暂不可用，未回退旧报告服务。",
@@ -133,9 +120,6 @@ def get_legacy_harness_context(request: Request) -> LegacyHarnessContext | None:
             status_code=503,
             retryable=False,
         )
-    else:
-        # 任意未登记的 app.state 对象都不能改变离线旧接口语义。
-        return None
 
     database_factory = request.app.dependency_overrides.get(
         deps.get_database_service, deps.get_database_service,

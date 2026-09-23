@@ -8,6 +8,8 @@
 可使用证据/运行数据接口；
 `online_enabled` 默认 false；只有同时提供完整业务 manifest、只读发布批准、
 有效代码清单及既有预算合同，主应用才可装配在线运行。旧配置缺少此配置组时行为不变。
+`release_mode` 默认 `formal`，行为同上；设为 `demo` 时不读取批准表和代码清单，在线运行固定为
+engineering_only，下载一律带标记，用于演示与人工验收期；写入真实批准后改回 `formal` 即恢复正式资格。
 源码支持这一入口不代表已部署或已通过真实报告质量验收。
 合成角色只用于控制流测试，不能证明真实报告质量。
 
@@ -155,7 +157,8 @@ token 上界必须由服务端经过验证的协议证明提供，包含可计�
 测试只接受 `REPORT_HARNESS_TEST_DSN`。host 必须为回环地址，数据库名必须以
 `safetyraise_harness_test` 开头。禁止读取业务 `.env`，缺少 DSN 是测试错误，不是跳过条件。
 
-`backend/app/report_harness/migrations/001_report_runs.sql` 是显式版本迁移。
+`backend/app/report_harness/migrations/` 下是显式版本迁移，测试库与生产库共用 `schema_migrations.MIGRATIONS`。
+生产库由操作者执行 `python -m app.report_harness.migrate`（只列出待执行版本）确认后再加 `--confirm`。
 测试 fixture 仅在已确认的独立库建立最小旧表契约和新表，并清理自己创建的用户与运行记录；
 不删除数据库、不操作已有业务用户或会话、不在生产服务启动时迁移。
 
@@ -177,7 +180,8 @@ $env:PYTHONPATH = 'backend'
 
 ## 恢复与关闭
 
-当前运行迁移版本序列为 1、2；版本不匹配拒绝使用新模式，不能降级成忽略持久化的执行。
+当前运行迁移版本序列为 1、2、3（3 为质量反馈），清单统一定义在 `schema_migrations.py`；
+版本不匹配拒绝使用新模式，不能降级成忽略持久化的执行。
 版本2解除会话到run/补证的删除外键，保留run到账本与事件的RESTRICT约束，
 并增加 `session_deletion_barriers`，不能只删除会话而遗留可执行run。
 
@@ -272,10 +276,21 @@ sidecar 掩盖失败；只有依赖明确返回无数据库对象时保留兼容
 `GET /api/v1/report-runs`以会话、limit、cursor读取运行列表；candidate是所有者
 专用详情入口，不授予发布或下载权限。导出入口为
 `/api/v1/report-runs/{run_id}/exports/{format}`，支持md/docx/pdf。
-未发布一律拒绝；正式模式每次核对历史批准，撤销立即返回409。
+导出规则集中在 `exports.available_export`，运行视图的 `export_kind` 与下载共用：已发布且批准有效为
+`formal`，已发布无批准为 `engineering`，两轮修订后仍 `needs_review` 且保留候选稿为 `unreviewed`
+（按 engineering 模式导出最后一版候选稿，标记“未通过独立审查”），其余状态拒绝。
+正式模式每次核对历史批准，撤销立即返回409。
 正式旧导出在 DOCX/PDF 渲染后还会复核一次批准，渲染期间发生撤销则不返回生成文件。
 `mode=engineering`必须显式选择，文件名和正文强制带工程标记，
 Word页眉与PDF每一页也保留标记。渲染使用独立临时目录，结束自动清理。
+
+## 质量反馈
+
+用户对自己的报告运行读写 `/api/v1/report-runs/{run_id}/feedback`：总体结论（可直接使用、修改后可用、
+不可用）、问题类型、具体意见和反馈人。每次保存追加一个修订并以 `expected_revision` 防并发覆盖，同时冻结
+运行状态、质量资格及端点、策略、知识摘要，便于把意见对应到具体版本。管理员经
+`/api/v1/admin/report-feedback` 查看每份报告的最新修订，`/export` 按同样筛选导出带 BOM 的 CSV。
+反馈不改变报告状态、质量资格或批准，也不是批准证据本身。
 
 生产批准表只从`backend/config/report_harness/approved_release_bindings.json`读取，
 初始为空，不提供API写入口。加载检查固定路径、schema、重复绑定、

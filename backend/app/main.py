@@ -17,6 +17,10 @@ from app.api.routes_input import router as input_router
 from app.api.routes_report import router as report_router
 from app.api.routes_report_runs import ReportRunBodyLimit, router as report_run_router
 from app.api.routes_report_evidence import router as report_evidence_router
+from app.api.routes_report_feedback import (
+    admin_router as report_feedback_admin_router,
+    router as report_feedback_router,
+)
 from app.api.routes_report_run_exports import router as report_run_exports_router
 from app.api.routes_user_model_configs import router as user_model_config_router
 from app.core.logger import setup_logging
@@ -43,6 +47,8 @@ app.include_router(report_router)
 app.include_router(report_run_router)
 app.include_router(report_run_exports_router)
 app.include_router(report_evidence_router)
+app.include_router(report_feedback_router)
+app.include_router(report_feedback_admin_router)
 app.include_router(input_router)
 app.include_router(chat_session_router)
 app.include_router(user_model_config_router)

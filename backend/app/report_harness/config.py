@@ -10,6 +10,9 @@ from app.schemas.report_run import BudgetPolicy
 class ReportHarnessSettings(StrictModel):
     enabled: bool = False
     online_enabled: bool = False
+    # formal：只在批准表有当前版本绑定时装配，报告具正式资格；
+    # demo：不读批准表，报告固定为工程稿并强制带标记导出，用于演示与人工验收期。
+    release_mode: Literal["formal", "demo"] = "formal"
     runtime_manifest_path: str | None = None
     resource_paths: list[str] = Field(default_factory=list)
     minimum_free_mib: int = Field(default=2048, ge=256)

@@ -18,7 +18,9 @@ from app.report_harness.errors import HarnessError
 from app.report_harness.authorization import AuthorizationCatalog, AuthorizationRequest
 from app.report_harness.config import ReportHarnessSettings
 from app.report_harness.contracts import canonical_digest
-from app.report_harness.execution import ReportExecutionDependencies, production_dependencies
+from app.report_harness.execution import (
+    ReportExecutionDependencies, outbound_ready, production_dependencies,
+)
 from app.report_harness.store import RunStore
 from app.report_harness.release_registry import FileReleaseRegistry, verified_code_digest
 from app.report_harness.prompts import load_role_prompts
@@ -101,7 +103,7 @@ def get_report_run_service(database=Depends(get_database_service),
     if config.online_enabled:
         runtime = (getattr(request.app.state, "report_harness_runtime", None)
                    if request is not None else None)
-        if runtime is None or not runtime.production_outbound_enabled:
+        if not outbound_ready(runtime):
             blocked = (getattr(request.app.state, "report_harness_blocked_reason", None)
                        if request is not None else None)
             read_or_cancel = request is not None and (

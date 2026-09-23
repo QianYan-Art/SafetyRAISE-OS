@@ -14,6 +14,7 @@ from app.report_harness.errors import HarnessError
 from app.report_harness.resources import assert_run_capacity
 from app.report_harness.contracts import canonical_digest
 from app.report_harness.evidence import EvidenceBindingError, freeze_snapshot
+from app.report_harness.schema_migrations import SCHEMA_VERSIONS
 
 TERMINAL_STATES = frozenset({"published", "needs_review", "cancelled", "failed"})
 NEXT_STATES = {
@@ -43,7 +44,7 @@ class RunStore:
             versions = conn.execute(
                 "SELECT version FROM report_run_schema_version ORDER BY version"
             ).fetchall()
-            if [v["version"] for v in versions] != [1, 2]:
+            if tuple(v["version"] for v in versions) != SCHEMA_VERSIONS:
                 raise HarnessError("schema_version_mismatch", 503)
 
     @staticmethod
