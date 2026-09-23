@@ -115,6 +115,18 @@ def test_source_context_preserves_metadata_and_does_not_present_rules_as_statute
     assert text.endswith(record["content"])
 
 
+def test_source_context_includes_governance_metadata():
+    record = {
+        "chunk_id": "source#0001", "content": "合成正文。", "effect_level": "部门规章",
+        "usage_note": "合成用法说明", "jurisdiction": "全国", "latest_revision": "2020-01-01",
+    }
+    text = source_text(record, record["chunk_id"], "source", ())
+    assert '"effect_level": "部门规章"' in text
+    assert '"jurisdiction": "全国"' in text
+    assert '"latest_revision": "2020-01-01"' in text
+    assert '"usage_note": "合成用法说明"' in text
+
+
 def test_source_neighbors_are_existing_adjacent_chunks_of_same_document(tmp_path, monkeypatch):
     settings, _, digest, sparse = fixture_settings(tmp_path, monkeypatch)
     sparse._chunk_records = [

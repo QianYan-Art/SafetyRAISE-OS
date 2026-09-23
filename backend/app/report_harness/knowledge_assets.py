@@ -34,6 +34,8 @@ def source_text(
     metadata = {
         key: record[key] for key in (
             "authority", "category", "effective_date", "fetched_at", "citation", "raw_sha256",
+            "effect_level", "usage_note", "jurisdiction", "latest_revision", "validity_note",
+            "published_date", "supersedes",
         ) if key in record
     }
     kind = ("规则摘录，仅作为检索线索，不等于完整法条；需另读来源条文。"

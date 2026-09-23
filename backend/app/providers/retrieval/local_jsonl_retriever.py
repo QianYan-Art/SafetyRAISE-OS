@@ -12,6 +12,16 @@ from app.core.rust_accel import load_rust_token_accel
 from app.providers.retrieval.base import BaseRetriever
 
 _LOCAL_JSONL_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
+GOVERNANCE_FIELDS = (
+    "effect_level",
+    "usage_note",
+    "jurisdiction",
+    "effective_date",
+    "latest_revision",
+    "validity_note",
+    "published_date",
+    "supersedes",
+)
 
 
 class LocalJsonlRetriever(BaseRetriever):
@@ -686,7 +696,7 @@ class LocalJsonlRetriever(BaseRetriever):
 
     def _to_result(self, record: dict[str, Any], score: float, record_type: str) -> dict[str, Any]:
         identifier = record.get("chunk_id") or record.get("rule_id") or record.get("source_id") or "unknown"
-        return {
+        result = {
             "id": identifier,
             "title": record.get("title", ""),
             "content": record.get("content", ""),
@@ -698,6 +708,13 @@ class LocalJsonlRetriever(BaseRetriever):
             "category": record.get("category", ""),
             "authority": record.get("authority", ""),
         }
+        # 知识库治理字段（效力层级、使用边界、适用地域、版本效力）随片段进入报告提示词；
+        # dense 命中本就携带 dense_records 的全部字段，这里让稀疏命中保持一致。
+        for key in GOVERNANCE_FIELDS:
+            value = record.get(key)
+            if value not in (None, "", []):
+                result[key] = value
+        return result
 
     def _deduplicate(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         deduped: list[dict[str, Any]] = []

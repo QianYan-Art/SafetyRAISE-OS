@@ -356,6 +356,8 @@ python backend/app/tools/build_dense_index.py \
 7. `liability_subjects`
 8. `chunk_id` / `rule_id` / `source_id`
 
+知识库构建目录的治理流程还会给片段写入 `effect_level`、`usage_note`、`jurisdiction`、`effective_date`、`latest_revision`、`validity_note`、`published_date`、`supersedes`。这些字段不参与排序，稀疏与稠密命中都会原样带入报告提示词，供模型判断效力层级、适用地域和版本；缺少时检索照常工作。
+
 ## 首次联调顺序
 
 推荐顺序如下：
