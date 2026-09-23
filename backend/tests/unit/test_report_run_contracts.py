@@ -426,3 +426,37 @@ def test_first_review_cannot_declare_resolved_and_semantic_minor_is_rejected() -
         "status": "open",
     }
     publish(candidate, make_review(candidate, issues=[style_issue]))
+
+
+def test_candidate_problems_are_itemized_for_generator_repair() -> None:
+    import re
+
+    from app.report_harness.contracts import candidate_contract_problems, candidate_round_problems
+
+    assert candidate_contract_problems(make_candidate(), {OBLIGATION_ID}) == []
+    candidate = make_candidate(
+        claims=[
+            {"claim_id": "claim-1", "text_span": {"start": 0, "end": 6}, "type": "fact"},
+            {"claim_id": "claim-2", "text_span": {"start": 0, "end": 6}, "type": "knowledge",
+             "evidence_refs": [EVIDENCE_ID]},
+        ],
+        obligation_resolutions=[],
+    )
+    problems = candidate_contract_problems(candidate, {OBLIGATION_ID})
+    assert [(kind, loc) for kind, loc, _message in problems] == [
+        ("candidate_contract", ("claims", 0)),
+        ("candidate_contract", ("claims", 1, "knowledge_refs")),
+        ("candidate_contract", ("obligation_resolutions",)),
+    ]
+    # 发布终检沿用同一规则，报出第一项。
+    with pytest.raises(ValueError, match=re.escape(problems[0][2])):
+        publish(candidate, make_review(candidate))
+
+    responses = [{"issue_id": issue_id, "action": "revised", "explanation": "合成修订。",
+                  "source_refs": [EVIDENCE_ID]} for issue_id in ("open-1", "open-1", "closed-1")]
+    candidate = make_candidate(version=2, issue_responses=responses)
+    problems = candidate_round_problems(candidate, version=3, open_issue_ids={"open-1"})
+    assert [loc for _kind, loc, _message in problems] == [
+        ("version",), ("issue_responses", 1, "issue_id"), ("issue_responses", 2, "issue_id"),
+    ]
+    assert candidate_round_problems(make_candidate(), version=1, open_issue_ids=()) == []

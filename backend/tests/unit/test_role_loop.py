@@ -375,8 +375,8 @@ def test_rejected_final_response_gets_itemized_feedback_and_may_read_before_resu
 
     def accept(_candidate):
         if "accident:/天气" not in read:
-            raise ResponseRejected("source_not_read", [
-                (("claims", 0, "evidence_refs"), "accident:/天气：本轮尚未读取该事实原文"),
+            raise ResponseRejected([
+                ("source_not_read", ("claims", 0, "evidence_refs"), "accident:/天气：本轮尚未读取该事实原文"),
             ])
 
     loop = RoleLoop(ReadingTools(), lambda *_: None, before_call=lambda: None)
@@ -399,7 +399,7 @@ def test_rejection_that_is_never_fixed_stops_after_two_repairs():
         return {"version": 1, "report_markdown": "合成正文"}
 
     def accept(_candidate):
-        raise ResponseRejected("source_not_read", [((), "synthetic-rule：本轮尚未读取")])
+        raise ResponseRejected([("source_not_read", (), "synthetic-rule：本轮尚未读取")])
 
     loop = RoleLoop(LocalTools(), lambda *_: None, before_call=lambda: None)
     with pytest.raises(HarnessError, match="invalid_role_response") as raised:

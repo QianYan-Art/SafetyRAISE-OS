@@ -159,6 +159,81 @@ def _validate_mixed_refs(
             raise ValueError(f"{location} 包含越界来源引用：{ref}。")
 
 
+CANDIDATE_CONTRACT = "candidate_contract"
+
+
+def candidate_contract_problems(
+    candidate: CandidateReport, obligation_ids: Iterable[object],
+) -> list[tuple[str, tuple, str]]:
+    """候选稿自身的确定性约定（不含来源授权），逐项列出 (类型, 字段路径, 说明)。
+
+    生成阶段据此反馈给模型修正；发布与审查结构校验仍以同一规则拒绝。
+    """
+    required_obligations = _normalize_ids(obligation_ids, "obligation_ids")
+    markdown = candidate.report_markdown
+    problems: list[tuple[str, tuple, str]] = []
+
+    def problem(loc: tuple, message: str) -> None:
+        problems.append((CANDIDATE_CONTRACT, loc, message))
+
+    if not markdown.strip():
+        problem(("report_markdown",), "候选正文不能为空。")
+    if not candidate.claims:
+        problem(("claims",), "候选必须包含至少一个可追溯断言。")
+    claim_ids: set[str] = set()
+    for index, claim in enumerate(candidate.claims):
+        if claim.claim_id in claim_ids:
+            problem(("claims", index, "claim_id"), f"候选包含重复 claim_id：{claim.claim_id}。")
+        claim_ids.add(claim.claim_id)
+        if claim.text_span.end > len(markdown):
+            problem(("claims", index, "text_span"),
+                    f"断言 {claim.claim_id} 的正文定位超出候选正文范围。")
+        if not markdown[claim.text_span.start:claim.text_span.end].strip():
+            problem(("claims", index, "text_span"),
+                    f"断言 {claim.claim_id} 的正文定位没有覆盖正文内容。")
+        if not claim.evidence_refs and not claim.knowledge_refs:
+            problem(("claims", index), f"断言 {claim.claim_id} 缺少来源引用。")
+        if claim.type == "knowledge" and not claim.knowledge_refs:
+            problem(("claims", index, "knowledge_refs"),
+                    f"knowledge 断言 {claim.claim_id} 必须引用 knowledge。")
+
+    seen_obligations: set[str] = set()
+    for index, item in enumerate(candidate.obligation_resolutions):
+        loc = ("obligation_resolutions", index)
+        if item.obligation_id in seen_obligations:
+            problem(loc, f"候选包含重复 obligation_id：{item.obligation_id}。")
+        elif item.obligation_id not in required_obligations:
+            problem(loc, f"候选包含未声明义务：{item.obligation_id}。")
+        seen_obligations.add(item.obligation_id)
+        if not item.resolution.strip():
+            problem(loc, f"义务 {item.obligation_id} 缺少处置说明。")
+    missing_obligations = required_obligations - seen_obligations
+    if missing_obligations:
+        problem(("obligation_resolutions",), f"候选缺少义务处置：{sorted(missing_obligations)}。")
+    return problems
+
+
+def candidate_round_problems(
+    candidate: CandidateReport, *, version: int, open_issue_ids: Iterable[str],
+) -> list[tuple[str, tuple, str]]:
+    """本轮候选须声明当前版本号；问题回应只能针对台账中未关闭的问题，且不重复。"""
+    open_ids = set(open_issue_ids)
+    problems: list[tuple[str, tuple, str]] = []
+    if candidate.version != version:
+        problems.append((CANDIDATE_CONTRACT, ("version",), f"候选版本必须为 {version}。"))
+    seen: set[str] = set()
+    for index, response in enumerate(candidate.issue_responses):
+        loc = ("issue_responses", index, "issue_id")
+        if response.issue_id in seen:
+            problems.append((CANDIDATE_CONTRACT, loc,
+                             f"{response.issue_id}：同一批回应不能重复 issue_id。"))
+        elif response.issue_id not in open_ids:
+            problems.append((CANDIDATE_CONTRACT, loc,
+                             f"{response.issue_id}：只能回应台账中当前未关闭问题的 issue_id。"))
+        seen.add(response.issue_id)
+    return problems
+
+
 def _validate_report_contract(
     candidate: CandidateReport,
     review: ReviewResult,
@@ -190,24 +265,11 @@ def _validate_report_contract(
     allowed_evidence = _normalize_ids(evidence_ids, "evidence_ids")
     allowed_knowledge = _normalize_ids(knowledge_ids, "knowledge_ids")
 
-    if not candidate.report_markdown.strip():
-        raise ValueError("候选正文不能为空。")
-    if not candidate.claims:
-        raise ValueError("候选必须包含至少一个可追溯断言。")
-
-    claim_ids: set[str] = set()
+    problems = candidate_contract_problems(candidate, required_obligations)
+    if problems:
+        raise ValueError(problems[0][2])
+    claim_ids = {claim.claim_id for claim in candidate.claims}
     for claim in candidate.claims:
-        if claim.claim_id in claim_ids:
-            raise ValueError(f"候选包含重复 claim_id：{claim.claim_id}。")
-        claim_ids.add(claim.claim_id)
-        if claim.text_span.end > len(candidate.report_markdown):
-            raise ValueError(f"断言 {claim.claim_id} 的正文定位超出候选正文范围。")
-        if not candidate.report_markdown[claim.text_span.start:claim.text_span.end].strip():
-            raise ValueError(f"断言 {claim.claim_id} 的正文定位没有覆盖正文内容。")
-        if not claim.evidence_refs and not claim.knowledge_refs:
-            raise ValueError(f"断言 {claim.claim_id} 缺少来源引用。")
-        if claim.type == "knowledge" and not claim.knowledge_refs:
-            raise ValueError(f"knowledge 断言 {claim.claim_id} 必须引用 knowledge。")
         _validate_split_refs(
             claim.evidence_refs,
             claim.knowledge_refs,
@@ -215,19 +277,6 @@ def _validate_report_contract(
             allowed_knowledge,
             f"断言 {claim.claim_id}",
         )
-
-    seen_obligations: set[str] = set()
-    for item in candidate.obligation_resolutions:
-        if item.obligation_id in seen_obligations:
-            raise ValueError(f"候选包含重复 obligation_id：{item.obligation_id}。")
-        if item.obligation_id not in required_obligations:
-            raise ValueError(f"候选包含未声明义务：{item.obligation_id}。")
-        seen_obligations.add(item.obligation_id)
-        if not item.resolution.strip():
-            raise ValueError(f"义务 {item.obligation_id} 缺少处置说明。")
-    missing_obligations = required_obligations - seen_obligations
-    if missing_obligations:
-        raise ValueError(f"候选缺少义务处置：{sorted(missing_obligations)}。")
 
     seen_coverage_obligations: set[str] = set()
     for check in review.coverage_checks:

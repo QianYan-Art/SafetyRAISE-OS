@@ -12,8 +12,9 @@ from psycopg.rows import dict_row
 
 from app.adapters.input.dict_input_adapter import DictInputAdapter
 from app.report_harness.contracts import (
-    canonical_digest, enforce_semantic_severity, enforce_source_authority,
-    validate_publication, validate_review_structure,
+    canonical_digest, candidate_contract_problems, candidate_round_problems,
+    enforce_semantic_severity, enforce_source_authority, validate_publication,
+    validate_review_structure,
 )
 from app.report_harness.authorization import AuthorizationRequest
 from app.report_harness.evidence import freeze_snapshot
@@ -21,7 +22,7 @@ from app.report_harness.errors import HarnessError
 from app.report_harness.execution import ReportExecutionDependencies
 from app.report_harness.controlled_tools import ControlledTools
 from app.report_harness.role_loop import ResponseRejected, RoleLoop, role_context, tool_schemas
-from app.report_harness.source_access import check_generator_access, check_reviewer_access
+from app.report_harness.source_access import generator_access_problems, reviewer_access_problems
 from app.report_harness.journal import ExecutionJournal, JOURNAL_VERSION
 from app.report_harness.recovery import (
     RunRecovery, can_resume_protocol, can_resume_tool_contract,
@@ -46,8 +47,9 @@ def _failure_detail(exc: BaseException | None) -> dict | None:
             for item in exc.errors(include_input=False, include_url=False)[:16]
         ]}
     if isinstance(exc, ResponseRejected):
-        return {"kind": exc.code, "errors": [
-            {"loc": [str(part)[:80] for part in item["loc"]], "message": item["msg"][:200]}
+        return {"kind": "response_rejected", "errors": [
+            {"type": item["type"], "loc": [str(part)[:80] for part in item["loc"]],
+             "message": item["msg"][:200]}
             for item in exc.errors()[:16]
         ]}
     if isinstance(exc, ValueError):
@@ -139,7 +141,7 @@ class ReportRunService:
     @staticmethod
     def _contract_digest() -> str:
         return canonical_digest({
-            "controller_version": 6, "journal_version": JOURNAL_VERSION,
+            "controller_version": 7, "journal_version": JOURNAL_VERSION,
             "candidate": CandidateReport.model_json_schema(),
             "review": ReviewResult.model_json_schema(), "tools": tool_schemas(),
         })
@@ -558,10 +560,25 @@ class ReportRunService:
                                tools, loop, ledger, version, previous, feedback,
                                initial_snippets=None):
         snapshot = record["snapshot"]
+        obligations = snapshot["fact_obligations"]
         context_snapshot, inline_evidence = role_context(snapshot)
         tools.reset_access("generator")
         initial_snippets = initial_snippets or []
         tools.include_knowledge("generator", initial_snippets)
+        obligation_ids = [item["obligation_id"] for item in obligations]
+        open_issue_ids = [item["issue_id"] for item in ledger.unresolved()]
+
+        def accept_candidate(draft):
+            # 审查前先确认候选契约与本轮取证，问题逐项交还生成者修正，不花审查费用。
+            problems = [
+                *candidate_round_problems(draft, version=version, open_issue_ids=open_issue_ids),
+                *candidate_contract_problems(draft, obligation_ids),
+                *generator_access_problems(draft, inline_evidence | tools.accessed_evidence("generator"),
+                                           tools.accessed_knowledge("generator")),
+            ]
+            if problems:
+                raise ResponseRejected(problems)
+
         candidate = CandidateReport.model_validate(await loop.run("generator", roles.generate, {
             "instructions": record["role_prompts"]["generator"],
             "response_schema": CandidateReport.model_json_schema(),
@@ -570,10 +587,7 @@ class ReportRunService:
             "unresolved_issues": ledger.unresolved(),
             "review_feedback": deepcopy(feedback),
             "initial_knowledge_snippets": deepcopy(initial_snippets),
-        }, accept=lambda draft: check_generator_access(
-            draft, inline_evidence | tools.accessed_evidence("generator"),
-            tools.accessed_knowledge("generator"),
-        )))
+        }, accept=accept_candidate))
         if candidate.version != version:
             raise ValueError("候选版本不匹配。")
         candidate_data = candidate.model_dump(mode="json")
@@ -591,20 +605,25 @@ class ReportRunService:
         )
         # 每个版本重新构造审查上下文，不传生成者私有历史、自评或专家指导。
         tools.reset_access("reviewer")
-        obligations = snapshot["fact_obligations"]
         required_evidence = {ref for item in obligations for ref in item["source_refs"]}
         candidate_knowledge = {ref for claim in candidate.claims for ref in claim.knowledge_refs}
+
+        def accept_review(_review):
+            problems = reviewer_access_problems(
+                required_evidence, candidate_knowledge,
+                inline_evidence | tools.accessed_evidence("reviewer"),
+                tools.accessed_knowledge("reviewer"),
+            )
+            if problems:
+                raise ResponseRejected(problems)
+
         review = ReviewResult.model_validate(await loop.run("reviewer", roles.review, {
             "instructions": record["role_prompts"]["reviewer"],
             "response_schema": ReviewResult.model_json_schema(),
             "snapshot": deepcopy(context_snapshot), "snapshot_digest": record["snapshot_digest"],
             "candidate": deepcopy(candidate_data), "candidate_digest": canonical_digest(candidate_data),
             "unresolved_issues": ledger.unresolved(),
-        }, accept=lambda _review: check_reviewer_access(
-            required_evidence, candidate_knowledge,
-            inline_evidence | tools.accessed_evidence("reviewer"),
-            tools.accessed_knowledge("reviewer"),
-        )))
+        }, accept=accept_review))
         self.store.transition(owner, run_id, token, "checking",
                               {"review": review.model_dump(mode="json")},
                               "review", {"candidate_version": version})
@@ -615,7 +634,7 @@ class ReportRunService:
             else record["knowledge_source"],
             ledger.history(),
         )))
-        # 取证约定已由角色循环在接受最终响应前检查（source_access）。
+        # 候选契约与取证约定已在角色循环接受最终响应前检查；以下为审查结构与发布前终检。
         reviewer_evidence = inline_evidence | tools.accessed_evidence("reviewer")
         reviewer_knowledge = tools.accessed_knowledge("reviewer")
         check_args = (

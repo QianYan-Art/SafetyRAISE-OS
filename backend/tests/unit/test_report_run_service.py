@@ -308,5 +308,43 @@ def test_revision_that_never_rereads_stops_with_recorded_reason():
     assert result["terminal_reason"] == "invalid_role_response"
     assert "report" not in result
     detail = record["terminal_detail"]
-    assert detail["kind"] == "source_not_read"
-    assert all("legal-rule" in item["message"] for item in detail["errors"])
+    assert detail["kind"] == "response_rejected"
+    assert all(item["type"] == "source_not_read" and "legal-rule" in item["message"]
+               for item in detail["errors"])
+
+
+class UnsourcedClaimRoles(SyntheticRoles):
+    """首稿含一条无来源断言；fix 时按协议反馈补上来源。"""
+
+    def __init__(self, fix):
+        super().__init__()
+        self.fix = fix
+        self.generator_feedback = []
+
+    async def generate(self, context):
+        self.generator_feedback.append(context.get("protocol_feedback"))
+        result = await super().generate(context)
+        if not (self.fix and "protocol_feedback" in context):
+            result["claims"][0]["evidence_refs"] = []
+        return result
+
+
+@pytest.mark.parametrize("fix", [True, False])
+def test_candidate_contract_is_repaired_before_paying_for_review(fix):
+    roles = UnsourcedClaimRoles(fix)
+    service = ReportRunService(MemoryStore(), dependencies(roles))
+    run = create(service)
+    result = asyncio.run(service.execute("owner", run["run_id"], 0))
+    feedback = roles.generator_feedback[1]["repairs"][0]["errors"]
+    assert feedback == [{"type": "candidate_contract", "path": ["claims", 0],
+                         "message": "断言 claim-1 缺少来源引用。"}]
+    if fix:
+        assert result["state"] == "published", result["terminal_reason"]
+        assert roles.calls == ["prepare", "generate", "generate", "review"]
+    else:
+        assert result["state"] == "needs_review"
+        assert result["terminal_reason"] == "invalid_role_response"
+        assert roles.calls == ["prepare", "generate", "generate", "generate"]
+        detail = service.store.get("owner", run["run_id"])["terminal_detail"]
+        assert detail["kind"] == "response_rejected"
+        assert detail["errors"][0]["type"] == "candidate_contract"

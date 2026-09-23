@@ -74,18 +74,17 @@ class ToolTurn(StrictModel):
 
 
 class ResponseRejected(ValueError):
-    """结构完整、但违反本轮取证约定的最终响应；逐项反馈给模型补读或改引，不放宽约定。"""
+    """结构完整、但违反本轮约定（候选契约、取证）的最终响应；逐项反馈给模型修正，不放宽约定。"""
 
-    def __init__(self, code: str, problems: list[tuple[tuple, str]]):
-        if not problems:
-            raise ValueError("拒绝响应必须列出具体问题。")
-        super().__init__(problems[0][1])
-        self.code = code
+    def __init__(self, problems: list[tuple[str, tuple, str]]):
         self.problems = list(problems)
+        if not self.problems:
+            raise ValueError("拒绝响应必须列出具体问题。")
+        super().__init__(self.problems[0][2])
 
     def errors(self) -> list[dict]:
-        return [{"type": self.code, "loc": list(loc), "msg": message}
-                for loc, message in self.problems]
+        return [{"type": kind, "loc": list(loc), "msg": message}
+                for kind, loc, message in self.problems]
 
 
 def normalize_tool_response(response: dict) -> dict:
@@ -188,9 +187,9 @@ class RoleLoop:
                        "tools": tool_schemas(retrieval_constraints())}
             if repairs:
                 current["protocol_feedback"] = {
-                    "instruction": "上次响应未通过程序校验，按repairs逐项修正：结构问题返回完整"
-                                   "response_schema对象；本轮未读原文的来源先返回tool_calls读取，"
-                                   "或删去该引用；不要仅返回字段、断言片段或思考。",
+                    "instruction": "上次响应未通过程序校验，按repairs逐项修正：结构或契约问题返回"
+                                   "修正后的完整response_schema对象；本轮未读原文的来源先返回"
+                                   "tool_calls读取，或删去该引用；不要仅返回字段、断言片段或思考。",
                     "repairs": deepcopy(repairs),
                 }
             if self.journal is not None and hasattr(self.journal, "model_context"):
