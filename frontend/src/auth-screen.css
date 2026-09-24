@@ -1,0 +1,517 @@
+/*
+ * 登录与注册页：左侧品牌区（事故现场示意图与处理流程），右侧表单直接置于页面表面，不另套卡片。
+ * 颜色、圆角与阴影只取 styles.css 的设计令牌；品牌区使用 --color-brand 与 --color-on-brand-* 系列。
+ */
+.auth-screen {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: minmax(400px, 5fr) minmax(420px, 6fr);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+/* ---- 品牌区 ---- */
+.auth-brand {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+  min-width: 0;
+  padding: 40px 48px 32px;
+  background: var(--color-brand);
+  color: var(--color-on-brand);
+}
+
+.auth-brand-name {
+  color: var(--color-on-brand-muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.auth-scene {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  justify-content: center;
+  gap: 10px;
+  min-height: 0;
+  margin: 0;
+}
+
+.auth-scene figcaption {
+  color: var(--color-on-brand-subtle);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}
+
+.auth-sketch {
+  display: block;
+  width: 100%;
+  max-width: 520px;
+  height: auto;
+  overflow: visible;
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.auth-sketch-curb path { stroke: var(--color-on-brand-muted); stroke-width: 1.5; }
+.auth-sketch-lane path { stroke: var(--color-on-brand-line); stroke-width: 1.5; stroke-dasharray: 14 10; }
+.auth-sketch-stop path { stroke: var(--color-on-brand-muted); stroke-width: 3; }
+.auth-sketch-zebra rect { fill: var(--color-on-brand-line); }
+.auth-sketch-path path { stroke: var(--color-on-brand-subtle); stroke-width: 1.2; stroke-dasharray: 3 5; }
+.auth-sketch-measure path,
+.auth-sketch-north path { stroke: var(--color-on-brand-subtle); stroke-width: 1; }
+.auth-sketch-measure .auth-sketch-extension { stroke-dasharray: 2 4; }
+
+.auth-sketch text {
+  fill: var(--color-on-brand-muted);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  stroke: none;
+}
+
+.auth-sketch-vehicle rect { fill: var(--color-on-brand); stroke: none; }
+.auth-sketch-vehicle text { fill: var(--color-on-brand); font-size: 15px; }
+.auth-sketch-impact circle { stroke: var(--color-on-brand); stroke-width: 1.5; stroke-dasharray: 4 3; }
+
+/* 两车沿轨迹驶入后标出碰撞点；只在页面加载时播放一次。 */
+.auth-sketch-vehicle,
+.auth-sketch-impact {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.auth-sketch-vehicle-a { animation: auth-arrive-east 0.9s cubic-bezier(0.2, 0.7, 0.2, 1) 0.15s both; }
+.auth-sketch-vehicle-b { animation: auth-arrive-north 0.9s cubic-bezier(0.2, 0.7, 0.2, 1) 0.15s both; }
+.auth-sketch-impact { animation: auth-mark-impact 0.4s ease-out 1s both; }
+
+@keyframes auth-arrive-east {
+  from { opacity: 0; transform: translateX(-36px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes auth-arrive-north {
+  from { opacity: 0; transform: translateY(36px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes auth-mark-impact {
+  from { opacity: 0; transform: scale(0.4); }
+  to { opacity: 1; transform: none; }
+}
+
+.auth-brand-copy h1 {
+  margin: 0 0 10px;
+  font-size: clamp(28px, 2.5vw, 36px);
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.auth-brand-copy h1 span { display: block; }
+
+.auth-brand-lead {
+  max-width: 28em;
+  margin: 0;
+  text-wrap: pretty;
+  color: var(--color-on-brand-muted);
+  font-size: 15px;
+  line-height: 1.7;
+}
+
+/* 与工作台顶部阶段导航同名同序。 */
+.auth-steps {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+  margin: 24px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.auth-steps li {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.auth-steps li + li::before {
+  content: "";
+  width: 20px;
+  height: 1px;
+  margin-right: 4px;
+  background: var(--color-on-brand-line);
+}
+
+.auth-step-index {
+  display: inline-grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border: 1px solid var(--color-on-brand-line);
+  border-radius: 50%;
+  color: var(--color-on-brand-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.auth-brand-footer {
+  color: var(--color-on-brand-subtle);
+  font-size: 12px;
+}
+
+/* ---- 表单区 ---- */
+.auth-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 20px 24px 40px;
+  background: var(--color-surface);
+}
+
+.auth-panel-bar {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.auth-theme-toggle {
+  display: inline-flex;
+  width: 36px;
+  height: 36px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--color-line-strong);
+  border-radius: var(--radius-control);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+}
+
+.auth-theme-toggle:hover {
+  background: var(--color-surface-subtle);
+  color: var(--color-text);
+}
+
+.auth-form {
+  display: grid;
+  gap: 18px;
+  width: min(380px, 100%);
+  margin: auto;
+  padding: 24px 0;
+}
+
+.auth-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  padding: 3px;
+  border-radius: var(--radius-card);
+  background: var(--color-surface-muted);
+}
+
+.auth-switch button {
+  min-height: 34px;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.auth-switch button:hover {
+  color: var(--color-text);
+}
+
+.auth-switch button[aria-pressed="true"] {
+  background: var(--color-surface);
+  box-shadow: var(--shadow-raised);
+  color: var(--color-text);
+  font-weight: 600;
+}
+
+.auth-heading h2 {
+  margin: 4px 0 6px;
+  color: var(--color-text);
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.auth-heading p {
+  margin: 0;
+  text-wrap: pretty;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.auth-message {
+  padding: 10px 12px;
+  border: 1px solid;
+  border-radius: var(--radius-card);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.auth-message.is-error {
+  border-color: var(--color-danger-line);
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+
+.auth-message.is-info {
+  border-color: var(--color-accent-line);
+  background: var(--color-accent-soft);
+  color: var(--color-accent-text);
+}
+
+.auth-field {
+  display: grid;
+  gap: 6px;
+}
+
+.auth-field label {
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.auth-field-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.auth-optional {
+  margin-left: 6px;
+  color: var(--color-text-subtle);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.auth-input {
+  width: 100%;
+  min-height: 42px;
+  padding: 9px 12px;
+  border: 1px solid var(--color-line-strong);
+  border-radius: var(--radius-control);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.auth-input:focus {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px var(--color-focus-ring);
+}
+
+.auth-input[aria-invalid="true"] {
+  border-color: var(--color-danger);
+}
+
+.auth-input[aria-invalid="true"]:focus {
+  box-shadow: 0 0 0 3px var(--color-danger-soft);
+}
+
+.auth-input:disabled {
+  background: var(--color-surface-subtle);
+  color: var(--color-text-subtle);
+  cursor: not-allowed;
+}
+
+.auth-input-wrap {
+  position: relative;
+}
+
+.auth-input-wrap .auth-input {
+  padding-right: 44px;
+}
+
+.auth-reveal {
+  position: absolute;
+  top: 50%;
+  right: 5px;
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--color-text-muted);
+  transform: translateY(-50%);
+}
+
+.auth-reveal:hover:not(:disabled) {
+  background: var(--color-surface-subtle);
+  color: var(--color-text);
+}
+
+.auth-hint,
+.auth-field-error {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.auth-hint { color: var(--color-text-subtle); }
+.auth-field-error { color: var(--color-danger); }
+
+.auth-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-accent-text);
+  font-size: 12px;
+}
+
+.auth-link:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.auth-strength {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--color-text-subtle);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.auth-strength-bars {
+  display: grid;
+  flex: 0 0 72px;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+}
+
+.auth-strength-bars span {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--color-surface-muted);
+}
+
+.auth-strength-bars .is-weak { background: var(--color-danger); }
+.auth-strength-bars .is-medium { background: var(--color-warning); }
+.auth-strength-bars .is-strong { background: var(--color-success); }
+
+/* 组件样式先于 styles.css 载入，需高于同权重的全局 .btn-primary。 */
+.auth-form .auth-submit {
+  width: 100%;
+  min-height: 44px;
+  margin-top: 4px;
+  font-size: 15px;
+}
+
+.auth-submit-content {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.auth-switch button:focus-visible,
+.auth-theme-toggle:focus-visible,
+.auth-reveal:focus-visible,
+.auth-link:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* ---- 窄屏：品牌区收成一条标题栏，底边以车道虚线呼应现场示意图 ---- */
+@media (max-width: 1100px) {
+  .auth-brand {
+    padding: 36px 36px 28px;
+  }
+}
+
+@media (max-width: 960px) {
+  .auth-screen {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+
+  .auth-brand {
+    gap: 4px;
+    padding: 18px 20px 22px;
+  }
+
+  .auth-brand::after {
+    content: "";
+    position: absolute;
+    right: 20px;
+    bottom: 8px;
+    left: 20px;
+    height: 2px;
+    background: repeating-linear-gradient(90deg, var(--color-on-brand-line) 0 24px, transparent 24px 40px);
+  }
+
+  .auth-scene,
+  .auth-brand-lead,
+  .auth-steps,
+  .auth-brand-footer {
+    display: none;
+  }
+
+  .auth-brand-copy h1 {
+    margin: 0;
+    padding-right: 44px;
+    font-size: 20px;
+  }
+
+  /* 主题按钮移入标题栏右上角，不单独占一行。 */
+  .auth-screen {
+    position: relative;
+  }
+
+  .auth-panel-bar {
+    position: absolute;
+    top: 14px;
+    right: 16px;
+  }
+
+  .auth-theme-toggle {
+    border-color: var(--color-on-brand-line);
+    background: transparent;
+    color: var(--color-on-brand);
+  }
+
+  .auth-theme-toggle:hover {
+    background: var(--color-on-brand-line);
+    color: var(--color-on-brand);
+  }
+
+  .auth-theme-toggle:focus-visible {
+    outline-color: var(--color-on-brand);
+  }
+
+  /* 两段各自成块换行，窄屏不在词中断开。 */
+  .auth-brand-copy h1 span {
+    display: inline-block;
+  }
+
+  .auth-panel {
+    padding: 8px 20px 32px;
+  }
+
+  .auth-form {
+    margin: 0 auto;
+    padding-top: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-sketch-vehicle-a,
+  .auth-sketch-vehicle-b,
+  .auth-sketch-impact {
+    animation: none;
+  }
+}

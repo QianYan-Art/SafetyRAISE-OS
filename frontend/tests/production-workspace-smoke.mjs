@@ -298,7 +298,7 @@ async function loginPage(page, credentials) {
   await page.goto(baseUrl, { waitUntil: "networkidle" });
   await page.getByLabel("用户名", { exact: true }).fill(credentials.username);
   await page.getByLabel("密码", { exact: true }).fill(credentials.password);
-  await page.locator("button.auth-submit-btn").click();
+  await page.getByRole("form", { name: "登录工作台" }).locator('button[type="submit"]').click();
   await page.getByRole("button", { name: "打开档案列表", exact: true }).waitFor();
 }
 

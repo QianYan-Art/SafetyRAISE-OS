@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState, type FormEvent } from "react";
+import "./auth-screen.css";
 
 type ThemeMode = "light" | "dark";
 type AuthMode = "login" | "register";
@@ -15,47 +16,99 @@ interface AuthScreenProps {
 }
 
 const PASSWORD_MIN_LENGTH = 8;
-type FieldErrorState = Partial<Record<"username" | "password" | "confirmPassword", string>>;
+const WORKFLOW_STEPS = ["整理资料", "核对事实", "查看报告"] as const;
+type FieldName = "username" | "password" | "confirmPassword";
+type FieldErrorState = Partial<Record<FieldName, string>>;
+
+const MODE_COPY: Record<AuthMode, { title: string; description: string; submit: string; pending: string }> = {
+  login: {
+    title: "登录工作台",
+    description: "使用管理员分配或自行注册的账号登录。",
+    submit: "登录",
+    pending: "正在登录…",
+  },
+  register: {
+    title: "注册新账号",
+    description: "注册为普通用户。首次进入工作台时，需要先填写视觉与报告模型的接入配置。",
+    submit: "注册",
+    pending: "正在注册…",
+  },
+};
 
 function SunIcon() {
   return (
-    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <circle cx="12" cy="12" r="4" />
-      <path d="M12 2v2.5" />
-      <path d="M12 19.5V22" />
-      <path d="M4.93 4.93l1.77 1.77" />
-      <path d="M17.3 17.3l1.77 1.77" />
-      <path d="M2 12h2.5" />
-      <path d="M19.5 12H22" />
-      <path d="M4.93 19.07l1.77-1.77" />
-      <path d="M17.3 6.7l1.77-1.77" />
+      <path d="M12 2v2.5M12 19.5V22M4.93 4.93l1.77 1.77M17.3 17.3l1.77 1.77M2 12h2.5M19.5 12H22M4.93 19.07l1.77-1.77M17.3 6.7l1.77-1.77" />
     </svg>
   );
 }
 
 function MoonIcon() {
   return (
-    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z" />
     </svg>
   );
 }
 
 function EyeIcon(props: { open: boolean }) {
-  if (props.open) {
-    return (
-      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-        <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z" />
-        <circle cx="12" cy="12" r="3" />
-      </svg>
-    );
-  }
   return (
-    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M3 3l18 18" />
-      <path d="M10.58 10.58A2 2 0 0 0 12 14a2 2 0 0 0 1.42-.58" />
-      <path d="M9.88 5.09A9.77 9.77 0 0 1 12 5c6.4 0 10 7 10 7a18.34 18.34 0 0 1-4.22 5.12" />
-      <path d="M6.61 6.61C4.62 8.02 3.33 10.14 2 12c0 0 3.6 7 10 7 1.73 0 3.26-.51 4.56-1.24" />
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {props.open ? (
+        <>
+          <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z" />
+          <circle cx="12" cy="12" r="3" />
+        </>
+      ) : (
+        <path d="M3 3l18 18M10.58 10.58A2 2 0 0 0 12 14a2 2 0 0 0 1.42-.58M9.88 5.09A9.77 9.77 0 0 1 12 5c6.4 0 10 7 10 7a18.34 18.34 0 0 1-4.22 5.12M6.61 6.61C4.62 8.02 3.33 10.14 2 12c0 0 3.6 7 10 7 1.73 0 3.26-.51 4.56-1.24" />
+      )}
+    </svg>
+  );
+}
+
+/** 品牌区的事故现场示意图：十字路口、车道与停止线、人行横道、两车轨迹与碰撞点，按交警现场图的画法附指北针与测距。纯装饰。 */
+function SceneSketch() {
+  return (
+    <svg className="auth-sketch" viewBox="0 0 440 300" aria-hidden="true" focusable="false">
+      <g className="auth-sketch-curb">
+        <path d="M0 110H164Q180 110 180 94V0" />
+        <path d="M260 0V94Q260 110 276 110H440" />
+        <path d="M0 190H164Q180 190 180 206V300" />
+        <path d="M260 300V206Q260 190 276 190H440" />
+      </g>
+      <g className="auth-sketch-lane">
+        <path d="M0 150H124M290 150H440M220 0V96M220 222V300" />
+      </g>
+      <g className="auth-sketch-stop">
+        <path d="M168 152V188M222 214H258" />
+      </g>
+      <g className="auth-sketch-zebra">
+        {[116, 126, 136, 146, 156, 166, 176].map((y) => <rect key={y} x="132" y={y} width="22" height="5" rx="1" />)}
+      </g>
+      <g className="auth-sketch-measure">
+        <path d="M168 140V152M231 140V160" className="auth-sketch-extension" />
+        <path d="M168 136H231M168 131V141M231 131V141" />
+        <text x="199.5" y="126" textAnchor="middle">12.6 m</text>
+      </g>
+      <g className="auth-sketch-north">
+        <path d="M408 46V16M401 25L408 16L415 25" />
+        <text x="408" y="62" textAnchor="middle">N</text>
+      </g>
+      <g className="auth-sketch-path">
+        <path d="M24 170H186M242 290V206" />
+      </g>
+      <g className="auth-sketch-vehicle auth-sketch-vehicle-a">
+        <rect x="192" y="161" width="38" height="18" rx="4" />
+        <text x="211" y="198" textAnchor="middle">①</text>
+      </g>
+      <g className="auth-sketch-vehicle auth-sketch-vehicle-b">
+        <rect x="233" y="164" width="18" height="36" rx="4" />
+        <text x="270" y="190" textAnchor="middle">②</text>
+      </g>
+      <g className="auth-sketch-impact">
+        <circle cx="232" cy="168" r="18" />
+      </g>
     </svg>
   );
 }
@@ -67,13 +120,8 @@ function resolvePasswordStrength(password: string) {
     /[A-Za-z]/.test(normalized),
     /\d/.test(normalized),
   ].filter(Boolean).length;
-
-  if (score <= 1) {
-    return { label: "弱", level: "weak" as const, filled: 1 };
-  }
-  if (score === 2) {
-    return { label: "中", level: "medium" as const, filled: 2 };
-  }
+  if (score <= 1) return { label: "弱", level: "weak" as const, filled: 1 };
+  if (score === 2) return { label: "中", level: "medium" as const, filled: 2 };
   return { label: "强", level: "strong" as const, filled: 3 };
 }
 
@@ -84,275 +132,244 @@ export function AuthScreen(props: AuthScreenProps) {
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [rememberMe, setRememberMe] = useState(true);
   const [localError, setLocalError] = useState("");
+  const [notice, setNotice] = useState("");
   const [fieldErrors, setFieldErrors] = useState<FieldErrorState>({});
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const idPrefix = useId();
+  const headingId = `${idPrefix}-heading`;
 
   const passwordStrength = useMemo(() => resolvePasswordStrength(password), [password]);
   const mergedError = localError || errorMessage;
+  const copy = MODE_COPY[mode];
+  const isRegister = mode === "register";
+  const isDarkMode = themeMode === "dark";
+  const themeLabel = isDarkMode ? "切换为浅色模式" : "切换为深色模式";
 
   function switchMode(next: AuthMode) {
     setMode(next);
     setLocalError("");
+    setNotice("");
     setFieldErrors({});
     onClearError?.();
   }
 
-  async function handleSubmit() {
+  function rejectField(field: FieldName, message: string) {
+    setFieldErrors({ [field]: message });
+    setLocalError(message);
+  }
+
+  function clearFieldError(field: FieldName) {
+    setFieldErrors((current) => ({ ...current, [field]: undefined }));
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (loading) return;
     setLocalError("");
+    setNotice("");
     setFieldErrors({});
     const normalizedUsername = username.trim();
     const normalizedPassword = password.trim();
     if (!normalizedUsername || !normalizedPassword) {
       setFieldErrors({
-        username: !normalizedUsername ? "请输入用户名。" : undefined,
-        password: !normalizedPassword ? "请输入密码。" : undefined,
+        username: normalizedUsername ? undefined : "请输入用户名。",
+        password: normalizedPassword ? undefined : "请输入密码。",
       });
       setLocalError("用户名和密码不能为空。");
       return;
     }
 
-    if (mode === "register") {
-      if (normalizedUsername.length < 4 || normalizedUsername.length > 20) {
-        setFieldErrors({ username: "用户名长度必须在 4 到 20 个字符之间。" });
-        setLocalError("用户名长度必须在 4 到 20 个字符之间。");
-        return;
-      }
-      if (normalizedPassword.length < PASSWORD_MIN_LENGTH || !/[A-Za-z]/.test(normalizedPassword) || !/\d/.test(normalizedPassword)) {
-        setFieldErrors({ password: "密码至少 8 位，且需包含字母和数字。" });
-        setLocalError("密码至少 8 位，且需包含字母和数字。");
-        return;
-      }
-      if (normalizedPassword !== confirmPassword.trim()) {
-        setFieldErrors({ confirmPassword: "两次输入的密码不一致。" });
-        setLocalError("两次输入的密码不一致。");
-        return;
-      }
-      await onRegister({
-        username: normalizedUsername,
-        password: normalizedPassword,
-        displayName: displayName.trim() || undefined,
-      });
+    if (!isRegister) {
+      await onLogin({ username: normalizedUsername, password: normalizedPassword });
       return;
     }
-
-    if (!rememberMe) {
-      // 先保留交互入口，当前仍走统一 token 存储。
+    if (normalizedUsername.length < 4 || normalizedUsername.length > 20) {
+      rejectField("username", "用户名长度必须在 4 到 20 个字符之间。");
+      return;
     }
-    await onLogin({
+    if (normalizedPassword.length < PASSWORD_MIN_LENGTH || !/[A-Za-z]/.test(normalizedPassword) || !/\d/.test(normalizedPassword)) {
+      rejectField("password", "密码至少 8 位，且需包含字母和数字。");
+      return;
+    }
+    if (normalizedPassword !== confirmPassword.trim()) {
+      rejectField("confirmPassword", "两次输入的密码不一致。");
+      return;
+    }
+    await onRegister({
       username: normalizedUsername,
       password: normalizedPassword,
+      displayName: displayName.trim() || undefined,
     });
   }
 
-  const isDarkMode = themeMode === "dark";
+  const describedBy = (field: FieldName, hintId?: string) =>
+    [fieldErrors[field] ? `${idPrefix}-${field}-error` : "", hintId ?? ""].filter(Boolean).join(" ") || undefined;
+  const fieldError = (field: FieldName) =>
+    fieldErrors[field] ? <span id={`${idPrefix}-${field}-error`} className="auth-field-error">{fieldErrors[field]}</span> : null;
 
   return (
     <div className={`auth-screen theme-${themeMode}`}>
-      <section className="auth-hero-panel">
-        <div className="auth-hero-backdrop" />
-        <div className="auth-hero-content">
-          <span className="auth-hero-kicker">SafetyRAISE</span>
-          <h1>道路交通事故<br />分析报告生成系统</h1>
-          <p>智能接收事故图片、视频与草稿信息，结合知识检索与专家指导意见生成可导出的分析研判文书。</p>
-          <div className="auth-hero-route" aria-hidden="true">
-            <div className="auth-hero-route-line" />
-            <div className="auth-hero-route-stops">
-              <div>
-                <strong>现场材料</strong>
-                <span>图片、视频、草稿分组进入工作区</span>
-              </div>
-              <div>
-                <strong>结构分析</strong>
-                <span>视觉识别、知识检索与专家判断并行收束</span>
-              </div>
-              <div>
-                <strong>文书输出</strong>
-                <span>报告、Word、PDF 归档导出</span>
-              </div>
-            </div>
-          </div>
+      <section className="auth-brand" aria-label="系统介绍">
+        <span className="auth-brand-name">SafetyRAISE</span>
+        <figure className="auth-scene">
+          <SceneSketch />
+          <figcaption>现场示意 · 比例 1:200</figcaption>
+        </figure>
+        <div className="auth-brand-copy">
+          <h1><span>道路交通事故</span><span>分析报告生成系统</span></h1>
+          <p className="auth-brand-lead">从现场资料到分析报告，每一步都能在工作台里核对和修改。</p>
+          <ol className="auth-steps" aria-label="处理流程">
+            {WORKFLOW_STEPS.map((step, index) => (
+              <li key={step}><span className="auth-step-index">{index + 1}</span>{step}</li>
+            ))}
+          </ol>
         </div>
-        <div className="auth-hero-footer">
-          <span>© 2026 SafetyRAISE</span>
-        </div>
+        <span className="auth-brand-footer">© 2026 SafetyRAISE</span>
       </section>
 
-      <section className="auth-form-panel">
-        <button
-          type="button"
-          className="theme-toggle-btn auth-form-theme-toggle"
-          onClick={onToggleTheme}
-          aria-label={isDarkMode ? "切换为浅色模式" : "切换为深色模式"}
-          title={isDarkMode ? "切换为浅色模式" : "切换为深色模式"}
-        >
-          {isDarkMode ? <MoonIcon /> : <SunIcon />}
-        </button>
-        <div className="auth-form-shell">
-          <div className="seg-tabs auth-seg-tabs" role="tablist" aria-label="登录注册切换">
-            <button
-              type="button"
-              className={`seg-tab-btn ${mode === "login" ? "is-active" : ""}`}
-              onClick={() => switchMode("login")}
-            >
-              登录
-            </button>
-            <button
-              type="button"
-              className={`seg-tab-btn ${mode === "register" ? "is-active" : ""}`}
-              onClick={() => switchMode("register")}
-            >
-              注册
-            </button>
+      <section className="auth-panel">
+        <div className="auth-panel-bar">
+          <button type="button" className="auth-theme-toggle" onClick={onToggleTheme} aria-label={themeLabel} title={themeLabel}>
+            {isDarkMode ? <MoonIcon /> : <SunIcon />}
+          </button>
+        </div>
+
+        <form className="auth-form" aria-labelledby={headingId} noValidate onSubmit={(event) => void handleSubmit(event)}>
+          <div className="auth-switch" role="group" aria-label="登录或注册">
+            <button type="button" aria-pressed={!isRegister} onClick={() => switchMode("login")}>登录</button>
+            <button type="button" aria-pressed={isRegister} onClick={() => switchMode("register")}>注册</button>
           </div>
 
-          <div className="auth-card">
-            <div className="auth-card-header">
-              <span className="auth-card-kicker">{mode === "login" ? "管理员与普通用户入口" : "创建普通用户账号"}</span>
-              <h2>{mode === "login" ? "登录工作台" : "注册新账号"}</h2>
-              <p>{mode === "login" ? "管理员登录后可进入用户管理与空间管理；普通用户登录后先配置自己的模型接入点。" : "当前仅支持用户名 + 密码注册，邮箱与手机号入口后续再补。"}</p>
-            </div>
+          <header className="auth-heading">
+            <h2 id={headingId}>{copy.title}</h2>
+            <p>{copy.description}</p>
+          </header>
 
-            {mergedError ? <div className="auth-alert auth-alert-error">{mergedError}</div> : null}
+          {mergedError ? <div className="auth-message is-error" role="alert">{mergedError}</div> : null}
+          {notice ? <div className="auth-message is-info" role="status">{notice}</div> : null}
 
-            <div className="form-field">
-              <label htmlFor="auth-username">用户名</label>
+          <div className="auth-field">
+            <label htmlFor={`${idPrefix}-username`}>用户名</label>
+            <input
+              id={`${idPrefix}-username`}
+              className="auth-input"
+              type="text"
+              value={username}
+              maxLength={20}
+              autoComplete="username"
+              aria-invalid={Boolean(fieldErrors.username)}
+              aria-describedby={describedBy("username", isRegister ? `${idPrefix}-username-hint` : undefined)}
+              onChange={(event) => { setUsername(event.target.value); clearFieldError("username"); }}
+              disabled={loading}
+            />
+            {fieldError("username")}
+            {isRegister ? <span id={`${idPrefix}-username-hint`} className="auth-hint">4–20 个字符，登录时使用。</span> : null}
+          </div>
+
+          {isRegister ? (
+            <div className="auth-field">
+              <label htmlFor={`${idPrefix}-display-name`}>显示名称 / 单位<span className="auth-optional">选填</span></label>
               <input
-                id="auth-username"
-                className={`form-input ${fieldErrors.username ? "is-error" : ""}`}
+                id={`${idPrefix}-display-name`}
+                className="auth-input"
                 type="text"
-                value={username}
-                maxLength={20}
-                onChange={(event) => {
-                  setUsername(event.target.value);
-                  setFieldErrors((current) => ({ ...current, username: undefined }));
-                }}
-                placeholder="请输入用户名"
+                value={displayName}
+                maxLength={48}
+                autoComplete="organization"
+                onChange={(event) => setDisplayName(event.target.value)}
                 disabled={loading}
               />
-              {fieldErrors.username ? <span className="field-error-text">{fieldErrors.username}</span> : null}
             </div>
+          ) : null}
 
-            {mode === "register" ? (
-              <div className="form-field">
-                <label htmlFor="auth-display-name">显示名称 / 单位</label>
-                <input
-                  id="auth-display-name"
-                  className="form-input"
-                  type="text"
-                  value={displayName}
-                  maxLength={48}
-                  onChange={(event) => setDisplayName(event.target.value)}
-                  placeholder="可选，最多 48 个字符"
-                  disabled={loading}
-                />
+          <div className="auth-field">
+            <div className="auth-field-head">
+              <label htmlFor={`${idPrefix}-password`}>密码</label>
+              {isRegister ? null : (
+                <button type="button" className="auth-link" onClick={() => { setLocalError(""); setNotice("暂不支持自助找回密码，请联系管理员重置。"); }} disabled={loading}>
+                  忘记密码？
+                </button>
+              )}
+            </div>
+            <div className="auth-input-wrap">
+              <input
+                id={`${idPrefix}-password`}
+                className="auth-input"
+                type={showPassword ? "text" : "password"}
+                value={password}
+                maxLength={64}
+                autoComplete={isRegister ? "new-password" : "current-password"}
+                aria-invalid={Boolean(fieldErrors.password)}
+                aria-describedby={describedBy("password", isRegister ? `${idPrefix}-strength` : undefined)}
+                onChange={(event) => { setPassword(event.target.value); clearFieldError("password"); }}
+                disabled={loading}
+              />
+              <button
+                type="button"
+                className="auth-reveal"
+                onClick={() => setShowPassword((current) => !current)}
+                aria-label={showPassword ? "隐藏密码" : "显示密码"}
+                title={showPassword ? "隐藏密码" : "显示密码"}
+                disabled={loading}
+              >
+                <EyeIcon open={showPassword} />
+              </button>
+            </div>
+            {fieldError("password")}
+            {isRegister ? (
+              <div className="auth-strength" id={`${idPrefix}-strength`}>
+                <span className="auth-strength-bars" aria-hidden="true">
+                  {[0, 1, 2].map((index) => (
+                    <span key={index} className={index < passwordStrength.filled ? `is-${passwordStrength.level}` : ""} />
+                  ))}
+                </span>
+                <span>至少 8 位，含字母和数字 · 强度{passwordStrength.label}</span>
               </div>
             ) : null}
+          </div>
 
-            <div className="form-field">
-              <label htmlFor="auth-password">密码</label>
-              <div className={`input-with-action ${fieldErrors.password ? "is-error" : ""}`}>
+          {isRegister ? (
+            <div className="auth-field">
+              <label htmlFor={`${idPrefix}-confirm-password`}>确认密码</label>
+              <div className="auth-input-wrap">
                 <input
-                  id="auth-password"
-                  className={`form-input ${fieldErrors.password ? "is-error" : ""}`}
-                  type={showPassword ? "text" : "password"}
-                  value={password}
+                  id={`${idPrefix}-confirm-password`}
+                  className="auth-input"
+                  type={showConfirmPassword ? "text" : "password"}
+                  value={confirmPassword}
                   maxLength={64}
-                  onChange={(event) => {
-                    setPassword(event.target.value);
-                    setFieldErrors((current) => ({ ...current, password: undefined }));
-                  }}
-                  placeholder={mode === "login" ? "请输入密码" : "至少 8 位，需含字母和数字"}
+                  autoComplete="new-password"
+                  aria-invalid={Boolean(fieldErrors.confirmPassword)}
+                  aria-describedby={describedBy("confirmPassword")}
+                  onChange={(event) => { setConfirmPassword(event.target.value); clearFieldError("confirmPassword"); }}
                   disabled={loading}
                 />
                 <button
                   type="button"
-                  className="input-action-btn"
-                  onClick={() => setShowPassword((current) => !current)}
-                  aria-label={showPassword ? "隐藏密码" : "显示密码"}
-                  title={showPassword ? "隐藏密码" : "显示密码"}
+                  className="auth-reveal"
+                  onClick={() => setShowConfirmPassword((current) => !current)}
+                  aria-label={showConfirmPassword ? "隐藏确认密码" : "显示确认密码"}
+                  title={showConfirmPassword ? "隐藏确认密码" : "显示确认密码"}
                   disabled={loading}
                 >
-                  <EyeIcon open={showPassword} />
+                  <EyeIcon open={showConfirmPassword} />
                 </button>
               </div>
-              {fieldErrors.password ? <span className="field-error-text">{fieldErrors.password}</span> : null}
+              {fieldError("confirmPassword")}
             </div>
+          ) : null}
 
-            {mode === "register" ? (
-              <>
-                <div className="password-strength">
-                  <div className="password-strength-bars">
-                    {[0, 1, 2].map((index) => (
-                      <span
-                        key={index}
-                        className={`password-strength-bar ${passwordStrength.level} ${index < passwordStrength.filled ? "is-filled" : ""}`}
-                      />
-                    ))}
-                  </div>
-                  <span>密码强度：{passwordStrength.label}</span>
-                </div>
-                <div className="form-field">
-                  <label htmlFor="auth-confirm-password">确认密码</label>
-                  <div className={`input-with-action ${fieldErrors.confirmPassword ? "is-error" : ""}`}>
-                    <input
-                      id="auth-confirm-password"
-                      className={`form-input ${fieldErrors.confirmPassword ? "is-error" : ""}`}
-                      type={showConfirmPassword ? "text" : "password"}
-                      value={confirmPassword}
-                      maxLength={64}
-                      onChange={(event) => {
-                        setConfirmPassword(event.target.value);
-                        setFieldErrors((current) => ({ ...current, confirmPassword: undefined }));
-                      }}
-                      placeholder="请再次输入密码"
-                      disabled={loading}
-                    />
-                    <button
-                      type="button"
-                      className="input-action-btn"
-                      onClick={() => setShowConfirmPassword((current) => !current)}
-                      aria-label={showConfirmPassword ? "隐藏确认密码" : "显示确认密码"}
-                      title={showConfirmPassword ? "隐藏确认密码" : "显示确认密码"}
-                      disabled={loading}
-                    >
-                      <EyeIcon open={showConfirmPassword} />
-                    </button>
-                  </div>
-                  {fieldErrors.confirmPassword ? <span className="field-error-text">{fieldErrors.confirmPassword}</span> : null}
-                </div>
-              </>
-            ) : (
-              <div className="auth-inline-meta">
-                <label className="auth-checkbox">
-                  <input
-                    type="checkbox"
-                    checked={rememberMe}
-                    onChange={(event) => setRememberMe(event.target.checked)}
-                    disabled={loading}
-                  />
-                  <span>记住我</span>
-                </label>
-                <button type="button" className="auth-link-btn" onClick={() => setLocalError("当前版本暂不支持自助找回密码，请联系管理员重置。")} disabled={loading}>
-                  忘记密码？
-                </button>
-              </div>
-            )}
-
-            <button type="button" className="btn-primary auth-submit-btn" onClick={() => void handleSubmit()} disabled={loading}>
-              {loading ? (
-                <span className="auth-submit-content">
-                  <span className="spinner" />
-                  <span>{mode === "login" ? "登录中..." : "注册中..."}</span>
-                </span>
-              ) : (
-                mode === "login" ? "登录" : "注册"
-              )}
-            </button>
-          </div>
-        </div>
+          <button type="submit" className="btn-primary auth-submit" disabled={loading}>
+            {loading ? (
+              <span className="auth-submit-content">
+                <span className="spinner" aria-hidden="true" />
+                <span>{copy.pending}</span>
+              </span>
+            ) : copy.submit}
+          </button>
+        </form>
       </section>
     </div>
   );
