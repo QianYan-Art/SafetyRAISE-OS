@@ -1,4 +1,4 @@
-import { ChangeEvent, DragEvent, KeyboardEvent as ReactKeyboardEvent, MouseEvent, TouchEvent, useCallback, useEffect, useRef, useState } from "react";
+import { ChangeEvent, DragEvent, Fragment, KeyboardEvent as ReactKeyboardEvent, MouseEvent, TouchEvent, useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { PanelLeft, X, Settings2, History, Pencil, ChevronRight, FileText, ClipboardList } from "lucide-react";
@@ -2856,9 +2856,13 @@ function WorkspaceApp({
           {appView === "workspace" && workspaceMode === "legacy" && (
             <nav className="workspace-stages" aria-label="事故处理阶段">
               {([{ id: "materials", label: "整理资料" }, { id: "facts", label: "核对事实" }, { id: "report", label: "查看报告" }] as const).map((step, index) => (
-                <button type="button" key={step.id} aria-current={workspaceStage === step.id ? "step" : undefined} onClick={() => setWorkspaceStage(step.id)}>
-                  <span>{index + 1}</span>{step.label}{index < 2 && <ChevronRight size={12} />}
-                </button>
+                <Fragment key={step.id}>
+                  {/* 分隔箭头放在按钮之外，三个按钮的内容与选中底色等宽。 */}
+                  {index > 0 && <ChevronRight size={12} aria-hidden="true" />}
+                  <button type="button" aria-current={workspaceStage === step.id ? "step" : undefined} onClick={() => setWorkspaceStage(step.id)}>
+                    <span>{index + 1}</span>{step.label}
+                  </button>
+                </Fragment>
               ))}
             </nav>
           )}
