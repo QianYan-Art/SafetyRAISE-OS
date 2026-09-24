@@ -1,5 +1,64 @@
 # 部署说明
 
+## 213 同机演示部署
+
+213 已承载 PostgreSQL、知识库和运行时数据；应用迁入时复用该服务，
+不重建业务库，也不公开数据库端口。新应用编排与发布文件放在
+`/srv/apps/safetyraise`，只读知识库和运行时目录经
+`/srv/data/safetyraise` 指向既有 `/srv/safetyraise-data`；本机费用账本、
+YOLO 权重和受控临时上传放在 `/srv/data/safetyraise-app`。
+`/srv/apps/safetyraise/private` 内的展开 Compose 含凭据，目录须为
+`0700`、文件须为 `0600`，不得提交或打印内容。
+
+应用镜像从旧主机转移时，Docker 版本可能重算镜像配置 ID。
+先核对两端镜像 RootFS 层摘要，再用 213 上实际 `docker image inspect`
+得到的 ID 生成配置；不得沿用找不到的旧 ID 或改用 `latest`。
+`prepare-213-release.py` 只改挂载、数据库网络与回环端口，保留
+Harness 配置、费用合同和运行镜像的资源/隔离约束：
+
+```sh
+python3 deployment/docker/prepare-213-release.py \
+  --source /srv/apps/safetyraise/private/compose.source.json \
+  --output /srv/apps/safetyraise/private/compose.prod.json \
+  --release-dir /srv/apps/safetyraise/releases/<release> \
+  --app-root /srv/apps/safetyraise \
+  --data-root /srv/data/safetyraise \
+  --local-data-root /srv/data/safetyraise-app \
+  --backend-image sha256:<verified-213-backend-id> \
+  --frontend-image sha256:<verified-213-frontend-id> \
+  --frontend-port 18080
+docker compose -f /srv/apps/safetyraise/private/compose.prod.json config --quiet
+```
+
+隔离验证另用 `--output .../compose.test.json`、`--frontend-port 18081`
+及 `--test-database safetyraise_migration_test`，配独立 runtime、上传和
+账本目录；不能用就绪探针或测试库替代正式报告生成验收。生产 Compose
+通过外部网络 `safetyraise-data_default` 连接 `safetyraise-postgres:5432`，
+前端只发布 `127.0.0.1:18080`。容器内
+`nginx.frontend.upstream.conf` 继续提供静态文件及 `index.html` 回退，
+`/api/` 转发给 backend；宿主 Nginx 使用
+`nginx.213.site.conf` 终止 TLS 和转发长请求，不能覆盖其他站点。
+证书只迁入 `safetyraise.cn` 的 lineage 与对应 ACME 账户，
+`fullchain.pem`、`privkey.pem` 位于 `/etc/letsencrypt/live/safetyraise.cn/`；
+`renew-213-nginx.sh` 作为 Certbot deploy hook。域名指向 213 后再做
+webroot 续期 dry-run；切换前的 DNS 指向旧主机，不能把此时的挑战失败
+记为续期已验证。站点日志写入 `/srv/logs/nginx/safetyraise.access.log`
+与 `/srv/logs/nginx/safetyraise.error.log`，沿用宿主 logrotate。
+
+切流时不能让两台后端对各自的 SQLite 账本同时记费。先保留旧发布，
+停止旧后端写入，对账后用 SQLite backup API 迁移最终账本，再启动
+213 正式 Compose 并以域名 SNI/指定 213 地址核验 HTTPS、鉴权、历史、
+就绪和资源。DNS 传播期间旧前端的 `/api/` 应以校验证书的 HTTPS
+代理到 213，避免访问旧 IP 的用户继续写旧账本。确认权威解析、
+公网业务和回滚入口后再退役旧应用，不能提前删除旧镜像或证书。
+
+213 的 `/usr/local/bin/qianyan-backup.sh` 必须将
+`/srv/data/safetyraise-app/ledger/money.sqlite3` 及 WAL/SHM 排除于
+在线文件归档，并用 SQLite backup API 写入一致性副本；其余应用配置、
+业务目录、PostgreSQL 逻辑备份和证书继续遵循宿主的 7 份轮转。
+新站点必须登记在 `/srv/apps/SITES.md`。备份可读性、恢复路径、
+`nginx -t` 和其他域名健康状态是切换门槛，不以全局 Docker 清理腾空间。
+
 ## 小容量主机资源门
 
 Compose 默认后端 `BACKEND_MEMORY_LIMIT=1536m`、`BACKEND_CPU_LIMIT=2`、
