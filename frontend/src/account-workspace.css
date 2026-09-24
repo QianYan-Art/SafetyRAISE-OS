@@ -206,6 +206,7 @@
   line-height: 1.7;
 }
 
+/* 行高为 1 时中文与数字的笔画比框中心低约 0.8px，各徽标上内边距比下内边距少 2px（总高不变），文字上移 1px 居中。 */
 .account-status-badge,
 .account-admin-self-badge,
 .account-admin-role,
@@ -223,7 +224,7 @@
 }
 
 .account-status-badge {
-  padding: 5px 7px;
+  padding: 4px 7px 6px;
 }
 
 .account-model-policy {
@@ -685,13 +686,13 @@
 
 .account-admin-self-badge {
   flex-shrink: 0;
-  padding: 4px 6px;
+  padding: 3px 6px 5px;
   background: var(--color-surface);
   color: var(--color-accent-text);
 }
 
 .account-admin-role {
-  padding: 5px 7px;
+  padding: 4px 7px 6px;
   background: transparent;
 }
 
@@ -726,7 +727,7 @@
 
 .account-admin-source-badge,
 .account-admin-orphan-badge {
-  padding: 5px 7px;
+  padding: 4px 7px 6px;
 }
 
 .account-source-image {
@@ -1086,7 +1087,7 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 5px 8px;
+  padding: 4px 8px 6px; /* 同账户徽标：上少下多，补偿行高为 1 时的笔画下沉 */
   border: 1px solid var(--color-success-line);
   border-radius: var(--radius-control);
   background: var(--color-success-soft);

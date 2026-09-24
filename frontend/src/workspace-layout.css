@@ -38,7 +38,8 @@
 .evidence-workspace .page-header-actions{gap:5px;flex-shrink:0;flex-wrap:nowrap}
 .evidence-workspace .theme-toggle-btn{width:32px;height:36px;border:0;border-radius:var(--radius-control);background:none;box-shadow:none;min-height:0;color:var(--workbench-muted)}
 .evidence-workspace .account-popover-header .theme-toggle-btn{width:32px;height:32px;min-height:32px;flex:0 0 32px}
-.evidence-workspace .workspace-username{max-width:116px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;margin-left:6px;color:var(--workbench-muted)}
+/* 小写拉丁字母的视觉重心（x 字高段）比字框中心低约 1px，上移 1px 与图标、编号圆的墨迹中心对齐；用相对定位而非 transform，避免缩放屏上发虚。 */
+.evidence-workspace .workspace-username{position:relative;top:-1px;max-width:116px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;margin-left:6px;color:var(--workbench-muted)}
 .evidence-workspace .page-header-actions select{max-width:100px;border:1px solid var(--border-color);border-radius:var(--radius-control);padding:6px;font:inherit;font-size:12px;background:var(--workbench-surface);color:inherit}
 .evidence-workspace .admin-header-tabs{border:0;border-radius:0;background:transparent;box-shadow:none}
 .evidence-workspace .admin-header-tab{border-radius:var(--radius-control);box-shadow:none}
@@ -46,8 +47,8 @@
 .evidence-workspace .account-admin-shell{scrollbar-gutter:stable}
 .workspace-stages{display:flex;align-items:center;gap:8px;flex-shrink:0}
 .workspace-stages button{display:flex;align-items:center;gap:7px;min-height:36px;border:0;border-radius:var(--radius-control);padding:7px 12px;color:var(--workbench-muted);background:transparent;white-space:nowrap;font-size:13px}
-/* 编号圆：边框计入尺寸、行高为 1，数字在圆心；等宽数字避免 1 与 2、3 视觉宽度不同。 */
-.workspace-stages button>span{display:grid;place-items:center;box-sizing:border-box;width:20px;height:20px;flex-shrink:0;border:1px solid var(--border-color);border-radius:50%;font-size:12px;line-height:1;font-variant-numeric:tabular-nums}
+/* 编号圆：边框计入尺寸、行高为 1；数字笔画在行高 1 时下沉约 0.8px，下内边距 2px 使其上移 1px 落在圆心；等宽数字避免 1 与 2、3 视觉宽度不同。 */
+.workspace-stages button>span{display:grid;place-items:center;box-sizing:border-box;width:20px;height:20px;flex-shrink:0;padding-bottom:2px;border:1px solid var(--border-color);border-radius:50%;font-size:12px;line-height:1;font-variant-numeric:tabular-nums}
 .workspace-stages button[aria-current=step]{background:var(--primary-soft);color:var(--primary-color)}
 .workspace-stages button[aria-current=step]>span{background:var(--primary-color);color:var(--color-on-accent);border-color:var(--primary-color)}
 .workspace-stages>svg{flex-shrink:0;color:var(--workbench-control-border)}
