@@ -1,0 +1,13 @@
+{
+  "version": "empty-template-v1",
+  "generated_at": null,
+  "summary": {},
+  "topic_index": {},
+  "relation_index": {},
+  "synonyms": {},
+  "indexes": {
+    "chunk_inverted": {},
+    "rule_inverted": {}
+  },
+  "doc_meta": {}
+}

@@ -1,0 +1,20 @@
+{
+  "generated_at": null,
+  "catalog_meta": {
+    "catalog_version": "empty-template-v1"
+  },
+  "sources": [],
+  "config_path": null,
+  "output_root": null,
+  "build_mode": null,
+  "processed_sources": 0,
+  "success_sources": 0,
+  "failed_sources": 0,
+  "available_catalog_sources": 0,
+  "available_manual_sources": 0,
+  "merged_chunk_records": 0,
+  "merged_rule_records": 0,
+  "manual_import_summary": {},
+  "source_results": [],
+  "governance": {}
+}

@@ -34,7 +34,7 @@ frontend/vite.config.d.ts
 .serena/
 .mission/
 .doc-maintenance/
-kbase/
+/kbase/
 deployment/dist/
 
 # ---- Snapshots / archives ----

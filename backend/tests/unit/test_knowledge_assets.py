@@ -75,6 +75,13 @@ def test_only_approved_version_can_build_knowledge_context(tmp_path, monkeypatch
         assets.validate()
 
 
+def test_empty_approved_assets_cannot_start_harness(tmp_path, monkeypatch):
+    settings, _, digest, sparse = fixture_settings(tmp_path, monkeypatch)
+    sparse._chunk_records = []
+    with pytest.raises(HarnessError, match="knowledge_dependencies_unavailable"):
+        load_knowledge_assets(settings, approved_content_digest=digest)
+
+
 def test_resolved_source_substitution_is_rejected(tmp_path, monkeypatch):
     settings, paths, digest, sparse = fixture_settings(tmp_path, monkeypatch)
     sparse.rules_path = tmp_path / "other"
