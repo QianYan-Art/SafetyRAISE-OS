@@ -118,6 +118,35 @@ def test_real_sse_disconnect_cancel_or_delete_stops_worker(tool_client, stop_mod
     ]) == 1
 
 
+def test_idle_sse_keeps_connection_alive_without_cancelling_run(tool_client, monkeypatch):
+    from app.api import routes_report_runs
+
+    monkeypatch.setattr(routes_report_runs, "SSE_HEARTBEAT_SECONDS", 0.1)
+    client, store, owner, session = tool_client
+    run_id, roles = waiting_run(tool_client)
+    with loopback_app() as address:
+        with httpx.Client(base_url=address, headers={
+            "Authorization": client.headers["Authorization"],
+        }, timeout=5, trust_env=False) as network:
+            with network.stream(
+                "POST", f"/api/v1/report-runs/{run_id}/execute/stream",
+                json={"expected_version": 0},
+            ) as response:
+                assert response.status_code == 200
+                lines = response.iter_lines()
+                assert next(lines).startswith("data:")
+                assert roles.entered.wait(5)
+                deadline = monotonic() + 5
+                while monotonic() < deadline:
+                    if next(lines) == ": keep-alive":
+                        break
+                else:
+                    pytest.fail("等待中的报告流未发送空闲心跳")
+                assert store.get(owner, run_id)["state"] != "cancelled"
+            assert roles.closed.wait(5)
+    assert store.get(owner, run_id)["state"] == "cancelled"
+
+
 def test_database_serializes_cancel_and_publication(pg_store):
     store, owner, run_id, token = create_run(pg_store, policy=BudgetPolicy())
     store.transition(owner, run_id, token, "generating", {})

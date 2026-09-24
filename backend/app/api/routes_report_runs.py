@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from uuid import UUID
 
 import anyio
@@ -28,6 +29,11 @@ from app.report_harness.role_loop import tool_schemas
 from app.schemas.report_run import CreateRunRequest, ExecuteRunRequest, ResumeRunRequest
 from app.services.auth_service import AuthenticatedUser
 from app.services.report_run_service import ReportRunService
+
+
+logger = logging.getLogger(__name__)
+EVENT_POLL_SECONDS = 0.5
+SSE_HEARTBEAT_SECONDS = 15.0
 
 
 class ReportRunBodyLimit:
@@ -237,11 +243,13 @@ def _claimed_stream(identifier: str, user, service: ReportRunService, token: int
     async def stream():
         task = asyncio.create_task(service.execute_claimed(user.id, identifier, token))
         seq = 0
+        last_sent = asyncio.get_running_loop().time()
         try:
             while True:
                 page = service.store.events(user.id, identifier, seq)
                 for event in page["events"]:
                     seq = event["seq"]
+                    last_sent = asyncio.get_running_loop().time()
                     yield "data: " + json.dumps(jsonable_encoder(event), ensure_ascii=False) + "\n\n"
                 if task.done():
                     await task
@@ -250,7 +258,10 @@ def _claimed_stream(identifier: str, user, service: ReportRunService, token: int
                     for event in page["events"]:
                         yield "data: " + json.dumps(jsonable_encoder(event), ensure_ascii=False) + "\n\n"
                     break
-                await asyncio.sleep(0.05)
+                if asyncio.get_running_loop().time() - last_sent >= SSE_HEARTBEAT_SECONDS:
+                    yield ": keep-alive\n\n"
+                    last_sent = asyncio.get_running_loop().time()
+                await asyncio.sleep(EVENT_POLL_SECONDS)
         except Exception:
             # 仅重放控制器已持久化的事件，不伪造缺少序号的流式终态。
             try:
@@ -266,6 +277,7 @@ def _claimed_stream(identifier: str, user, service: ReportRunService, token: int
             with anyio.CancelScope(shield=True):
                 try:
                     if not task.done():
+                        logger.info("报告事件流提前关闭，取消执行。", extra={"run_id": identifier})
                         service.cancel_claimed(user.id, identifier, token)
                 finally:
                     if not task.done() and not task.cancelling():
