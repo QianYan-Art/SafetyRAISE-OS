@@ -424,6 +424,7 @@ sh deployment/docker/setup-https.sh
 2. 成功后 reload frontend 容器内的 Nginx
 3. frontend 容器定位按 compose service label，不再依赖旧容器名
 4. 不再 `source .env.server`，只读取续期实际需要的少数字段
+5. 发布目录部署（212 当前方式）没有项目检出和 `.env.server`：脚本单独安装到 `/srv/safetyraise/bin/renew-https.sh`，按默认证书路径续期，`/etc/cron.d/safetyraise-cert-renew` 指向该固定路径；不要把续期任务指向某个发布目录，否则清理旧发布后续期会静默失败
 
 ## Modal 专家服务
 
@@ -477,7 +478,7 @@ Modal 冷启动可能让首次 `POST` 返回 `303` 和 `__modal_attempt_token`�
 
 ## 发布保留与清理
 
-1. 212 只保留当前发布目录和一个已验证回滚点。删除旧发布前，必须用运行容器的 `com.docker.compose.project.working_dir` 标签确认 frontend 与 backend 都指向当前目录，并确认当前、回滚镜像完整存在。
+1. 212 只保留当前发布目录和一个已验证回滚点。删除旧发布前，必须用运行容器的 `com.docker.compose.project.working_dir` 标签确认 frontend 与 backend 都指向当前目录，并确认当前、回滚镜像完整存在；还要 `grep -r /srv/safetyraise/releases /etc/cron.d /etc/systemd/system`，确认没有系统任务引用待删目录。后端构建基础镜像（当前为 `safetyraise-backend:c10e88b`）即使无发布引用也保留标签，不作为旧镜像清理。
 2. 发布包、构建目录和构建日志在 `health / ready`、挂载和回滚镜像核验通过后即可定点删除。镜像按明确标签或完整 ID 删除，不运行全局 Docker prune，避免误删唯一回滚层或其他服务资产。
 3. 213 的长期业务目录只承载 `kbase`、`postgres` 和 `runtime`。清理只处理能由构建记录证明无活动引用的 SafetyRAISE 缓存；不得按名称猜测删除数据库、知识库、运行时账本、审计记录、私有证据或其他服务镜像。
 4. 清理前后记录根盘可用空间、可用内存、PostgreSQL 健康、SSHFS 挂载和 212 的 `/api/v1/health`、`/api/v1/ready`，其中任一回归都应停止继续删除。

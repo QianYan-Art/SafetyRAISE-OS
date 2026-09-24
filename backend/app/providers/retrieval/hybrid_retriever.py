@@ -10,6 +10,8 @@ from app.providers.retrieval.embedding_client import EmbeddingClient
 from app.providers.retrieval.reranker_client import RerankerClient
 
 RRF_K = 60.0
+# 未启用 reranker 时以 RRF 融合稠密与稀疏结果，属于正常运行；只有丢失稠密通道才算降级。
+NON_DEGRADED_MODES = frozenset({"hybrid", "hybrid_rrf_only"})
 
 
 class HybridRetriever(BaseRetriever):
@@ -40,7 +42,7 @@ class HybridRetriever(BaseRetriever):
         self.metadata: dict[str, Any] = {
             "provider": "hybrid_local",
             "mode": self._resolve_runtime_mode(),
-            "retrieval_degraded": self._resolve_runtime_mode() != "hybrid",
+            "retrieval_degraded": self._resolve_runtime_mode() not in NON_DEGRADED_MODES,
             "dense_index_version": self.dense_index_version,
             "embedding_model": self.embedding_model,
             "reranker_model": self.reranker_model,
@@ -391,7 +393,7 @@ class HybridRetriever(BaseRetriever):
         metadata: dict[str, Any] = {
             "provider": "hybrid_local",
             "mode": mode,
-            "retrieval_degraded": mode not in {"hybrid", "hybrid_rrf_only"},
+            "retrieval_degraded": mode not in NON_DEGRADED_MODES,
             "fallback_reason": fallback_reason,
             "embedding_model": self.embedding_model,
             "reranker_model": self.reranker_model,

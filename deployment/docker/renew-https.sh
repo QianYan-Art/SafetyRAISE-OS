@@ -3,18 +3,18 @@ set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 PROJECT_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
-ENV_FILE="$PROJECT_ROOT/.env.server"
+# 发布目录部署时脚本单独安装在发布目录之外（如 /srv/safetyraise/bin），没有 .env.server，
+# 各字段取下方默认值；仓库检出部署仍读取项目根目录的 .env.server。
+ENV_FILE="${SAFETYRAISE_ENV_FILE:-$PROJECT_ROOT/.env.server}"
 COMPOSE_SCRIPT="$SCRIPT_DIR/server-compose.sh"
-
-if [ ! -f "$ENV_FILE" ]; then
-  echo "缺少 $ENV_FILE，请先从 .env.example 复制并填写。" >&2
-  exit 1
-fi
 
 read_env_value() {
   key="$1"
   default_value="${2:-}"
-  value=$(sed -n "s/^${key}=//p" "$ENV_FILE" | tail -n 1)
+  value=
+  if [ -f "$ENV_FILE" ]; then
+    value=$(sed -n "s/^${key}=//p" "$ENV_FILE" | tail -n 1)
+  fi
   if [ -n "$value" ]; then
     printf '%s' "$value"
   else
@@ -55,6 +55,10 @@ wait_for_frontend_running() {
 reload_frontend_nginx() {
   frontend_container_id=
   if ! is_frontend_running; then
+    if [ ! -f "$ENV_FILE" ] || [ ! -f "$COMPOSE_SCRIPT" ]; then
+      echo "frontend 容器未运行且无编排配置；证书已续期，容器下次启动时加载。"
+      return 0
+    fi
     echo "frontend 容器当前未运行，尝试先拉起。"
     sh "$COMPOSE_SCRIPT" up -d frontend
   fi
@@ -66,6 +70,7 @@ reload_frontend_nginx() {
     echo "未找到 frontend 运行容器，无法热重载 Nginx。" >&2
     return 1
   fi
+  docker exec "$frontend_container_id" nginx -t
   docker exec "$frontend_container_id" nginx -s reload
 }
 
