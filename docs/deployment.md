@@ -79,6 +79,12 @@ Compose 默认后端 `BACKEND_MEMORY_LIMIT=1536m`、`BACKEND_CPU_LIMIT=2`、
 触发保护且没有OOM；仅将该容器改为1GiB并禁止额外swap后可恢复运行。
 这不是完整视频流程的容量认证。Docker stats扣除部分缓存后的数值不等于
 `memory.current`；配置须同时检查cgroup峰值、宿主余量和实际视频负载。
+2026-09-24在213混合媒体上传后的正式运行中，1.5GiB后端限额使256MiB
+保留门在报告准备后触发；仅将213私有源Compose与正式Compose的后端
+`mem_limit`调整为`2g`，运行容器对应2GiB内存、4GiB含swap上限，
+未见OOM。默认模板仍为1536m；再次发布需核对私有源、展开配置和
+容器实际限额一致，回退时将私有配置恢复为1536m并重建后端。
+这项容量调整不代表完整报告生成已通过。
 
 `DOCKER_LOG_MAX_SIZE=10m` 与 `DOCKER_LOG_MAX_FILE=3` 限定单容器日志轮转；
 后端增加仅访问本地 `/api/v1/health` 的存活探针，探针不调用模型。
