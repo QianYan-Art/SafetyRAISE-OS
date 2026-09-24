@@ -54,6 +54,11 @@ docker compose -f /srv/apps/safetyraise/private/compose.prod.json -p safetyraise
 代理到 213，且关闭请求缓冲，避免大视频暂存在 212 的 20G 根盘。
 确认权威解析、
 公网业务和回滚入口后再退役旧应用，不能提前删除旧镜像或证书。
+观察期内旧 backend 容器保持停止，旧机的
+`safetyraise-backend-bindrefresh.service` 必须禁用，避免旧机重启时自动
+`docker restart` 形成双写。若需回滚，先停止 213 后端并核对、回迁
+最新费用账本，再恢复旧 Nginx 配置和此 systemd 单元；不能直接启动
+旧后端而忽略切流后的账本增量。
 
 213 的 `/usr/local/bin/qianyan-backup.sh` 必须将
 `/srv/data/safetyraise-app/ledger/money.sqlite3` 及 WAL/SHM 排除于
