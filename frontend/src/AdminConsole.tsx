@@ -460,7 +460,7 @@ export function AdminConsole(props: AdminConsoleProps) {
                     <tr key={item.session_id}>
                       <td data-label="归属用户">{item.owner_username ? <span title={item.owner_username}>{item.owner_username}</span> : <span className="account-admin-orphan-badge">无主空间</span>}</td>
                       <td data-label="脱敏空间标识"><span className="account-admin-space-title" title={item.title}>{item.title}</span></td>
-                      <td data-label="来源"><span className={`account-admin-source-badge ${resolveSourceBadgeClass(item.source_type)}`}>{formatSourceType(item.source_type)}</span></td>
+                      <td data-label="来源"><SourceBadge sourceType={item.source_type} /></td>
                       <td data-label="消息数">{item.message_count}</td>
                       <td data-label="更新时间">{formatDateTime(item.updated_at)}</td>
                       <td data-label="操作" className="account-admin-actions-cell">
@@ -740,6 +740,13 @@ function formatSourceType(sourceType?: string | null) {
   const normalized = (sourceType || "").trim().toLowerCase();
   if (!normalized) return "-";
   return SOURCE_LABELS[normalized] ?? normalized;
+}
+
+/** 来源徽标；没有来源时显示纯文本占位，不借用图片配色。 */
+function SourceBadge(props: { sourceType?: string | null }) {
+  const normalized = (props.sourceType || "").trim().toLowerCase();
+  if (!normalized) return <>-</>;
+  return <span className={`account-admin-source-badge ${resolveSourceBadgeClass(normalized)}`}>{formatSourceType(normalized)}</span>;
 }
 
 function resolveSourceBadgeClass(sourceType?: string | null) {

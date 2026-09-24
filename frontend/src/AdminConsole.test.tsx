@@ -222,4 +222,14 @@ describe("AdminConsole", () => {
     await user.click(dialog.parentElement!);
     expect(screen.queryByRole("dialog", { name: "空间元数据编辑" })).toBeNull();
   });
+
+  it("没有来源的空间显示纯文本占位，不套用图片徽标", async () => {
+    api.listAdminSpaces.mockResolvedValue([{ ...spaces[0], source_type: null }]);
+    render(<AdminConsole currentUser={currentUser} activeTab="spaces" />);
+    const region = await screen.findByRole("region", { name: "空间列表" });
+    await within(region).findByText("追尾事故档案");
+    const cell = region.querySelector('td[data-label="来源"]');
+    expect(cell?.textContent).toBe("-");
+    expect(cell?.querySelector(".account-admin-source-badge")).toBeNull();
+  });
 });
