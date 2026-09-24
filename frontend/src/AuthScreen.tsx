@@ -146,7 +146,7 @@ export function AuthScreen(props: AuthScreenProps) {
         <div className="auth-hero-backdrop" />
         <div className="auth-hero-content">
           <span className="auth-hero-kicker">SafetyRAISE</span>
-          <h1>道路交通事故分析报告生成系统</h1>
+          <h1>道路交通事故<br />分析报告生成系统</h1>
           <p>智能接收事故图片、视频与草稿信息，结合知识检索与专家指导意见生成可导出的分析研判文书。</p>
           <div className="auth-hero-route" aria-hidden="true">
             <div className="auth-hero-route-line" />
@@ -165,23 +165,9 @@ export function AuthScreen(props: AuthScreenProps) {
               </div>
             </div>
           </div>
-          <ul className="auth-hero-points">
-            <li>多模态事故证据分组上传</li>
-            <li>检索增强责任分析与定责支撑</li>
-            <li>报告、Word、PDF 一体化导出</li>
-          </ul>
         </div>
         <div className="auth-hero-footer">
           <span>© 2026 SafetyRAISE</span>
-          <button
-            type="button"
-            className="theme-toggle-btn auth-theme-toggle"
-            onClick={onToggleTheme}
-            aria-label={isDarkMode ? "切换为浅色模式" : "切换为深色模式"}
-            title={isDarkMode ? "切换为浅色模式" : "切换为深色模式"}
-          >
-            {isDarkMode ? <MoonIcon /> : <SunIcon />}
-          </button>
         </div>
       </section>
 

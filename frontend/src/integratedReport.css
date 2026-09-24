@@ -1,8 +1,7 @@
 .integrated-report {
-  margin-top: 24px;
+  margin-top: 8px;
   min-width: 0;
-  border-top: 1px solid var(--border-color);
-  color: var(--workbench-text, #20262e);
+  color: var(--workbench-text, var(--color-text));
   overflow-wrap: anywhere;
 }
 .integrated-report details { margin: 0 0 20px; }
@@ -12,8 +11,23 @@
   cursor: pointer;
   font-size: 14px;
   font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  list-style: none;
 }
-.integrated-report summary::marker { color: var(--workbench-muted, #67717e); }
+.integrated-report summary::-webkit-details-marker { display: none; }
+.integrated-report summary::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  margin: 0 2px 0 3px;
+  border-right: 1.5px solid var(--color-text-muted);
+  border-bottom: 1.5px solid var(--color-text-muted);
+  transform: rotate(-45deg);
+  transition: transform .15s ease;
+}
+.integrated-report details[open] > summary::before { transform: rotate(45deg); }
 .integrated-report label {
   display: block;
   margin: 0;
@@ -27,11 +41,11 @@
   min-width: 0;
   margin-top: 6px;
   padding: 8px 10px;
-  border: 1px solid var(--workbench-control-border, #c7cdd4);
+  border: 1px solid var(--workbench-control-border, var(--color-line-strong));
   border-radius: 6px;
   font: inherit;
   color: inherit;
-  background: var(--workbench-surface, #fff);
+  background: var(--workbench-surface, var(--color-surface));
 }
 .integrated-report textarea { resize: vertical; min-height: 96px; line-height: 1.65; }
 .integrated-report button,
@@ -40,14 +54,14 @@
   min-width: 0;
   min-height: 44px;
   padding: 7px 12px;
-  border: 1px solid var(--workbench-control-border, #c7cdd4);
+  border: 1px solid var(--workbench-control-border, var(--color-line-strong));
   border-radius: 6px;
   font: inherit;
   font-size: 13px;
   font-weight: 500;
   line-height: 1.4;
   color: inherit;
-  background: var(--workbench-surface, #fff);
+  background: var(--workbench-surface, var(--color-surface));
   cursor: pointer;
   transition: background-color .15s ease, border-color .15s ease, color .15s ease;
 }
@@ -58,7 +72,7 @@
   gap: 6px;
 }
 .integrated-report button svg { flex-shrink: 0; }
-.integrated-report button:hover:not(:disabled) { background: var(--bg-subtle); border-color: #8b96a5; }
+.integrated-report button:hover:not(:disabled) { background: var(--bg-subtle); border-color: var(--color-text-subtle); }
 .integrated-report :is(button, select, input, textarea, summary):focus-visible {
   outline: 2px solid var(--primary-color);
   outline-offset: 3px;
@@ -68,14 +82,14 @@
 .integrated-report button.report-primary {
   background: var(--primary-color);
   border-color: var(--primary-color);
-  color: #fff;
+  color: var(--color-on-accent);
 }
 .integrated-report button.report-primary:hover:not(:disabled) { background: var(--primary-hover); }
 .integrated-report button.report-danger { color: var(--danger-color); }
 .report-evidence-item { padding: 12px 0; border-bottom: 1px solid var(--border-color); }
 .report-evidence-item p { margin: 8px 0 12px; font-size: 14px; line-height: 1.75; }
 .report-evidence-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; font-size: 14px; }
-.evidence-locator { color: var(--workbench-muted, #67717e); font-size: 12px; }
+.evidence-locator { color: var(--workbench-muted, var(--color-text-muted)); font-size: 12px; }
 .evidence-verification { font-size: 12px; color: var(--warning-color); }
 .evidence-verification.human_confirmed { color: var(--success-color); }
 .evidence-verification.disputed { color: var(--danger-color); }
@@ -86,8 +100,8 @@
 .report-checkbox input { flex: 0 0 16px; width: 16px; height: 16px; margin: 3px 0 0; accent-color: var(--primary-color); }
 .report-section-heading { display: flex; align-items: center; gap: 8px; padding-top: 4px; }
 .report-section-heading h3 { margin: 0; font-size: 15px; font-weight: 600; }
-.report-section-heading svg { color: var(--workbench-muted, #67717e); }
-.report-empty { margin: 16px 0 24px; color: var(--workbench-muted, #67717e); font-size: 13px; }
+.report-section-heading svg { color: var(--workbench-muted, var(--color-text-muted)); }
+.report-empty { margin: 16px 0 24px; color: var(--workbench-muted, var(--color-text-muted)); font-size: 13px; }
 .integrated-report-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 14px 0 20px; }
 .integrated-report-toolbar .report-status { flex: 1 1 160px; font-size: 13px; font-weight: 500; }
 .integrated-report[data-state="published"] .report-status { color: var(--success-color); }
@@ -98,7 +112,7 @@
 .report-limit-notice { font-size: 13px; color: var(--warning-color); padding: 12px 0; border-top: 1px solid var(--border-color); }
 .integrated-report .markdown-report { min-width: 0; overflow-x: auto; line-height: 1.85; font-size: 14px; }
 .integrated-report .markdown-report :is(p, li) { overflow-wrap: anywhere; }
-.integrated-report .markdown-report h1 { font-size: 20px; }
+.integrated-report .markdown-report h1 { font-size: 20px; border-bottom-width: 1px; }
 .integrated-report .markdown-report h2 { font-size: 17px; }
 .integrated-report .markdown-report h3 { font-size: 15px; }
 /* 下载：非正式稿附一条说明，沿用页面已有的浅底色条提示 */
@@ -123,11 +137,11 @@
   border-top: 1px solid var(--border-color);
 }
 .report-feedback-hint,
-.report-feedback-state { margin: 0; color: var(--workbench-muted, #67717e); font-size: 13px; line-height: 1.6; }
+.report-feedback-state { margin: 0; color: var(--workbench-muted, var(--color-text-muted)); font-size: 13px; line-height: 1.6; }
 .report-feedback-notice { margin: 0; color: var(--warning-color); font-size: 13px; }
 .report-feedback-group { min-width: 0; margin: 0; padding: 0; border: 0; }
 .report-feedback-group legend { margin-bottom: 8px; padding: 0; font-size: 13px; font-weight: 500; }
-.report-feedback-optional { margin-left: 8px; color: var(--workbench-muted, #67717e); font-weight: 400; }
+.report-feedback-optional { margin-left: 8px; color: var(--workbench-muted, var(--color-text-muted)); font-weight: 400; }
 .report-feedback-group:disabled { opacity: .6; }
 
 .feedback-verdict-options {
@@ -135,7 +149,7 @@
   grid-template-columns: repeat(3, minmax(0, 1fr));
   max-width: 520px;
   overflow: hidden;
-  border: 1px solid var(--workbench-control-border, #c7cdd4);
+  border: 1px solid var(--workbench-control-border, var(--color-line-strong));
   border-radius: 6px;
 }
 .integrated-report .feedback-verdict-option {
@@ -148,13 +162,13 @@
   min-height: 44px;
   padding: 8px 10px;
   font-size: 13px;
-  background: var(--workbench-surface, #fff);
+  background: var(--workbench-surface, var(--color-surface));
   cursor: pointer;
   transition: background-color .15s ease, color .15s ease, box-shadow .15s ease;
 }
 .feedback-verdict-option[data-tone="warning"] { --tone: var(--warning-color); }
 .feedback-verdict-option[data-tone="danger"] { --tone: var(--danger-color); }
-.feedback-verdict-option + .feedback-verdict-option { border-left: 1px solid var(--workbench-control-border, #c7cdd4); }
+.feedback-verdict-option + .feedback-verdict-option { border-left: 1px solid var(--workbench-control-border, var(--color-line-strong)); }
 .feedback-verdict-option::before {
   content: "";
   flex: 0 0 8px;
@@ -167,7 +181,7 @@
 .feedback-verdict-option:hover { background: var(--bg-subtle); }
 .integrated-report .feedback-verdict-option[data-checked="true"] {
   background: var(--bg-subtle);
-  background: color-mix(in srgb, var(--tone) 10%, var(--workbench-surface, #fff));
+  background: color-mix(in srgb, var(--tone) 10%, var(--workbench-surface, var(--color-surface)));
   color: var(--tone);
   font-weight: 600;
   box-shadow: inset 0 -3px 0 var(--tone);
@@ -183,11 +197,11 @@
   gap: 4px;
   min-height: 36px;
   padding: 6px 12px;
-  border: 1px solid var(--workbench-control-border, #c7cdd4);
+  border: 1px solid var(--workbench-control-border, var(--color-line-strong));
   border-radius: 6px;
   font-size: 13px;
   font-weight: 400;
-  background: var(--workbench-surface, #fff);
+  background: var(--workbench-surface, var(--color-surface));
   cursor: pointer;
 }
 .feedback-tag:hover { background: var(--bg-subtle); }
