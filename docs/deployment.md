@@ -2,8 +2,8 @@
 
 ## 213 同机演示部署
 
-213 已承载 PostgreSQL、知识库和运行时数据；应用迁入时复用该服务，
-不重建业务库，也不公开数据库端口。新应用编排与发布文件放在
+213 同机承载 `frontend / backend`、PostgreSQL、知识库和运行时数据；
+应用复用既有业务库，不公开数据库端口。应用编排与发布文件放在
 `/srv/apps/safetyraise`，只读知识库和运行时目录经
 `/srv/data/safetyraise` 指向既有 `/srv/safetyraise-data`；本机费用账本、
 YOLO 权重和受控临时上传放在 `/srv/data/safetyraise-app`。
@@ -28,6 +28,7 @@ python3 deployment/docker/prepare-213-release.py \
   --frontend-image sha256:<verified-213-frontend-id> \
   --frontend-port 18080
 docker compose -f /srv/apps/safetyraise/private/compose.prod.json config --quiet
+docker compose -f /srv/apps/safetyraise/private/compose.prod.json -p safetyraise up -d
 ```
 
 隔离验证另用 `--output .../compose.test.json`、`--frontend-port 18081`
@@ -40,16 +41,18 @@ docker compose -f /srv/apps/safetyraise/private/compose.prod.json config --quiet
 `nginx.213.site.conf` 终止 TLS 和转发长请求，不能覆盖其他站点。
 证书只迁入 `safetyraise.cn` 的 lineage 与对应 ACME 账户，
 `fullchain.pem`、`privkey.pem` 位于 `/etc/letsencrypt/live/safetyraise.cn/`；
-`renew-213-nginx.sh` 作为 Certbot deploy hook。域名指向 213 后再做
-webroot 续期 dry-run；切换前的 DNS 指向旧主机，不能把此时的挑战失败
-记为续期已验证。站点日志写入 `/srv/logs/nginx/safetyraise.access.log`
+`renew-213-nginx.sh` 作为 Certbot deploy hook。域名指向 213 后用
+`certbot renew --dry-run --cert-name safetyraise.cn --non-interactive`
+验证 webroot 挑战，再以 `RENEWED_LINEAGE` 指向该证书测试 hook 的
+`nginx -t` 与 reload。站点日志写入 `/srv/logs/nginx/safetyraise.access.log`
 与 `/srv/logs/nginx/safetyraise.error.log`，沿用宿主 logrotate。
 
 切流时不能让两台后端对各自的 SQLite 账本同时记费。先保留旧发布，
 停止旧后端写入，对账后用 SQLite backup API 迁移最终账本，再启动
 213 正式 Compose 并以域名 SNI/指定 213 地址核验 HTTPS、鉴权、历史、
 就绪和资源。DNS 传播期间旧前端的 `/api/` 应以校验证书的 HTTPS
-代理到 213，避免访问旧 IP 的用户继续写旧账本。确认权威解析、
+代理到 213，且关闭请求缓冲，避免大视频暂存在 212 的 20G 根盘。
+确认权威解析、
 公网业务和回滚入口后再退役旧应用，不能提前删除旧镜像或证书。
 
 213 的 `/usr/local/bin/qianyan-backup.sh` 必须将
@@ -152,10 +155,10 @@ tokenizer 校验输入长度。部署时需另外核实模型实际加载状态�
 `runtime`、`models`、`kbase`、`nginx`、`letsencrypt` 是现有业务或共享资产，
 全部排除在应用旧版本清理之外。执行清理前仍须重新核验实时挂载和引用，不凭此记录删除。
 
-## 当前推荐拓扑
+## 旧212双机拓扑（回滚参考）
 
-当前项目已经不再按“应用、数据库、知识库、reranker 全部同机”的方式部署。
-推荐的生产拓扑是两台服务器：
+以下是迁移前的部署方式，仅用于 212 仍在观察期时的回滚核对；
+当前演示服务以本页开头的 213 同机部署为准。旧拓扑分为两台服务器：
 
 1. `212` 应用服务器
 2. `213` 数据 / 知识库服务器
@@ -175,7 +178,7 @@ tokenizer 校验输入长度。部署时需另外核实模型实际加载状态�
 
 这不是最终的“检索服务化”形态，但它能在不重写整条检索链的前提下，先满足双机协同部署。
 
-## 两台机器各自放什么
+## 旧双机资产位置（回滚参考）
 
 ### 212 应用服务器
 
@@ -200,9 +203,9 @@ tokenizer 校验输入长度。部署时需另外核实模型实际加载状态�
 4. 运行时共享目录
 5. 可选备份目录
 
-## 当前必须放行的端口
+## 旧双机端口（回滚参考）
 
-按当前方案，至少需要：
+仅在回滚到原双机方案时，至少需要：
 
 1. `212/tcp/80`：HTTP 首次访问与证书校验
 2. `212/tcp/443`：HTTPS 正式流量
@@ -278,7 +281,7 @@ docs/prepare-runtime-assets.md
 2. embedding 服务
 3. PostgreSQL
 4. 知识库目录
-5. 域名 DNS 已指向 212
+5. 仅在回滚旧双机拓扑时，域名 DNS 指向 212
 
 ## Docker Compose 入口
 
@@ -483,7 +486,7 @@ sh deployment/docker/setup-https.sh
 2. 成功后 reload frontend 容器内的 Nginx
 3. frontend 容器定位按 compose service label，不再依赖旧容器名
 4. 不再 `source .env.server`，只读取续期实际需要的少数字段
-5. 发布目录部署（212 当前方式）没有项目检出和 `.env.server`：脚本单独安装到 `/srv/safetyraise/bin/renew-https.sh`，按默认证书路径续期，`/etc/cron.d/safetyraise-cert-renew` 指向该固定路径；不要把续期任务指向某个发布目录，否则清理旧发布后续期会静默失败
+5. 旧 212 发布目录方式没有项目检出和 `.env.server`：脚本单独安装到 `/srv/safetyraise/bin/renew-https.sh`，按默认证书路径续期，`/etc/cron.d/safetyraise-cert-renew` 指向该固定路径；213 正式站点使用宿主 Certbot timer 和 deploy hook，不沿用此旧 cron
 
 ## Modal 专家服务
 
@@ -497,7 +500,7 @@ modal deploy deployment/modal/qwen3_expert.py
 
 生产参数由脚本固定：vLLM `0.21.0`、L4、EU 路由、F16、单容器、单并发、60 秒空闲缩容和 1800 秒启动等待。vLLM 命令使用 `--port 8000`、`--served-model-name suyuan37/SafetyRAISE-TS-Qwen3`、`--dtype float16`、`--max-model-len 12288`、`--max-num-seqs 1`、`--gpu-memory-utilization 0.88`、`--generation-config /model-volume/models/TS-Qwen3`、`--reasoning-parser qwen3` 与 `--enforce-eager`。
 
-脚本不设置 `--max-tokens`、`--max-new-tokens` 或 `--max-output-tokens`。`12288` 只限制单次请求可用上下文，按系统实际传给专家模型的一轮提示和事故信息选取；专家链路不复用上一轮会话。Proxy Auth token 通过 Modal 控制台创建，只保存到 212 的 root-only `.env.server`，不写入仓库、镜像、前端或日志。
+脚本不设置 `--max-tokens`、`--max-new-tokens` 或 `--max-output-tokens`。`12288` 只限制单次请求可用上下文，按系统实际传给专家模型的一轮提示和事故信息选取；专家链路不复用上一轮会话。Proxy Auth token 通过 Modal 控制台创建，仅保存到服务器 root-only 配置，不能写入仓库、镜像、前端或日志。
 
 Modal 冷启动可能让首次 `POST` 返回 `303` 和 `__modal_attempt_token`。Harness 只接受 HTTPS、同源 `.modal.run`、同路径且仅含一个非空 attempt token 的响应，再用一次 `GET` 取得同一物理尝试的结果；其他重定向全部拒绝，且不会再发送第二个 `POST`。`/api/v1/ready` 只核验配置，不会为探活唤醒 GPU；真实可用性应通过一次受控合成业务请求确认。
 
@@ -539,8 +542,8 @@ Modal 冷启动可能让首次 `POST` 返回 `303` 和 `__modal_attempt_token`�
 
 1. 212 只保留当前发布目录和一个已验证回滚点。删除旧发布前，必须用运行容器的 `com.docker.compose.project.working_dir` 标签确认 frontend 与 backend 都指向当前目录，并确认当前、回滚镜像完整存在；还要 `grep -r /srv/safetyraise/releases /etc/cron.d /etc/systemd/system`，确认没有系统任务引用待删目录。后端构建基础镜像（当前为 `safetyraise-backend:c10e88b`）即使无发布引用也保留标签，不作为旧镜像清理。
 2. 发布包、构建目录和构建日志在 `health / ready`、挂载和回滚镜像核验通过后即可定点删除。镜像按明确标签或完整 ID 删除，不运行全局 Docker prune，避免误删唯一回滚层或其他服务资产。
-3. 213 的长期业务目录只承载 `kbase`、`postgres` 和 `runtime`。清理只处理能由构建记录证明无活动引用的 SafetyRAISE 缓存；不得按名称猜测删除数据库、知识库、运行时账本、审计记录、私有证据或其他服务镜像。
-4. 清理前后记录根盘可用空间、可用内存、PostgreSQL 健康、SSHFS 挂载和 212 的 `/api/v1/health`、`/api/v1/ready`，其中任一回归都应停止继续删除。
+3. 213 的长期业务目录包括既有 `kbase`、`postgres`、`runtime` 和 `/srv/data/safetyraise-app` 中的账本、小型模型与受控上传。清理只处理能由构建记录证明无活动引用的缓存；不得按名称猜测删除数据库、知识库、账本、审计记录、私有证据或其他服务镜像。
+4. 清理前后记录根盘可用空间、可用内存、PostgreSQL 健康、213 的 `/api/v1/health` 与 `/api/v1/ready`，以及其他站点状态；212 桥接保留期间另核验其 HTTPS/API。任一回归都应停止继续删除。
 
 ## 最容易踩的坑
 

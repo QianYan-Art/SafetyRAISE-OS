@@ -57,7 +57,7 @@ SafetyRAISE 面向道路交通事故分析场景，提供从事故图片、视�
 4. 检索链路：本地知识库文件 + embedding + 稀疏/稠密混合 RRF（reranker 可选，服务器默认停用）
 5. 账户与数据：PostgreSQL（用户、会话、每用户模型配置）
 6. 原生加速：Rust（分词 / 打分 / JSON 候选提取）
-7. 部署目录：`deployment/docker`（支持应用 / 数据双服务器分离）
+7. 部署目录：`deployment/docker`（支持应用与数据同机或双机部署）
 
 ## 仓库结构
 
@@ -121,10 +121,10 @@ npm install
 
 ## 当前部署基线
 
-1. 双机生产拓扑由应用服务器运行 `frontend / backend`，数据服务器承载 PostgreSQL、知识库和共享运行时目录；应用服务器只保留运行容器、必要小型模型和受限本地临时数据。
-2. `deployment/docker/docker-compose.server.yml` 已为 `frontend / backend` 显式设置 `json-file` 日志策略；可通过 `.env.server` 的 `DOCKER_LOG_MAX_SIZE` / `DOCKER_LOG_MAX_FILE` 调整上限。
-3. `deployment/docker/provision-212.sh` 会用 `EOF` heredoc 预写 `/etc/docker/daemon.json`，把应用机宿主 Docker 默认日志限制为 `20m * 5`。
-4. `deployment/docker/setup-https.sh` 通过 `LOGROTATE_FILE=/etc/logrotate.d/safetyraise-cert-renew` 写入证书续期日志轮转规则。
+1. 线上演示服务在 213 同机运行 `frontend / backend`、PostgreSQL、知识库和运行时目录；前端容器仅绑定 `127.0.0.1:18080`，由宿主 Nginx 提供 HTTPS。212 暂作 DNS 缓存传播期的旧入口与回滚资产，不运行第二个后端。
+2. 应用编排位于 `/srv/apps/safetyraise`，既有数据库与知识库经 `/srv/data/safetyraise` 使用，新账本、小型模型和临时上传位于 `/srv/data/safetyraise-app`；含凭据的展开 Compose 仅 root 可读。
+3. 宿主 Nginx 日志统一写入 `/srv/logs/nginx`，Certbot 续期后校验并重载宿主 Nginx；`qianyan-backup.timer` 覆盖应用配置、PostgreSQL 逻辑备份和 SQLite 一致性账本副本。部署和回滚步骤见 [部署说明](docs/deployment.md)。
+4. `deployment/docker/docker-compose.server.yml` 与 `provision-212.sh` 保留原双机部署能力，不能当作当前 213 的直接启动命令。
 5. 服务器统一专家模型默认使用 `qianyan-art--safetyraise-qwen3-expert-serve.eu-west.modal.run` 的按需 Modal 端点；该系统级链路不进入普通用户或管理员的模型配置界面。部署采用 L4、F16、`12288` 上下文、单并发和缩容到零，不设置模型输出 token 上限。
 6. 生产 backend 镜像必须同时包含 CPU 版 `torch / torchvision`、`ultralytics` 和 `lap`，并通过 `deployment/docker/verify-runtime-dependencies.py` 核验后再替换线上镜像。
 7. 前端本地会话缓存按 `user.id` 分桶，键前缀为 `SESSION_STORAGE_KEY_PREFIX`；落盘使用 `SYNC_DEBOUNCE_MS=300` 防抖，并在组件卸载/切账号前强制 flush。
