@@ -654,6 +654,7 @@ export default function App() {
         themeMode={themeMode}
         loading={authSubmitting}
         errorMessage={authError}
+        onClearError={() => setAuthError("")}
         onToggleTheme={() => setThemeMode((current) => (current === "dark" ? "light" : "dark"))}
         onLogin={handleLogin}
         onRegister={handleRegister}

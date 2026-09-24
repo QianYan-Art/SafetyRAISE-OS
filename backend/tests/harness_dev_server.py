@@ -180,6 +180,14 @@ def main():
                 "created_at,updated_at) VALUES (%s,%s,'synthetic-unused','工程验证账号',"
                 "'user',true,now(),now())", (owner, username),
             )
+            # 普通用户未配置视觉与报告模型时工作区会强制打开模型配置；
+            # 合成账号预置回环地址的占位配置，浏览器场景直接进入报告流程。
+            for capability in ("vision", "report"):
+                conn.execute(
+                    "INSERT INTO user_capability_configs(user_id,capability,base_url,api_key,"
+                    "model_name) VALUES (%s,%s,'http://127.0.0.1:9/v1','synthetic-unused',"
+                    "'synthetic')", (owner, capability),
+                )
             conn.execute(
                 "INSERT INTO chat_sessions(id,owner_user_id,owner_username,title,created_at,"
                 "updated_at,draft_json,messages,session_state) VALUES (%s,%s,%s,%s,%s,%s,%s,"

@@ -71,9 +71,12 @@ export async function verifyIntegratedReport({ page, bootstrap, api, output, res
       const hostBox = node.getBoundingClientRect();
       const controls = [...node.querySelectorAll("button,input,textarea,select")]
         .filter((element) => isVisible(element) && !isInHorizontalScroller(element));
+      // 复选框与单选框的可点区域是包裹它的标签，按标签计量尺寸与遮挡。
+      const hitTarget = (element) => (element.matches('input[type="checkbox"], input[type="radio"]')
+        && element.closest("label")) || element;
       const boxes = controls.map((element) => ({
         element,
-        box: element.getBoundingClientRect(),
+        box: hitTarget(element).getBoundingClientRect(),
         label: element.getAttribute("aria-label") || element.textContent?.trim().slice(0, 40) || element.tagName,
       }));
       const outside = boxes.filter(({ box }) => box.left < -1 || box.right > innerWidth + 1)
@@ -177,8 +180,10 @@ export async function verifyIntegratedReport({ page, bootstrap, api, output, res
   assert(saved.draft_json.includes("合成案例一"));
   assert.equal(runs.runs[0].review_status, "passed");
   assert.equal(runs.runs[0].formal_export_eligible, false);
-  assert.equal(await panel.getByRole("button", { name: "下载Word" }).count(), 0);
-  results.push("核对事实阶段确认后完成真实保存、创建、授权、合成生成和独立审查，未冒充正式导出");
+  // 工程样本可下载，但必须附“未经质量验收”说明，不能呈现为正式导出。
+  await panel.getByRole("button", { name: "下载Word" }).waitFor();
+  assert.equal(await panel.getByText("演示样本：报告未经质量验收", { exact: false }).count(), 1);
+  results.push("核对事实阶段确认后完成真实保存、创建、授权、合成生成和独立审查，工程样本带标记下载，未冒充正式导出");
 
   await selectStage("核对事实");
   await editor.fill("合成案例二：验证新阶段历史切换。");
@@ -378,7 +383,9 @@ export async function verifyIntegratedReport({ page, bootstrap, api, output, res
     const active = page.locator("[data-session-id]").filter({
       has: page.locator("button.session-title[aria-current='true']"),
     });
-    return (await active.count()) > 0 ? await active.first().getAttribute("data-session-id") : null;
+    // 新档案创建并切换完成前，当前项仍是原会话；等到当前项换成新会话再继续。
+    const current = (await active.count()) > 0 ? await active.first().getAttribute("data-session-id") : null;
+    return current && current !== bootstrap.session_id ? current : null;
   });
   assert(newSessionId && newSessionId !== bootstrap.session_id);
   await page.keyboard.press("Escape");

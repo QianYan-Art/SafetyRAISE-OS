@@ -96,7 +96,8 @@
 .report-evidence-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .report-evidence-editor { display: grid; gap: 12px; padding-top: 12px; }
 .report-evidence-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.integrated-report .report-checkbox { display: flex; align-items: flex-start; gap: 8px; line-height: 1.6; font-weight: 400; }
+/* 标签整体是可点区域：不低于 28px，多行时复选框仍对齐首行。 */
+.integrated-report .report-checkbox { display: flex; align-items: flex-start; gap: 8px; min-height: 28px; padding-block: 3px; line-height: 1.6; font-weight: 400; }
 .report-checkbox input { flex: 0 0 16px; width: 16px; height: 16px; margin: 3px 0 0; accent-color: var(--primary-color); }
 .report-section-heading { display: flex; align-items: center; gap: 8px; padding-top: 4px; }
 .report-section-heading h3 { margin: 0; font-size: 15px; font-weight: 600; }
@@ -226,4 +227,9 @@
   .report-feedback-footer { flex-direction: column; align-items: stretch; }
   .integrated-report .report-feedback-reviewer { flex-basis: auto; }
   .report-export-actions button { flex: 1 1 0; }
+}
+
+/* 320px 级窄屏：三段结论每段约 93px，收紧留白与字号使“可直接使用”不折行。 */
+@media (max-width: 360px) {
+  .integrated-report .feedback-verdict-option { gap: 6px; padding-inline: 6px; font-size: 12px; white-space: nowrap; }
 }

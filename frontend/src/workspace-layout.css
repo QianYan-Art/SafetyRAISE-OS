@@ -135,7 +135,7 @@
   .evidence-workspace .report-surface{padding:24px 18px}
   .evidence-workspace .report-action-dock{flex-wrap:wrap;gap:12px}
   .draft-save-controls{width:100%;justify-content:space-between}
-  .evidence-workspace .report-action-dock .report-submit-btn{flex:1;min-width:0;font-size:12px;padding-inline:10px}
+  .evidence-workspace .report-action-dock .report-submit-btn{flex:1;min-width:0;font-size:14px;padding-inline:10px}
   .evidence-workspace .report-export-card{flex:1;min-width:80px;padding:9px}
   .evidence-workspace .artifact-wall-panel{padding:20px}
   .evidence-workspace .artifact-wall-grid{grid-template-columns:minmax(0,1fr)}

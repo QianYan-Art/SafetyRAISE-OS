@@ -119,9 +119,11 @@ textarea {
   font: inherit;
 }
 
+/* 只过渡颜色与位移类属性；焦点描边立即出现，不随 transition 从默认值渐变。 */
 button {
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease,
+    box-shadow 0.2s ease, opacity 0.2s ease, transform 0.2s ease;
 }
 
 /* Layout */
@@ -260,6 +262,7 @@ button {
   display: flex;
   flex-direction: column;
   justify-content: space-between;
+  gap: 32px;
   padding: 48px 44px 36px;
   color: #ffffff;
   background: #1e3a8a;
@@ -857,8 +860,9 @@ button {
     min-height: 220px;
   }
 
+  /* 右上角主题按钮 20px 起、高 36px，表单顶部为它留出位置，避免压住登录/注册切换。 */
   .auth-form-panel {
-    padding-top: 0;
+    padding-top: 72px;
   }
 }
 
@@ -1144,7 +1148,7 @@ button {
     border-radius: 6px;
     opacity: 0;
     transform: translateY(-50%) translateX(4px);
-    transition: all 0.2s ease;
+    transition: opacity 0.2s ease, transform 0.2s ease, color 0.2s ease, background-color 0.2s ease;
     cursor: pointer;
     font-size: 18px;
     line-height: 1;

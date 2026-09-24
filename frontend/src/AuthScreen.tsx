@@ -7,6 +7,8 @@ interface AuthScreenProps {
   themeMode: ThemeMode;
   loading: boolean;
   errorMessage: string;
+  /** 切换登录/注册时清掉上层保留的上一次请求错误。 */
+  onClearError?: () => void;
   onToggleTheme: () => void;
   onLogin: (payload: { username: string; password: string }) => Promise<void>;
   onRegister: (payload: { username: string; password: string; displayName?: string }) => Promise<void>;
@@ -76,7 +78,7 @@ function resolvePasswordStrength(password: string) {
 }
 
 export function AuthScreen(props: AuthScreenProps) {
-  const { themeMode, loading, errorMessage, onToggleTheme, onLogin, onRegister } = props;
+  const { themeMode, loading, errorMessage, onClearError, onToggleTheme, onLogin, onRegister } = props;
   const [mode, setMode] = useState<AuthMode>("login");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -90,6 +92,13 @@ export function AuthScreen(props: AuthScreenProps) {
 
   const passwordStrength = useMemo(() => resolvePasswordStrength(password), [password]);
   const mergedError = localError || errorMessage;
+
+  function switchMode(next: AuthMode) {
+    setMode(next);
+    setLocalError("");
+    setFieldErrors({});
+    onClearError?.();
+  }
 
   async function handleSubmit() {
     setLocalError("");
@@ -186,22 +195,14 @@ export function AuthScreen(props: AuthScreenProps) {
             <button
               type="button"
               className={`seg-tab-btn ${mode === "login" ? "is-active" : ""}`}
-              onClick={() => {
-                setMode("login");
-                setLocalError("");
-                setFieldErrors({});
-              }}
+              onClick={() => switchMode("login")}
             >
               登录
             </button>
             <button
               type="button"
               className={`seg-tab-btn ${mode === "register" ? "is-active" : ""}`}
-              onClick={() => {
-                setMode("register");
-                setLocalError("");
-                setFieldErrors({});
-              }}
+              onClick={() => switchMode("register")}
             >
               注册
             </button>

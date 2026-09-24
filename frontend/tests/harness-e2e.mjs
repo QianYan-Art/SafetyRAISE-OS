@@ -14,7 +14,10 @@ const root = path.dirname(frontend);
 const apiPort = Number(process.env.HARNESS_TEST_API_PORT || "18081");
 assert(Number.isInteger(apiPort) && apiPort >= 1024 && apiPort <= 65535);
 const api = `http://127.0.0.1:${apiPort}`;
-const ui = "http://127.0.0.1:15174";
+// Windows 可能把默认端口划入系统保留段，可用 HARNESS_TEST_UI_PORT 改用其他端口。
+const uiPort = Number(process.env.HARNESS_TEST_UI_PORT || "15174");
+assert(Number.isInteger(uiPort) && uiPort >= 1024 && uiPort <= 65535);
+const ui = `http://127.0.0.1:${uiPort}`;
 const output = process.env.REPORT_HARNESS_E2E_OUTPUT
   || await fs.mkdtemp(path.join(os.tmpdir(), "safetyraise-harness-browser-"));
 await fs.mkdir(output, { recursive: true });
@@ -99,7 +102,7 @@ function trackSessionTraffic(targetPage, label, sessionUrl) {
 }
 try {
   await requireFreePort(apiPort);
-  await requireFreePort(15174);
+  await requireFreePort(uiPort);
   start(path.join(root, ".venv", "Scripts", "python.exe"),
     ["-m", "tests.harness_dev_server"],
     { PYTHONPATH: path.join(root, "backend"), PYTHONIOENCODING: "utf-8" });
@@ -110,7 +113,7 @@ try {
   bootstrap = await request(`${api}/__harness_test__/bootstrap`);
   start(process.execPath, [
     path.join(frontend, "node_modules/vite/bin/vite.js"),
-    "--host", "127.0.0.1", "--port", "15174", "--strictPort",
+    "--host", "127.0.0.1", "--port", String(uiPort), "--strictPort",
     "--config", path.join(frontend, "vite.config.ts"), frontend,
   ], { BACKEND_PROXY_TARGET: api });
   await waitUntil(async () => (await fetch(ui)).ok);
