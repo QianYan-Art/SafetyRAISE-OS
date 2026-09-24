@@ -29,6 +29,10 @@ class MoneyGuardError(HarnessError):
     """货币账本拒绝或阻断一次 attempt。"""
 
 
+class MoneyGuardNotSent(MoneyGuardError):
+    """货币门在调用底层物理客户端之前明确拒绝。"""
+
+
 class MoneyGuardConfigurationError(HarnessError, ValueError):
     """固定实验配置与账本不一致，或本地配置本身无效。"""
 
@@ -1073,9 +1077,12 @@ class MoneyGuardHTTPAttemptClient:
             return "settled"
 
     async def attempt(self, role: str, payload: dict, timeout: float) -> dict:
-        self._ensure_open()
-        self._validate_attempt(role, payload)
-        attempt_id = self._reserve(role)
+        try:
+            self._ensure_open()
+            self._validate_attempt(role, payload)
+            attempt_id = self._reserve(role)
+        except MoneyGuardError as exc:
+            raise MoneyGuardNotSent(exc.code, exc.status_code, exc.details) from exc
         try:
             result = self._client.attempt(role, payload, timeout)
             response = await result if inspect.isawaitable(result) else result
@@ -1297,10 +1304,13 @@ class VersionedMoneyGuardHTTPAttemptClient(MoneyGuardHTTPAttemptClient):
         return row is not None and row[0] == "reserved"
 
     async def attempt(self, role: str, payload: dict, timeout: float) -> dict:
-        self._ensure_open()
-        self._validate_attempt(role, payload)
-        contract = self._contracts[role]
-        attempt_id = self._reserve(role)
+        try:
+            self._ensure_open()
+            self._validate_attempt(role, payload)
+            contract = self._contracts[role]
+            attempt_id = self._reserve(role)
+        except MoneyGuardError as exc:
+            raise MoneyGuardNotSent(exc.code, exc.status_code, exc.details) from exc
         try:
             result = self._client.attempt(role, payload, timeout)
             response = await result if inspect.isawaitable(result) else result

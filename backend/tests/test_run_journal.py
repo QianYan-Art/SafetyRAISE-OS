@@ -5,6 +5,7 @@ import pytest
 
 from app.report_harness.errors import HarnessError
 from app.report_harness.journal import ExecutionJournal
+from app.report_harness.money_guard import MoneyGuardNotSent
 from app.report_harness.role_loop import RoleLoop
 from app.report_harness.review_ledger import IssueLedger
 from app.report_harness.recovery import RunRecovery
@@ -150,6 +151,22 @@ def test_saved_pre_search_denial_is_not_reexecuted_or_rewritten(pg_store):
     assert rebuilt.attempts("tool") == 1
     assert store.events(owner, run_id) == before
     assert list(rebuilt._journal["entries"].values())[0]["status"] == "denied"
+
+
+def test_model_money_guard_denial_does_not_leave_unknown_intent(pg_store):
+    store, owner, run_id, token = create_run(pg_store, policy=BudgetPolicy())
+    journal = ExecutionJournal(store, owner, run_id, token)
+    identity = {"role": "expert", "context_digest": "a" * 64}
+
+    async def denied():
+        raise MoneyGuardNotSent("unknown_cost_ack_required")
+
+    with pytest.raises(MoneyGuardNotSent):
+        asyncio.run(journal.invoke("model", identity, denied, limit=2))
+    rebuilt = ExecutionJournal(store, owner, run_id, token)
+    assert list(rebuilt._journal["entries"].values())[0]["status"] == "denied"
+    with pytest.raises(MoneyGuardNotSent):
+        asyncio.run(rebuilt.invoke("model", identity, denied, limit=2))
 
 
 def test_legacy_tool_contract_recovery_reuses_models_and_denials_across_restart(pg_store):

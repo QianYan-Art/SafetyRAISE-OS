@@ -13,6 +13,7 @@ from app.report_harness.money_guard import (
     MoneyGuardConfigurationError,
     MoneyGuardError,
     MoneyGuardHTTPAttemptClient,
+    MoneyGuardNotSent,
     RoleBillingContract,
     VersionedMoneyGuardHTTPAttemptClient,
     read_billing_contract,
@@ -288,7 +289,7 @@ def test_v1_unknown_24_is_bound_to_v1_and_blocks_until_explicit_ack(tmp_path):
     assert guard.registered_roles == ("expert", "generator", "reviewer")
 
     async def blocked():
-        with pytest.raises(MoneyGuardError, match="unknown_cost_ack_required"):
+        with pytest.raises(MoneyGuardNotSent, match="unknown_cost_ack_required"):
             await guard.attempt("expert", {"model": "fake/expert"}, 1)
 
     asyncio.run(blocked())

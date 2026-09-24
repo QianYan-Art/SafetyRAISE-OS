@@ -140,7 +140,9 @@ major，按阻断问题进入有界修订；不改失败检查、不自动关闭
 
 新链路的 `TransportRoles` 使用固定角色配置和 `BudgetedTransport`，不复用旧 provider
 的隐藏重试、端点回退或模型驻留操作。每次 HTTP attempt 先在 PostgreSQL 登记 intent，
-发送前原子转为 dispatched；本地发送线性化点之后视为在途，不承诺远端恰好一次。
+发送前原子转为 dispatched；本地发送线性化点之后保守视为在途，不承诺远端恰好一次。
+仅当货币门明确在调用底层 HTTP 客户端前拒绝时，才将该次请求记为未外发并回收
+token 预留；超时、断联、usage 或费用不明仍保留未知预留，不自动重试。
 请求与 run 共用行锁串行检查 fencing 和余额；取消不能被迟到的结果覆盖。
 
 已知 usage 结算后释放未用预留；缺失或无效 usage 保留全部 token 预留并暂停，

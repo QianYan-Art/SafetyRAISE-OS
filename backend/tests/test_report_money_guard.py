@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from app.report_harness.errors import HarnessError
+from app.report_harness.money_guard import MoneyGuardNotSent
 from evals.report_harness.money_guard import (
     ALLOWED_MODEL,
     MoneyGuardConfigurationError,
@@ -115,6 +116,21 @@ def test_exception_keeps_reservation_without_an_implicit_retry(tmp_path):
     assert len(client.calls) == 1
     _, attempts = rows(path)
     assert attempts == [(40_000_000, 40_000_000, None, "unknown", "underlying_attempt_failed")]
+
+
+def test_budget_rejection_is_confirmed_before_underlying_client(tmp_path):
+    path = tmp_path / "money.sqlite3"
+    client = SyntheticClient({"usage": {"cost": "8"}, "output": "first"})
+    guard = make_guard(path, client, cost="60")
+
+    async def run():
+        assert (await guard.attempt("generator", payload(), 1))["output"] == "first"
+        with pytest.raises(MoneyGuardNotSent, match="money_budget_exhausted"):
+            await guard.attempt("generator", payload(), 1)
+
+    asyncio.run(run())
+    assert len(client.calls) == 1
+    assert rows(path)[1] == [(60_000_000, 56_000_000, 56_000_000, "settled", None)]
 
 
 def test_missing_usage_cost_keeps_reservation_and_consumes_budget_for_next_instance(tmp_path):

@@ -553,6 +553,35 @@ def test_reject_unsent_releases_reservation_but_sent_request_cannot_be_rejected(
     assert error.value.code == "request_state_conflict"
 
 
+def test_confirmed_not_sent_rejects_dispatched_reservation_only(pg_store):
+    store, owner, run_id, token = create_run(
+        pg_store,
+        policy=BudgetPolicy(max_physical_requests=5, max_retrieval_requests=5, max_total_tokens=100),
+    )
+    ledger = RequestLedger(store)
+    unsent = reserve(ledger, owner, run_id, token, amount=10, review=0)
+    with pytest.raises(HarnessError, match="request_state_conflict"):
+        ledger.reject_confirmed_not_sent(
+            owner, run_id, token, unsent["request_id"], unsent["attempt_id"],
+        )
+
+    sent = reserve(ledger, owner, run_id, token, amount=30, review=0)
+    ledger.dispatch(owner, run_id, token, sent["request_id"], sent["attempt_id"])
+    ledger.reject_confirmed_not_sent(
+        owner, run_id, token, sent["request_id"], sent["attempt_id"],
+    )
+    ledger.reject_confirmed_not_sent(
+        owner, run_id, token, sent["request_id"], sent["attempt_id"],
+    )
+    view = ledger.view(owner, run_id)
+    assert view["inflight_reserved"] == 10
+    assert view["unknown_reserved"] == 0
+    with pytest.raises(HarnessError, match="request_state_conflict"):
+        ledger.mark_unknown(
+            owner, run_id, token, sent["request_id"], sent["attempt_id"],
+        )
+
+
 def test_cancelled_run_allows_original_token_to_clean_intent(pg_store):
     store, owner, run_id, token = create_run(
         pg_store,

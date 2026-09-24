@@ -11,6 +11,7 @@ import httpx
 
 from app.report_harness.contracts import canonical_digest
 from app.report_harness.errors import HarnessError
+from app.report_harness.money_guard import MoneyGuardNotSent
 
 
 @dataclass(frozen=True)
@@ -239,6 +240,10 @@ class BudgetedTransport:
             self.authorize()
             async with asyncio.timeout(timeout):
                 response = await self.client.attempt(role, deepcopy(payload), timeout)
+        except MoneyGuardNotSent:
+            # 只有货币门明确未调用底层客户端，才能撤销保守的派发预留。
+            self.ledger.reject_confirmed_not_sent(*identity)
+            raise
         except asyncio.CancelledError:
             self.ledger.mark_unknown(*identity)
             raise

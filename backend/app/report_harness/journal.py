@@ -5,6 +5,7 @@ from typing import Awaitable, Callable
 
 from app.report_harness.contracts import canonical_digest
 from app.report_harness.errors import HarnessError
+from app.report_harness.money_guard import MoneyGuardNotSent
 
 
 JOURNAL_VERSION = 1
@@ -162,7 +163,7 @@ class ExecutionJournal:
         try:
             result = await operation()
         except HarnessError as exc:
-            if category == "tool":
+            if category == "tool" or isinstance(exc, MoneyGuardNotSent):
                 self._journal["entries"][key] = {
                     **metadata, "status": "denied", "code": exc.code,
                 }

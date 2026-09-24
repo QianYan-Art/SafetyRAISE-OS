@@ -424,6 +424,34 @@ class RequestLedger:
             if updated is None:
                 raise HarnessError("request_state_conflict", 409)
 
+    def reject_confirmed_not_sent(
+        self,
+        owner: str,
+        run_id: str,
+        token: int,
+        request_id: str,
+        attempt_id: str,
+    ) -> None:
+        self._validate_token(token)
+        request_uuid = self._request_uuid(request_id, "request_id")
+        attempt_uuid = self._request_uuid(attempt_id, "attempt_id")
+        with self.store.locked_settlement(owner, run_id) as (conn, row):
+            request_row = self._lock_request(
+                conn, row["run_id"], request_uuid, attempt_uuid, token,
+            )
+            if request_row["status"] == "rejected":
+                return
+            if request_row["status"] != "dispatched":
+                raise HarnessError("request_state_conflict", 409)
+            updated = conn.execute(
+                "UPDATE report_run_requests SET status='rejected' "
+                "WHERE request_id=%s AND run_id=%s AND attempt_id=%s "
+                "AND fencing_token=%s AND status='dispatched' RETURNING request_id",
+                (request_uuid, row["run_id"], attempt_uuid, token),
+            ).fetchone()
+            if updated is None:
+                raise HarnessError("request_state_conflict", 409)
+
     def reject_unsent(
         self,
         owner: str,

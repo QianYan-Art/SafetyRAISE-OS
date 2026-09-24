@@ -6,6 +6,7 @@ import pytest
 
 from app.report_harness.contracts import canonical_digest
 from app.report_harness.errors import HarnessError
+from app.report_harness.money_guard import MoneyGuardNotSent
 from app.schemas.report_run import CreateRunRequest
 from app.services.report_run_service import ReportRunService
 from tests.harness_fixtures import (
@@ -163,6 +164,26 @@ def test_role_failure_closes_resources_and_never_publishes():
         asyncio.run(service.execute("owner", run["run_id"], 0))
     assert service.get("owner", run["run_id"])["state"] == "failed"
     assert roles.closed
+
+
+@pytest.mark.parametrize(
+    ("code", "state", "reason"),
+    [
+        ("unknown_cost_ack_required", "suspended", "unknown_cost_ack_required"),
+        ("money_budget_exhausted", "needs_review", "budget_exhausted"),
+        ("money_guard_blocked", "needs_review", "money_guard_blocked"),
+    ],
+)
+def test_pre_send_money_denial_has_explainable_run_state(code, state, reason):
+    class DeniedRoles(SyntheticRoles):
+        async def generate(self, context):
+            raise MoneyGuardNotSent(code)
+
+    service = ReportRunService(MemoryStore(), dependencies(DeniedRoles()))
+    run = create(service)
+    result = asyncio.run(service.execute("owner", run["run_id"], 0))
+    assert result["state"] == state
+    assert result["terminal_reason"] == reason
 
 
 def test_cancelled_run_cannot_execute_again():

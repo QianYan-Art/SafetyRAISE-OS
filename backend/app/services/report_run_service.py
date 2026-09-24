@@ -525,13 +525,15 @@ class ReportRunService:
         except HarnessError as exc:
             if exc.code in {"usage_unknown", "completion_unknown", "authorization_stale",
                             "authorization_required", "token_bound_unverified",
-                            "resource_pressure", "resource_probe_failed"}:
+                            "resource_pressure", "resource_probe_failed",
+                            "unknown_cost_ack_required"}:
                 self._stop_if_owned(owner, run_id, token, "suspended", exc.code)
                 return self.get(owner, run_id)
             if exc.code in {"role_response_too_large", "invalid_role_response",
                             "model_turn_budget_exhausted", "tool_budget_exhausted",
                             "budget_exhausted", "usage_exceeded", "physical_request_budget_exhausted",
-                            "retrieval_request_budget_exhausted", "token_budget_exhausted"}:
+                            "retrieval_request_budget_exhausted", "token_budget_exhausted",
+                            "money_budget_exhausted", "money_guard_blocked"}:
                 reason = "budget_exhausted" if exc.code.endswith("budget_exhausted") else exc.code
                 self._stop_if_owned(owner, run_id, token, "needs_review", reason,
                                     detail=_failure_detail(exc.__cause__))

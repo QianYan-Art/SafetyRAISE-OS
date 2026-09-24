@@ -9,6 +9,7 @@ import pytest
 
 from app.report_harness.contracts import canonical_digest
 from app.report_harness.errors import HarnessError
+from app.report_harness.money_guard import MoneyGuardNotSent
 from app.report_harness.request_ledger import RequestLedger
 from app.report_harness.transport import BudgetedTransport, HTTPAttemptClient, RequestBound
 from app.schemas.report_run import BudgetPolicy, CreateRunRequest
@@ -66,11 +67,11 @@ def budget_run(pg_store, policy=None):
     return service, RequestLedger(store), owner, run["run_id"], token, config
 
 
-def gateway(setup, url, *, proof_registered=True, authorize=None):
+def gateway(setup, url, *, proof_registered=True, authorize=None, client=None):
     service, ledger, owner, run_id, token, config = setup
     proof = canonical_digest({"protocol": "fixed-synthetic-http-usage"})
     return BudgetedTransport(
-        ledger, HTTPAttemptClient({role: url for role in (
+        ledger, client or HTTPAttemptClient({role: url for role in (
             "generator", "reviewer", "expert", "embedding", "probe",
         )}),
         owner=owner, run_id=run_id, token=token,
@@ -144,6 +145,34 @@ def test_missing_usage_stops_next_http_without_claiming_zero_cost(pg_store):
     assert view["known_used"] == 0
     assert view["unknown_reserved"] == 200
     assert view["remaining"] == 120000 - 200
+
+
+def test_money_guard_pre_send_denial_releases_report_reservation(pg_store):
+    setup = budget_run(pg_store)
+
+    class LocalDenial:
+        registered_roles = ("generator", "reviewer", "expert", "embedding", "probe")
+
+        async def attempt(self, role, payload, timeout):
+            raise MoneyGuardNotSent("unknown_cost_ack_required")
+
+        async def close(self):
+            pass
+
+    async def execute():
+        transport = gateway(setup, "http://unused.invalid", client=LocalDenial())
+        try:
+            with pytest.raises(MoneyGuardNotSent, match="unknown_cost_ack_required"):
+                await transport.request("expert", {"synthetic": True})
+        finally:
+            await transport.close()
+
+    asyncio.run(execute())
+    _, ledger, owner, run_id, _, _ = setup
+    view = ledger.view(owner, run_id)
+    assert view["physical_requests"] == 0
+    assert view["unknown_reserved"] == view["inflight_reserved"] == 0
+    assert view["known_used"] == 0
 
 
 @pytest.mark.parametrize("status", [302, 500])
