@@ -514,12 +514,17 @@ Modal 冷启动可能让首次 `POST` 返回 `303` 和 `__modal_attempt_token`�
    - 记得修改 `.env.server`，必要时同时改示例配置模板。
 15. 只拉起前端容器，忘了 backend
    - 先用 `docker ps` 看两类容器是否都在。
+16. 只改后端的发布，前端容器仍挂在旧发布目录
+   - 前端配置未变时 `up -d` 不会重建它，其 `working_dir` 标签仍指向旧目录。删除旧发布前先在当前发布目录执行
+     `docker-compose -p docker -f compose.json up -d --no-build --no-deps --force-recreate frontend`；
+     docker-compose 1.29 不加 `--no-deps` 会连带重建 backend。
 
 ## 部署后第一组检查
 
 前端发布前先在`frontend`目录运行`npm test`、`npm run build`。
 启动开发服务器后可运行`node tests/workspace-browser.mjs`：
-`WORKSPACE_TEST_URL`指定开发页面地址（默认`http://127.0.0.1:15175`），
+`WORKSPACE_TEST_URL`指定开发页面地址（默认`http://127.0.0.1:15175`；Windows 上该端口若落在
+`netsh int ipv4 show excludedportrange protocol=tcp` 的保留范围，开发服务器改用其他端口并同步设置此变量），
 `WORKSPACE_TEST_OUTPUT`指定截图及结果目录。该测试拦截API返回合成样例，
 不连接生产数据库、不调用模型，不能替代部署后的真实接口检查。
 
