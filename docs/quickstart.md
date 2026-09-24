@@ -9,6 +9,7 @@
 3. `uv` 或可用的 Python 虚拟环境工具
 4. ffmpeg / ffprobe
 5. 可选：GPU 与 CUDA，用于更快的视频链路
+6. PostgreSQL，以及可访问的模型服务和非空知识库（完整报告流程）
 
 如果你只想先跑前后端接口，不测视频链路，可以先不准备 YOLO 权重。
 
@@ -61,6 +62,9 @@ PowerShell 示例：
 
 ```powershell
 $env:OPENROUTER_API_KEY="your-openrouter-key"
+$env:DATABASE_DSN="postgresql://<user>:<password>@127.0.0.1:5432/safetyraise"
+$env:AUTH_JWT_SECRET="<replace-with-a-strong-random-secret>"
+$env:BOOTSTRAP_ADMIN_PASSWORD="<replace-with-a-private-password>"
 $env:EXPERT_LOCAL_MODEL="suyuan37/SafetyRAISE-TS-Qwen3"
 $env:EXPERT_LOCAL_BASE_URL="http://127.0.0.1:1234/v1"
 ```
@@ -93,27 +97,18 @@ kbase/data/dense_vectors.f16.npy
 
 如果这些文件缺失，`hybrid_local` 检索链路无法正常工作。
 
-如果还没有 Embedding 服务、Reranker 服务或 Dense 索引，可以先用仓库自带的最小样例切到 `local_jsonl`，跑通基础检索后再补 `hybrid_local`。
+如果还没有 Embedding 服务或 Dense 索引，可以在**非空**知识库上先切到 `local_jsonl`，验证基础检索后再补 `hybrid_local`；Reranker 默认关闭。
 
-仓库在 `examples/kbase/minimal/` 提供了一份最小知识库样例，零外部依赖即可跑通基础检索：
+仓库的 `examples/kbase/minimal/` 是**无知识正文**的结构模板，包含 `config/`、`data/`、`scripts/`、`source_documents/`。`data/manifest.json`、两个空 JSONL 与空倒排索引可被基础读取器解析，但检索必定没有结果；不能将其复制到正式知识库路径、生成报告或替代验收数据。运行真实流程时，从自己的合法来源建立非空 `kbase/data/`，不要将正文提交到 Git。
 
-1. 把样例三件套拷到默认运行时目录：
-
-   ```powershell
-   New-Item -ItemType Directory -Force kbase/data | Out-Null
-   Copy-Item examples/kbase/minimal/manifest.json        kbase/data/
-   Copy-Item examples/kbase/minimal/kbase_chunks.jsonl   kbase/data/
-   Copy-Item examples/kbase/minimal/liability_rules.jsonl kbase/data/
-   ```
-
-2. 把 `backend/config/workflow.yaml` 的 `retrieval.provider` 改为 `local_jsonl`：
+本地只调试稀疏检索时，把 `backend/config/workflow.yaml` 的 `retrieval.provider` 改为 `local_jsonl`：
 
    ```yaml
    retrieval:
      provider: "local_jsonl"
    ```
 
-`local_jsonl` 只依赖上述三件套，不需要 `search_index.json`、Embedding 服务和 Dense 索引。`search_index.json` 支持两种倒排表格式：完整版每条 posting 携带 `title` 与 `source_id`，精简版则为 `[id, tf]` 数组并配一张 `doc_meta` 映射；两者检索结果一致，精简版可把索引体积与常驻内存降到约五分之一，适合内存受限的部署机。验证基础检索通过后，再准备 Dense 索引并切回默认的 `hybrid_local`。
+`local_jsonl` 依赖非空的 manifest、chunks 和 rules，不要求 `search_index.json`、Embedding 服务和 Dense 索引。可选倒排表支持完整 posting 或 `[id, tf]` 加 `doc_meta` 的紧凑格式。验证基础检索后，再用同一知识版本构建 Dense 索引并切回默认 `hybrid_local`；更换 embedding 模型须重建 Dense 索引。
 
 ## 准备 YOLO 与视频依赖
 
@@ -141,7 +136,7 @@ ffprobe
 3. 视觉模型：生成事故草稿
 4. embedding / reranker：支撑 hybrid 检索
 
-默认示例里：
+默认配置里：
 
 1. 专家模型走 OpenAI 兼容地址（如 LM Studio / vLLM 暴露的 `/v1`）
 2. 报告模型走兼容 OpenAI 的远端端点（单一端点，默认 `tencent/hy4-preview`）

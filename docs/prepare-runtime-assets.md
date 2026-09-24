@@ -13,7 +13,7 @@ manifest 不包含新预算授权；迁移时不得丢弃旧请求或未知预�
 `runtime-manifest.json` 只读挂载到 `/run/safetyraise/harness/runtime-manifest.json`。
 独立release目录须包含与实际构建一致的 `generator.md`、`reviewer.md`、
 `build_manifest.json`、`approved_release_bindings.json` 和 `approved_evaluations/`；
-不能只挂载批准JSON而遗漏其证据或模板。费用账本在212本地盘，容器路径为
+不能只挂载批准JSON而遗漏其证据或模板。费用账本在应用所在主机的本地持久盘，容器路径为
 `/var/lib/safetyraise/ledger/money.sqlite3`，manifest中的路径必须相同。
 完整workflow配置另行只读挂载，包含显式开关及实际资源探针路径。
 
@@ -24,14 +24,14 @@ manifest 不包含新预算授权；迁移时不得丢弃旧请求或未知预�
 
 运行时资产相关配置主要集中在以下位置：
 
-1. [.env.example](/D:/MCP_Server/TS_analysis_report/.env.example)
-2. [backend/config/workflow.yaml](/D:/MCP_Server/TS_analysis_report/backend/config/workflow.yaml)
-3. [backend/config/workflow.server.yaml](/D:/MCP_Server/TS_analysis_report/backend/config/workflow.server.yaml)
+1. [`.env.example`](../.env.example)
+2. [`backend/config/workflow.yaml`](../backend/config/workflow.yaml)
+3. [`backend/config/workflow.server.yaml`](../backend/config/workflow.server.yaml)
 
 推荐使用方式：
 
 1. 本地联调时，复制 `.env.example` 为 `.env` 或直接在终端设置环境变量
-2. 服务器部署时，复制 `.env.example` 为 `.env.server`
+2. 使用旧双机 Compose 模板时，可将 `.env.example` 复制为 `.env.server` 并逐项替换；同机生产编排依照[部署说明](deployment.md)准备受限私有配置
 3. 仅在需要修改默认结构时再调整 `workflow.yaml` 或 `workflow.server.yaml`
 
 ## 默认模型与服务
@@ -67,10 +67,9 @@ POST /v1/chat/completions
 1. 程序里填写的是推理服务实际加载后的模型名
 2. 不是直接请求 Hugging Face 页面
 3. 可以由 LM Studio、vLLM、Ollama 兼容服务或其他 OpenAI 兼容服务承载
-4. 当前 Modal 部署使用持久卷 `safetyraise-qwen3-f16`，模型目录为卷内 `/models/TS-Qwen3`
-5. 当前 vLLM 以 F16、`12288` 上下文和单并发运行；该上下文按系统实际的一轮专家输入设置，不沿用本地设备上的 `32000`
-6. 专家请求不发送输出 token 上限；模型自身的 generation config 决定生成行为，程序只在取得结果后清理可识别的独立思维字段
-7. 该端点是系统级隐藏能力，普通用户和管理员都不能通过模型配置界面替换
+4. 仓库提供 [`deployment/modal/qwen3_expert.py`](../deployment/modal/qwen3_expert.py) 作为按需推理部署入口；GPU、上下文和并发参数以该脚本及目标环境核验为准
+5. 专家请求不发送输出 token 上限；模型自身的 generation config 决定生成行为，程序只在取得结果后清理可识别的独立思维字段
+6. 该端点是系统级隐藏能力，普通用户和管理员都不能通过模型配置界面替换
 
 ### YOLO 检测模型
 
@@ -153,8 +152,8 @@ POST /rerank
 
 默认配置位于：
 
-1. [backend/config/workflow.yaml](/D:/MCP_Server/TS_analysis_report/backend/config/workflow.yaml) `models.accident_vision`
-2. [backend/config/workflow.server.yaml](/D:/MCP_Server/TS_analysis_report/backend/config/workflow.server.yaml) `models.accident_vision`
+1. [`backend/config/workflow.yaml`](../backend/config/workflow.yaml) `models.accident_vision`
+2. [`backend/config/workflow.server.yaml`](../backend/config/workflow.server.yaml) `models.accident_vision`
 
 默认形态：远端 OpenAI 兼容视觉 API。
 
@@ -164,8 +163,8 @@ POST /rerank
 
 默认配置位于：
 
-1. [backend/config/workflow.yaml](/D:/MCP_Server/TS_analysis_report/backend/config/workflow.yaml) `models.report_external`
-2. [backend/config/workflow.server.yaml](/D:/MCP_Server/TS_analysis_report/backend/config/workflow.server.yaml) `models.report_external`
+1. [`backend/config/workflow.yaml`](../backend/config/workflow.yaml) `models.report_external`
+2. [`backend/config/workflow.server.yaml`](../backend/config/workflow.server.yaml) `models.report_external`
 
 默认形态：远端 OpenAI 兼容 API。
 
@@ -192,7 +191,7 @@ POST /rerank
 1. 一个可用的专家模型服务
 2. 视觉模型 API
 3. 至少一个可用的报告模型端点
-4. 基础知识库三件套
+4. 非空的基础知识库三件套；公开结构模板不提供知识正文
 
 ### 视频链路额外项
 
@@ -245,11 +244,12 @@ kbase/data/kbase_chunks.jsonl
 kbase/data/liability_rules.jsonl
 ```
 
-仓库样例：
+仓库结构模板（无正文，不能作为实际检索或报告材料）：
 
-1. [examples/kbase/minimal/manifest.json](/D:/MCP_Server/TS_analysis_report/examples/kbase/minimal/manifest.json)
-2. [examples/kbase/minimal/kbase_chunks.jsonl](/D:/MCP_Server/TS_analysis_report/examples/kbase/minimal/kbase_chunks.jsonl)
-3. [examples/kbase/minimal/liability_rules.jsonl](/D:/MCP_Server/TS_analysis_report/examples/kbase/minimal/liability_rules.jsonl)
+1. [`examples/kbase/minimal/data/manifest.json`](../examples/kbase/minimal/data/manifest.json)
+2. [`examples/kbase/minimal/data/kbase_chunks.jsonl`](../examples/kbase/minimal/data/kbase_chunks.jsonl)
+3. [`examples/kbase/minimal/data/liability_rules.jsonl`](../examples/kbase/minimal/data/liability_rules.jsonl)
+4. [`examples/kbase/minimal/data/search_index.json`](../examples/kbase/minimal/data/search_index.json)
 
 文件职责：
 
@@ -287,10 +287,10 @@ backend/app/tools/build_dense_index.py
 
 ```bash
 python backend/app/tools/build_dense_index.py \
-  --manifest examples/kbase/minimal/manifest.json \
-  --chunks examples/kbase/minimal/kbase_chunks.jsonl \
-  --rules examples/kbase/minimal/liability_rules.jsonl \
-  --output-dir C:\tmp\dense_build \
+  --manifest kbase/data/manifest.json \
+  --chunks kbase/data/kbase_chunks.jsonl \
+  --rules kbase/data/liability_rules.jsonl \
+  --output-dir /tmp/safetyraise-dense \
   --embedding-base-url https://<MODEL_API_HOST>/v1 \
   --embedding-model qwen/qwen3-embedding-8b \
   --api-key-env OPENROUTER_API_KEY
@@ -301,6 +301,7 @@ python backend/app/tools/build_dense_index.py \
 1. 脚本会输出 `dense_manifest.json`、`dense_records.jsonl`、`dense_vectors.f16.npy`
 2. 记录会自动附带 `record_type` 和稳定 `id`
 3. 向量会在写盘前做单位归一化，和当前 `DenseIndexStore` 的余弦检索实现保持一致
+4. 命令要求输入是开发者自行准备的非空、合法知识资产，不要对公开空模板生成索引
 
 ## 知识库内容格式
 
@@ -365,7 +366,7 @@ python backend/app/tools/build_dense_index.py \
 1. 安装 Python、Node.js、ffmpeg、ffprobe
 2. 下载 `yolo11n.pt` 到 `models/`
 3. 准备专家模型服务，确认 `/v1/chat/completions` 可用
-4. 准备最小知识库三件套
+4. 准备非空知识库三件套
 5. 本地先切到 `local_jsonl`
 6. 跑通 `/api/v1/health`
 7. 检查 `/api/v1/ready`
@@ -392,7 +393,7 @@ python backend/app/tools/build_dense_index.py \
 
 1. `.env.server`
 2. `backend/config/workflow.server.yaml`
-3. `deployment/docker/docker-compose.server.yml`
+3. 按目标拓扑选择 [`deployment/docker`](../deployment/docker) 中的发布入口；同机部署步骤见 [部署说明](deployment.md)
 4. `deployment/docker/docker-compose.harness.yml`，仅在正式批准、账本及外部配置就绪后显式叠加
 
 ## 开源仓库包含与不包含的内容
@@ -401,7 +402,7 @@ python backend/app/tools/build_dense_index.py \
 
 1. 默认配置
 2. 读取逻辑
-3. 最小知识库样例
+3. 空内容的知识库结构模板（不包含可引用材料）
 4. 部署骨架
 
 开源仓库不包含：

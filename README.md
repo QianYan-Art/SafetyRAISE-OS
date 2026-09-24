@@ -4,7 +4,7 @@
 
 道路交通事故分析报告生成系统。
 
-SafetyRAISE 面向道路交通事故分析场景，提供从事故图片、视频材料到结构化事故信息、专家指导意见、检索增强报告和文书导出的完整处理链路。仓库适合需要本地联调、私有部署或二次开发该流程的工程团队。
+SafetyRAISE 提供从图片、视频材料到结构化事故信息、专家指导意见、检索增强报告和文书导出的工作流。仓库包含前后端、报告 Harness、部署模板与测试，不包含真实事故材料和知识库正文。
 
 文档索引：
 
@@ -16,14 +16,9 @@ SafetyRAISE 面向道路交通事故分析场景，提供从事故图片、视�
 ## 核心能力
 
 1. 固定八个分组的资料编排台，用于统一整理事故材料并生成事故草稿。
-2. 上传限制如下：
-   - 每组最多 `20` 张图片、`5` 个视频
-   - 单张图片最多 `10MB`
-   - 单个视频最多 `100MB`
-   - 全部分组最多 `120` 张图片、`20` 个视频
-   - 总上传大小最多 `1GB`
+2. 图片和视频上传、事故草稿编辑保存及会话恢复；限额由 `input_generation.upload` 配置。
 3. 视频处理链路完整接入 `YOLO + ByteTrack + 自适应抽帧 + 视觉模型`。
-4. 报告链路固定为 `generate_guidance -> retrieve_knowledge(hybrid_local) -> generate_report(agentic RAG) -> postprocess`。
+4. 专家指导、知识检索、报告生成及后处理；生产检索默认使用本地稀疏与稠密索引。
 5. 报告 Harness 在原报告链路之外提供证据快照、独立审查与修订、预算、审计与恢复能力；服务端未显式装配时保持关闭，旧报告链路不变，演示模式下未通过独立审查的稿件带标记导出、不作为正式发布。
 6. 中间产物支持预览，包含：
    - 知识片段
@@ -31,13 +26,10 @@ SafetyRAISE 面向道路交通事故分析场景，提供从事故图片、视�
    - YOLO 完整输出
    - 结构化事故信息
    - 图片与关键帧
-7. 报告/视觉/嵌入模型按「每用户能力配置」解析：
-   - 普通用户：视觉/报告必须自填；嵌入按本人配置→首个启用管理员配置→系统默认解析，本人有配置时不再回退
-   - 专家模型固定为系统统一配置，不进入用户配置项
-   - 前端填 `url + key + model` 后写入用户配置，视觉/报告可另选推理等级（留空沿用系统默认）；读取接口中的 `api_key` 只返回脱敏值，系统报告端点收敛为单一端点，旧的 `max / pro / lite` 档位已下线
+7. 视觉、报告、嵌入模型按用户能力配置解析；专家模型为系统级能力，不出现在用户模型配置界面。配置优先级与兼容规则见 [配置说明](docs/configuration.md)。
 8. 后端支持 `report.md / report.docx / report.pdf` 导出。
 9. 内置用户体系：用户名密码登录 + 注册、管理员/普通用户角色、仅管理员可见的用户、空间与报告质量反馈管理控制台。
-10. 会话隔离按登录账户收口：管理员不会在主会话列表看到普通用户会话，前端本地缓存也按用户分桶，切账号不串会话列表。
+10. 用户和会话按账户隔离，前端缓存按用户分桶。
 
 ## 处理链路
 
@@ -57,7 +49,7 @@ SafetyRAISE 面向道路交通事故分析场景，提供从事故图片、视�
 4. 检索链路：本地知识库文件 + embedding + 稀疏/稠密混合 RRF（reranker 可选，服务器默认停用）
 5. 账户与数据：PostgreSQL（用户、会话、每用户模型配置）
 6. 原生加速：Rust（分词 / 打分 / JSON 候选提取）
-7. 部署目录：`deployment/docker`（支持应用与数据同机或双机部署）
+7. 部署目录：`deployment/docker`（同机部署及受控双机部署模板）
 
 ## 仓库结构
 
@@ -68,6 +60,9 @@ TS_analysis_report/
 ├─ deployment/
 │  └─ docker/
 ├─ docs/
+├─ examples/kbase/minimal/
+├─ backend/tests/
+├─ frontend/tests/
 └─ .env.example
 ```
 
@@ -80,11 +75,7 @@ TS_analysis_report/
    - 视觉模型
    - 报告模型
    - embedding 模型
-2. 知识库文件
-   - `manifest.json`
-   - `kbase_chunks.jsonl`
-   - `liability_rules.jsonl`
-   - dense 检索相关文件
+2. 非空知识库正文与索引。`examples/kbase/minimal/` 仅提供无正文的目录和文件结构，不能用于生成可引用的报告；完整 Harness 会拒绝空知识资产。
 3. 视频依赖
    - `ffmpeg / ffprobe`
    - YOLO 权重
@@ -101,7 +92,7 @@ cd frontend
 npm install
 ```
 
-完整步骤见 [快速开始](docs/quickstart.md)。
+完整配置、数据库、模型接入和启动步骤见 [快速开始](docs/quickstart.md)。
 
 ## 文档入口
 
@@ -114,36 +105,33 @@ npm install
    - 知识库文件格式
    - `local_jsonl` 与 `hybrid_local`
    - 首次联调顺序
-3. [部署说明](docs/deployment.md)
-   - Docker Compose 部署方式
-   - `.env.example -> .env.server`
-   - Nginx / HTTPS / reranker sidecar
+3. [部署说明](docs/deployment.md)：同机部署拓扑、发布、回滚、备份和健康检查。
+4. [报告 Harness](docs/report-harness.md)：证据、独立审查、预算和恢复的运行契约。
+5. [前端工作台](docs/frontend-workbench.md)：页面与接口边界。
 
-## 当前部署基线
+## 验证
 
-1. 线上演示服务在 213 同机运行 `frontend / backend`、PostgreSQL、知识库和运行时目录；前端容器仅绑定 `127.0.0.1:18080`，由宿主 Nginx 提供 HTTPS。212 暂作 DNS 缓存传播期的旧入口与回滚资产，不运行第二个后端。
-2. 应用编排位于 `/srv/apps/safetyraise`，既有数据库与知识库经 `/srv/data/safetyraise` 使用，新账本、小型模型和临时上传位于 `/srv/data/safetyraise-app`；含凭据的展开 Compose 仅 root 可读。
-3. 宿主 Nginx 日志统一写入 `/srv/logs/nginx`，Certbot 续期后校验并重载宿主 Nginx；`qianyan-backup.timer` 覆盖应用配置、PostgreSQL 逻辑备份和 SQLite 一致性账本副本。部署和回滚步骤见 [部署说明](docs/deployment.md)。
-4. `deployment/docker/docker-compose.server.yml` 与 `provision-212.sh` 保留原双机部署能力，不能当作当前 213 的直接启动命令。
-5. 服务器统一专家模型默认使用 `qianyan-art--safetyraise-qwen3-expert-serve.eu-west.modal.run` 的按需 Modal 端点；该系统级链路不进入普通用户或管理员的模型配置界面。部署采用 L4、F16、`12288` 上下文、单并发和缩容到零，不设置模型输出 token 上限。
-6. 生产 backend 镜像必须同时包含 CPU 版 `torch / torchvision`、`ultralytics` 和 `lap`，并通过 `deployment/docker/verify-runtime-dependencies.py` 核验后再替换线上镜像。
-7. 前端本地会话缓存按 `user.id` 分桶，键前缀为 `SESSION_STORAGE_KEY_PREFIX`；落盘使用 `SYNC_DEBOUNCE_MS=300` 防抖，并在组件卸载/切账号前强制 flush。
+没有测试库时，先运行知识库相关的无数据库测试：
 
-## 当前限制
+```powershell
+.venv\Scripts\python.exe -m pytest -q backend/tests/unit/test_public_kbase_scaffold.py backend/tests/unit/test_knowledge_assets.py
+```
 
-1. 默认检索实现依赖本地知识库文件；账户与会话使用 PostgreSQL（可单机，也可独立数据服务器）。
-2. 视频链路可在 CPU 上运行，但速度慢很多，更适合有 GPU 的环境。
-3. 报告 / 视觉 / 嵌入模型需准备兼容 OpenAI 格式的端点；普通用户必须自填视觉/报告，嵌入按本人配置→首个启用管理员配置→系统默认解析，本人有配置时不再回退，管理员可用系统默认。
-4. 当前仓库保留产品主链路，不包含开发期间的内部运维文档和内部测试集。
-5. 如果切换 embedding 模型，需要同步重建 dense 索引文件，否则检索结果会失真。
+完整后端单测包含 PostgreSQL 集成用例，须先把 `REPORT_HARNESS_TEST_DSN` 指向**回环地址**上的独立可清理测试库，数据库名以 `safetyraise_harness_test` 开头；测试拒绝回退到业务库。准备好后运行：
 
-## 扩展方向
+```powershell
+.venv\Scripts\python.exe -m pytest -q backend/tests/unit
+```
 
-1. 接入新的模型端点或替换现有供应商。
-2. 用 Elasticsearch、Milvus 或 pgvector 替换当前本地 hybrid 检索。
-3. 扩展事故信息模板与提示词，使其适配更多事故类型。
-4. 扩展更多文书导出模板。
-5. 为移动端或小程序接入更轻量的上传和审阅界面。
+前端验证：
+
+```powershell
+cd frontend
+npm test
+npm run build
+```
+
+空知识库模板只验证解析与失败边界；真实报告质量必须在私有知识资产、已批准的模型与独立验收条件下验证，不能由这些测试推断。
 
 ## 许可
 
