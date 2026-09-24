@@ -59,6 +59,22 @@ describe("AuthScreen", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
+  it("密码为空时不显示强度，输入后按规则评级", async () => {
+    const user = userEvent.setup();
+    const { container } = renderAuth("");
+    await user.click(screen.getByRole("button", { name: "注册" }));
+    const strength = () => container.querySelector(".auth-strength")!;
+    expect(strength().textContent).toBe("至少 8 位，含字母和数字");
+    expect(strength().querySelectorAll("[class^='is-']")).toHaveLength(0);
+
+    await user.type(screen.getByLabelText("密码"), "abc");
+    expect(strength().textContent).toContain("强度弱");
+    expect(strength().querySelectorAll(".is-weak")).toHaveLength(1);
+    await user.type(screen.getByLabelText("密码"), "12345");
+    expect(strength().textContent).toContain("强度强");
+    expect(strength().querySelectorAll(".is-strong")).toHaveLength(3);
+  });
+
   it("注册校验失败时标记对应字段且不发请求", async () => {
     const user = userEvent.setup();
     const { props } = renderAuth("");

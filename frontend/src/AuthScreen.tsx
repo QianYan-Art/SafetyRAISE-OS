@@ -113,8 +113,10 @@ function SceneSketch() {
   );
 }
 
+/** 未输入时不评级，避免空密码显示为“弱”。 */
 function resolvePasswordStrength(password: string) {
   const normalized = password.trim();
+  if (!normalized) return null;
   const score = [
     normalized.length >= PASSWORD_MIN_LENGTH,
     /[A-Za-z]/.test(normalized),
@@ -322,10 +324,10 @@ export function AuthScreen(props: AuthScreenProps) {
               <div className="auth-strength" id={`${idPrefix}-strength`}>
                 <span className="auth-strength-bars" aria-hidden="true">
                   {[0, 1, 2].map((index) => (
-                    <span key={index} className={index < passwordStrength.filled ? `is-${passwordStrength.level}` : ""} />
+                    <span key={index} className={passwordStrength && index < passwordStrength.filled ? `is-${passwordStrength.level}` : ""} />
                   ))}
                 </span>
-                <span>至少 8 位，含字母和数字 · 强度{passwordStrength.label}</span>
+                <span>至少 8 位，含字母和数字{passwordStrength ? ` · 强度${passwordStrength.label}` : ""}</span>
               </div>
             ) : null}
           </div>
