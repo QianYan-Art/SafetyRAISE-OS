@@ -213,6 +213,7 @@
 .account-admin-orphan-badge {
   display: inline-flex;
   align-items: center;
+  white-space: nowrap;
   border: 1px solid var(--color-accent-line);
   border-radius: var(--radius-control);
   background: var(--color-accent-soft);
@@ -629,9 +630,13 @@
   width: 11%;
 }
 
+/* 时间为定长数据，固定列宽且不折行。 */
+.account-user-table th:nth-child(4),
+.account-user-table td:nth-child(4),
 .account-space-table th:nth-child(5),
 .account-space-table td:nth-child(5) {
-  width: 18%;
+  width: 144px;
+  white-space: nowrap;
 }
 
 .account-admin-user-cell {
@@ -790,21 +795,28 @@
   font-size: 12px;
 }
 
+/* 宽度不足时整组控件换到下一行靠右，文字本身不折行。 */
 .account-admin-pagination {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 8px 16px;
   padding: 20px 0 0;
   color: var(--color-text-subtle);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
 
+.account-admin-pagination span {
+  white-space: nowrap;
+}
+
 .account-admin-pagination-controls {
   display: inline-flex;
   align-items: center;
   gap: 10px;
+  margin-left: auto;
 }
 
 .account-pagination-size .account-select {
@@ -1104,12 +1116,19 @@
   color: var(--color-danger);
 }
 
+/* 结论徽标与反馈人为定长内容，固定列宽；具体意见取剩余宽度，低于最小宽度时在列表区域内横向滚动。 */
+.account-feedback-table {
+  min-width: 720px;
+}
+
 .account-feedback-table th:nth-child(1) { width: 24%; }
-.account-feedback-table th:nth-child(2) { width: 12%; }
+.account-feedback-table th:nth-child(2) { width: 124px; }
 .account-feedback-table th:nth-child(3) { width: 18%; }
-.account-feedback-table th:nth-child(5) { width: 15%; }
+.account-feedback-table th:nth-child(5) { width: 148px; }
 
 .account-feedback-reviewer small {
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -1298,8 +1317,8 @@
 
   .account-admin-table tr {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 9px 16px;
+    align-items: center;
+    gap: 10px 12px;
     padding: 16px 0 14px;
     border-top: 1px solid var(--color-line);
   }
@@ -1308,9 +1327,9 @@
     border-bottom: 1px solid var(--color-line);
   }
 
-  .account-admin-table td,
-  .account-admin-table td:first-child,
-  .account-admin-table td:last-child {
+  /* 选择器权重不低于桌面列宽与整行悬停底色，卡片内一并取消。 */
+  .account-admin-table td:nth-child(n),
+  .account-admin-table tr:hover td {
     display: block;
     width: auto;
     padding: 0;
@@ -1319,38 +1338,81 @@
     font-size: 12px;
   }
 
-  .account-admin-table td:first-child {
-    grid-column: 1 / -1;
+  /* 用户与空间卡片：首行主信息，操作靠右；末行依次为标签与时间。每格显式定位，不依赖自动放置。 */
+  .account-user-table tr,
+  .account-space-table tr {
+    grid-template-columns: auto auto minmax(0, 1fr) auto;
   }
 
-  .account-admin-table td:nth-child(2) {
-    grid-column: 1;
+  .account-user-table tr {
+    grid-template-areas:
+      "lead lead lead actions"
+      "tag-a tag-b time time";
   }
 
-  .account-admin-table td:nth-child(3) {
-    grid-column: 2;
-    text-align: right;
+  .account-space-table tr {
+    grid-template-areas:
+      "lead lead lead actions"
+      "title title title actions"
+      "tag-a tag-b time time";
   }
 
-  .account-admin-table td:nth-child(4) {
-    grid-column: 1;
+  .account-user-table td:nth-child(1),
+  .account-space-table td:nth-child(1) {
+    grid-area: lead;
+  }
+
+  .account-space-table td:nth-child(2) {
+    grid-area: title;
+  }
+
+  .account-user-table td:nth-child(2),
+  .account-space-table td:nth-child(3) {
+    grid-area: tag-a;
+  }
+
+  .account-user-table td:nth-child(3),
+  .account-space-table td:nth-child(4) {
+    grid-area: tag-b;
+    white-space: nowrap;
+  }
+
+  .account-user-table td:nth-child(4),
+  .account-space-table td:nth-child(5) {
+    grid-area: time;
+    justify-self: end;
     color: var(--color-text-subtle);
-    font-size: 12px;
+    white-space: nowrap;
   }
 
-  .account-admin-table td:nth-child(5) {
-    grid-column: 2;
-    grid-row: 2 / span 2;
-    align-self: start;
-    text-align: right;
+  .account-user-table td:nth-child(5),
+  .account-space-table td:nth-child(6) {
+    grid-area: actions;
+  }
+
+  .account-space-table td:nth-child(4)::before {
+    content: attr(data-label) " ";
+    color: var(--color-text-subtle);
   }
 
   .account-admin-table td.account-admin-empty {
+    grid-area: auto;
     grid-column: 1 / -1;
     height: 160px;
   }
 
-  .account-feedback-table td:nth-child(1) {
+  .account-feedback-table {
+    min-width: 0;
+  }
+
+  .account-feedback-table tr {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+  }
+
+  .account-feedback-table td:nth-child(1),
+  .account-feedback-table td:nth-child(3),
+  .account-feedback-table td:nth-child(4) {
     grid-column: 1 / -1;
   }
 
@@ -1358,44 +1420,18 @@
     grid-column: 1;
   }
 
-  .account-feedback-table td:nth-child(3) {
-    grid-column: 1 / -1;
-    grid-row: auto;
-    text-align: left;
-  }
-
   .account-feedback-table td.account-feedback-tags[data-empty="true"] {
     display: none;
   }
 
   .account-feedback-table td:nth-child(4) {
-    grid-column: 1 / -1;
     max-width: none;
-    color: inherit;
-    font-size: 12px;
   }
 
   .account-feedback-table td:nth-child(5) {
     grid-column: 2;
     grid-row: 2;
     text-align: right;
-  }
-
-  .account-space-table td:nth-child(1),
-  .account-space-table td:nth-child(2) {
-    grid-column: 1 / -1;
-  }
-
-  .account-space-table td:nth-child(3),
-  .account-space-table td:nth-child(4),
-  .account-space-table td:nth-child(5) {
-    grid-column: auto;
-    text-align: left;
-  }
-
-  .account-space-table td:nth-child(6) {
-    grid-column: 2;
-    grid-row: 3 / span 3;
   }
 
   .account-admin-user-cell {

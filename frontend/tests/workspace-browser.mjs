@@ -10,8 +10,24 @@ const output = process.env.WORKSPACE_TEST_OUTPUT || await fs.mkdtemp(path.join(o
 await fs.mkdir(output, { recursive: true });
 const browser = await chromium.launch({ headless: true });
 const result = { scope: "真实前端浏览器测试，后端为拦截样例；不证明生产端到端", output, checks: [] };
+// 管理表每格不越出行宽、自身不溢出；从firstShort列起为标签、计数、时间和操作，须保持单行。
+const adminRowsFit = (rows, firstShort) => rows.every(row => {
+  const box = row.getBoundingClientRect();
+  return [...row.cells].every((cell, index) => {
+    if (!cell.getClientRects().length) return true;
+    const rect = cell.getBoundingClientRect();
+    const range = document.createRange();
+    range.selectNodeContents(cell);
+    let lines = 0, bottom = -Infinity;
+    for (const part of [...range.getClientRects()].filter(item => item.width && item.height).sort((a, b) => a.top - b.top)) {
+      if (part.top >= bottom - 1) { lines += 1; bottom = part.bottom; } else bottom = Math.max(bottom, part.bottom);
+    }
+    return rect.left >= box.left - 1 && rect.right <= box.right + 1
+      && cell.scrollWidth <= cell.clientWidth + 1 && (index < firstShort || lines <= 1);
+  });
+});
 try {
-  for (const role of ["user", "admin"]) for (const width of [1440, 1024, 390, 320]) {
+  for (const role of ["user", "admin"]) for (const width of [1440, 1024, 768, 390, 320]) {
     const context = await browser.newContext({ viewport: { width, height: width > 600 ? 960 : 844 } });
     await context.addInitScript(() => localStorage.setItem("traffic-accident-auth-token", "synthetic-ui-test"));
     const page = await context.newPage();
@@ -46,6 +62,13 @@ try {
         linked_artifact_count: index % 3,
         redacted: false,
       }));
+      else if (endpoint === "/api/v1/admin/report-feedback") body = { total: 2, items: [
+        { run_id: "run-long", revision: 2, reviewer_name: "合成审阅人", verdict: "needs_revision", issue_tags: ["liability", "legal_citation"],
+          comment: "合成长意见：".padEnd(120, "责任划分依据与法规条文引用需要逐项核对"), updated_at: "2026-09-20T02:30:00Z", author_username: "analyst_test",
+          run_context: { session_title: "合成事故会话标题较长用于检查窄屏换行", run_created_at: "2026-09-20T01:00:00Z", state: "published" } },
+        { run_id: "run-short", revision: 1, reviewer_name: "合成审阅人", verdict: "usable", issue_tags: [], comment: "可直接使用。",
+          updated_at: "2026-09-20T03:00:00Z", author_username: "admin_test", run_context: { session_title: "测试档案", run_created_at: "2026-09-20T02:00:00Z" } },
+      ] };
       else if (endpoint === "/api/v1/user/model-configs") {
         if (method === "PUT") for (const item of req.postDataJSON().items) {
           const previous = configuration.capabilities.find(value => value.capability === item.capability);
@@ -71,6 +94,10 @@ try {
     await page.goto(base);
     await page.getByRole("button", { name: "打开档案列表", exact: true }).waitFor();
     async function screenshot(name) {
+      // 等主题切换等有限过渡结束，避免截到中间色；无限循环动画不等待。
+      await page.evaluate(() => Promise.all(document.getAnimations()
+        .filter(item => item.effect?.getComputedTiming().iterations !== Infinity)
+        .map(item => item.finished.catch(() => undefined))));
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false, `${role}/${width}/${name}横向溢出`);
       await page.screenshot({ path: path.join(output, `${role}-${width}-${name}.png`), fullPage: true });
     }
@@ -204,6 +231,12 @@ try {
     if (role === "admin") {
       await page.getByTitle("打开管理控制台", { exact: true }).click();
       await page.getByRole("button", { name: "编辑 analyst_test", exact: true }).waitFor();
+      assert(await page.locator(".account-admin-pagination span:not(.account-sr-only)").evaluateAll(nodes => nodes.every(node => {
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        return new Set([...range.getClientRects()].map(rect => Math.round(rect.top))).size === 1;
+      })), `${width}px分页文字不应折行`);
+      assert(await page.getByRole("region", { name: "用户列表", exact: true }).locator("tbody tr").evaluateAll(adminRowsFit, 1), `${width}px用户列表单元格越界或折行`);
       await screenshot("users");
       await page.getByRole("button", { name: "编辑 analyst_test", exact: true }).click();
       assert(await page.getByRole("dialog", { name: "编辑用户", exact: true }).evaluate(node => node.contains(document.activeElement)));
@@ -213,6 +246,7 @@ try {
       await page.getByText("测试档案", { exact: true }).first().waitFor();
       await page.getByLabel("每页条数", { exact: true }).selectOption("50");
       const spaceRegion = page.getByRole("region", { name: "空间列表", exact: true });
+      assert(await spaceRegion.locator("tbody tr").evaluateAll(adminRowsFit, 2), `${width}px空间列表单元格越界或折行`);
       await spaceRegion.focus();
       assert(await spaceRegion.evaluate(node => node === document.activeElement), "空间列表应支持键盘聚焦滚动");
       const scrollMetrics = await spaceRegion.evaluate(node => {
@@ -231,6 +265,13 @@ try {
           && document.body.scrollHeight <= innerHeight + 1;
       }), `${width}px空间管理不应让整个页面滚动`);
       await screenshot("spaces");
+      await page.getByRole("tab", { name: "质量反馈", exact: true }).click();
+      const feedbackRegion = page.getByRole("region", { name: "质量反馈列表", exact: true });
+      await feedbackRegion.getByText("测试档案", { exact: true }).waitFor();
+      assert(await feedbackRegion.locator("tbody tr").evaluateAll(adminRowsFit, Infinity), `${width}px质量反馈单元格越界`);
+      await screenshot("feedback");
+      await page.getByRole("tab", { name: "空间管理", exact: true }).click();
+      await page.getByText("测试档案", { exact: true }).first().waitFor();
       await page.getByRole("button", { name: "打开档案列表", exact: true }).click();
       await page.getByRole("button", { name: "打开账号菜单", exact: true }).click();
       await page.getByRole("button", { name: "切换为深色模式", exact: true }).click();

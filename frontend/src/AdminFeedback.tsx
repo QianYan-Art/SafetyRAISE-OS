@@ -78,7 +78,7 @@ export function AdminFeedback() {
           <option value="all">全部问题类型</option>
           {FEEDBACK_TAGS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
         </select>
-        <span className="account-admin-count">{total} 份报告有反馈</span>
+        {data ? <span className="account-admin-count">{total} 份报告有反馈</span> : null}
       </div>
 
       {error ? <div className="account-alert account-alert-error" role="alert">{error}</div> : null}
@@ -122,9 +122,10 @@ export function AdminFeedback() {
                 </td>
                 <td data-label="反馈人">
                   <span className="account-feedback-reviewer">
-                    <strong>{item.reviewer_name}</strong>
-                    <small>账号 {item.author_username}</small>
-                    <small>{formatDateTime(item.updated_at)}{item.revision > 1 ? ` · 第 ${item.revision} 版` : ""}</small>
+                    <strong title={item.reviewer_name}>{item.reviewer_name}</strong>
+                    <small title={item.author_username}>账号 {item.author_username}</small>
+                    <small>{formatDateTime(item.updated_at)}</small>
+                    {item.revision > 1 ? <small>第 {item.revision} 版</small> : null}
                   </span>
                 </td>
               </tr>;

@@ -114,4 +114,16 @@ describe("AdminFeedback", () => {
       verdict: "needs_revision", tag: undefined,
     }));
   });
+
+  it("首次读取完成前不显示反馈计数", async () => {
+    let resolveList: (value: { total: number; items: AdminReportFeedbackItem[] }) => void = () => undefined;
+    api.listAdminReportFeedback.mockReturnValue(new Promise((resolve) => { resolveList = resolve; }));
+    render(<AdminFeedback />);
+
+    expect(screen.getByText("正在读取质量反馈...")).not.toBeNull();
+    expect(screen.queryByText(/份报告有反馈/)).toBeNull();
+    resolveList({ total: 0, items: [] });
+    expect(await screen.findByText("0 份报告有反馈")).not.toBeNull();
+    expect(screen.getByText("还没有质量反馈")).not.toBeNull();
+  });
 });

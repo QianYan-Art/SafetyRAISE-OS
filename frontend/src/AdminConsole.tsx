@@ -336,7 +336,7 @@ export function AdminConsole(props: AdminConsoleProps) {
 
           {usersError ? <div className="account-alert account-alert-error" role="alert">{usersError}</div> : null}
           <div className="account-admin-table-wrap" role="region" aria-label="用户列表" tabIndex={0}>
-            <table className="account-admin-table">
+            <table className="account-admin-table account-user-table">
               <thead>
                 <tr>
                   <th>用户名</th>
