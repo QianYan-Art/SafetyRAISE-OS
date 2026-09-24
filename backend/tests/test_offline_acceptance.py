@@ -102,7 +102,7 @@ def test_browser_server_startup_failures_release_registered_resources(monkeypatc
     original_connect = socket.socket.connect
     monkeypatch.setenv("REPORT_HARNESS_TEST_DSN",
                        "host=127.0.0.1 dbname=safetyraise_harness_test user=postgres")
-    monkeypatch.setattr(server, "make_settings", lambda *_: None)
+    monkeypatch.setattr(server, "make_settings", lambda *_, **__: None)
 
     def prepare(_dsn):
         if failure == "prepare":

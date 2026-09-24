@@ -322,6 +322,8 @@ Word页眉与PDF每一页也保留标记。渲染使用独立临时目录，结�
 
 `frontend/tests/harness-e2e.mjs`通过真实浏览器、回环HTTP及独立PostgreSQL验证
 保存刷新、证据冲突、取消、未知请求恢复、历史批准撤销及桌面/移动端布局。
+默认模式由测试后端按`enabled=true`、`online_enabled=false`配置，经“报告模式”切换进入独立增强面板；
+`HARNESS_INTEGRATED_UI_TEST=1`改为检查原页面接入分支。
 生成与审查使用合成角色，不证明实际模型质量或物理计费；相关物理请求预算另由
 后端回环transport测试覆盖。正式下载正分支仅用测试注入的历史批准fixture，
 下载仍强制工程标记，绝不写入真实批准表。

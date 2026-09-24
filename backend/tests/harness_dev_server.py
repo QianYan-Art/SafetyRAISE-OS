@@ -62,10 +62,12 @@ class HistoricalRegistry:
         return None
 
 
-def make_settings(dsn: str, directory: Path, username: str) -> Settings:
+def make_settings(dsn: str, directory: Path, username: str, *, harness_enabled: bool) -> Settings:
     model = {"provider": "openai_compatible", "model": "synthetic",
              "base_url": "http://127.0.0.1:9"}
     return Settings.model_validate({
+        # enabled 且不在线时前端显示“报告模式”切换并使用独立增强组件，这是默认浏览器场景的入口。
+        "report_harness": {"enabled": harness_enabled},
         "app": {"output_dir": str(directory / "outputs"),
                 "chat_sessions_dir": str(directory / "sessions")},
         "database": {"dsn": dsn},
@@ -139,6 +141,7 @@ def main():
         raise ValueError("测试监听端口不合法")
     owner, session = str(uuid4()), "harness-browser-" + uuid4().hex
     username, control_token = "e2e-" + uuid4().hex[:12], secrets.token_hex(24)
+    integrated_ui = os.environ.get("HARNESS_INTEGRATED_UI_TEST") == "1"
     original_connect = socket.socket.connect
 
     def local_connect(sock, address):
@@ -149,7 +152,7 @@ def main():
     with ExitStack() as resources, TemporaryDirectory(prefix="safetyraise-browser-") as temporary:
         resources.callback(setattr, socket.socket, "connect", original_connect)
         socket.socket.connect = local_connect
-        settings = make_settings(dsn, Path(temporary), username)
+        settings = make_settings(dsn, Path(temporary), username, harness_enabled=not integrated_ui)
         prepare_tables(dsn)
         resources.callback(cleanup, dsn, owner, session)
         database = DatabaseService(settings)
@@ -160,7 +163,6 @@ def main():
             dependencies(SlowSyntheticRoles()), roles_factory=SlowSyntheticRoles,
             release_registry=registry, force_engineering_exports=True,
         )
-        integrated_ui = os.environ.get("HARNESS_INTEGRATED_UI_TEST") == "1"
         if integrated_ui:
             catalog = AuthorizationCatalog([
                 EndpointDescription(role=role, label="本机合成角色",

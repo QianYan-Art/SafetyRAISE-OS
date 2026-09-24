@@ -26,6 +26,18 @@ async function openArchive(target) {
     await target.getByRole("button", { name: "打开档案列表", exact: true }).click();
   }
 }
+async function closeArchive(target) {
+  const drawer = target.getByRole("dialog", { name: "档案导航" });
+  if (await drawer.isVisible()) {
+    await target.getByTitle("关闭档案导航", { exact: true }).click();
+    await drawer.waitFor({ state: "hidden" });
+  }
+}
+// 原编辑器与增强面板共用输入类名，只等输入值会误读即将卸载的原编辑器，须等增强工作台挂载。
+async function enterHarnessMode(target) {
+  await target.getByLabel("报告模式").selectOption("report-harness");
+  await target.locator(".report-harness-workspace").waitFor();
+}
 assert(process.env.REPORT_HARNESS_TEST_DSN, "必须显式提供独立测试库");
 
 async function requireFreePort(port) {
@@ -60,6 +72,11 @@ async function request(url, options = {}) {
 
 const children = [];
 const logs = [];
+// 预先创建的响应等待可能在前序操作仍卡住时先超时；只记录不终止进程，
+// 该等待被 await 时仍会抛出，失败照常进入 catch 留证并由 finally 清理子进程。
+process.on("unhandledRejection", (error) => {
+  console.error(`等待提前超时：${error?.message ?? error}`);
+});
 function start(command, args, env) {
   const child = spawn(command, args, {
     cwd: root, env: { ...process.env, ...env }, windowsHide: true,
@@ -123,10 +140,6 @@ try {
     localStorage.setItem("traffic-accident-auth-token", token);
   }, bootstrap.token);
   page = await context.newPage();
-  await page.addLocatorHandler(
-    page.getByRole("button", { name: "关闭抽屉", exact: true }),
-    async (locator) => locator.click(),
-  );
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.goto(ui);
@@ -138,10 +151,12 @@ try {
   } else {
   await openArchive(page);
   await page.locator(`[data-session-id="${bootstrap.session_id}"] .session-item`).click();
-  const primaryModeSave = page.waitForResponse((response) => response.url().endsWith(`/api/v1/chat-sessions/${bootstrap.session_id}`)
-    && response.request().method() === "PUT");
-  await page.getByLabel("报告模式").selectOption("report-harness");
-  assert.equal((await primaryModeSave).status(), 200);
+  const [primaryModeSave] = await Promise.all([
+    page.waitForResponse((response) => response.url().endsWith(`/api/v1/chat-sessions/${bootstrap.session_id}`)
+      && response.request().method() === "PUT"),
+    enterHarnessMode(page),
+  ]);
+  assert.equal(primaryModeSave.status(), 200);
   const headers = { Authorization: `Bearer ${bootstrap.token}`, "Content-Type": "application/json" };
   const chatSessionUrl = `${api}/api/v1/chat-sessions/${bootstrap.session_id}`;
   await waitUntil(async () => (await page.locator(".json-table-editor .value-input").count()) === 1);
@@ -151,17 +166,15 @@ try {
     localStorage.setItem("traffic-accident-auth-token", token);
   }, bootstrap.token);
   secondaryPage = await secondaryContext.newPage();
-  await secondaryPage.addLocatorHandler(
-    secondaryPage.getByRole("button", { name: "关闭抽屉", exact: true }),
-    async (locator) => locator.click(),
-  );
   await secondaryPage.goto(ui);
   await openArchive(secondaryPage);
   await secondaryPage.locator(`[data-session-id="${bootstrap.session_id}"] .session-item`).click();
-  const secondaryModeSave = secondaryPage.waitForResponse((response) => response.url().endsWith(`/api/v1/chat-sessions/${bootstrap.session_id}`)
-    && response.request().method() === "PUT");
-  await secondaryPage.getByLabel("报告模式").selectOption("report-harness");
-  assert.equal((await secondaryModeSave).status(), 200);
+  const [secondaryModeSave] = await Promise.all([
+    secondaryPage.waitForResponse((response) => response.url().endsWith(`/api/v1/chat-sessions/${bootstrap.session_id}`)
+      && response.request().method() === "PUT"),
+    enterHarnessMode(secondaryPage),
+  ]);
+  assert.equal(secondaryModeSave.status(), 200);
   await waitUntil(async () => (await secondaryPage.locator(".json-table-editor .value-input").count()) === 1);
   trackSessionTraffic(page, "client-a", chatSessionUrl);
   trackSessionTraffic(secondaryPage, "client-b", chatSessionUrl);
@@ -202,7 +215,7 @@ try {
   await page.reload();
   await openArchive(page);
   await page.locator(`[data-session-id="${bootstrap.session_id}"] .session-item`).click();
-  await page.getByLabel("报告模式").selectOption("report-harness");
+  await enterHarnessMode(page);
   await waitUntil(async () => (await page.locator(".json-table-editor .value-input").first().inputValue()) === "客户端A保存");
   results.push("真实后端会话保存后刷新仍读取客户端A编辑");
 
@@ -246,7 +259,13 @@ try {
       }
     });
     await raceDraft.blur();
-    const heldStrict = await concurrentStrictSeen;
+    let strictTimer;
+    const heldStrict = await Promise.race([
+      concurrentStrictSeen,
+      new Promise((_resolve, reject) => {
+        strictTimer = setTimeout(() => reject(new Error("失焦后30秒内未发出带版本的严格保存")), 30000);
+      }),
+    ]).finally(() => clearTimeout(strictTimer));
     assert.equal(heldStrict.payload.expected_updated_at, raceBaseline.updated_at);
 
     const ordinaryRequest = page.waitForRequest((request) => {
@@ -273,7 +292,9 @@ try {
         return false;
       }
     });
-    await page.locator(`[data-session-id="${bootstrap.session_id}"] .session-title`).dblclick();
+    // 档案导航为覆盖抽屉，抽屉内以铅笔按钮进入重命名。
+    await openArchive(page);
+    await page.locator(`[data-session-id="${bootstrap.session_id}"] .session-rename-button`).click();
     const titleEditor = page.locator(`[data-session-id="${bootstrap.session_id}"] input`).first();
     await titleEditor.fill("并发普通重命名");
     await titleEditor.press("Tab");
@@ -302,6 +323,7 @@ try {
       stored_draft_json: storedAfterConcurrentSave.draft_json,
     }, null, 2));
     results.push("严格保存期间并发普通更新保留，后继整记录PUT不覆盖新事故");
+    await closeArchive(page);
   } finally {
     releaseConcurrentStrict?.();
     await page.unroute(browserSessionPattern);
@@ -368,7 +390,7 @@ try {
   await page.getByRole("button", { name: "保存补充证据", exact: true }).click();
   assert.equal((await saved).status(), 200);
   await page.reload();
-  await page.getByLabel("报告模式").selectOption("report-harness");
+  await enterHarnessMode(page);
   await waitUntil(async () => (await page.getByLabel("证据内容", { exact: true }).inputValue()).includes("合成案例"));
   results.push("证据保存与刷新保持");
 
@@ -407,7 +429,7 @@ try {
   assert(savedAfterSwitch.draft_json.includes("切换前保存A"));
   await openArchive(page);
   await page.locator(`[data-session-id="${bootstrap.session_id}"] .session-item`).click();
-  await page.getByLabel("报告模式").selectOption("report-harness");
+  await enterHarnessMode(page);
   await waitUntil(async () => (await page.locator(".json-table-editor .value-input").first().inputValue()) === "切换前保存A");
   results.push("聚焦编辑切换到新会话前先保存，返回原会话无串写");
 
@@ -480,8 +502,7 @@ try {
   await page.locator(`[data-session-id="${bootstrap.session_id}"] .session-item`).click();
   assert.equal((await reloadedSessionRefresh).status(), 200);
   await waitUntil(async () => (await page.locator(`[data-session-id="${bootstrap.session_id}"] .session-item.active`).count()) === 1);
-  await page.getByLabel("报告模式").selectOption("report-harness");
-  await waitUntil(async () => (await page.locator(".report-harness-workspace").count()) === 1);
+  await enterHarnessMode(page);
   await waitUntil(async () => (await page.locator(".harness-run-list-item").filter({ hasText: cancelTarget.run_id }).count()) === 1);
   await page.locator(".harness-run-list-item").filter({ hasText: cancelTarget.run_id }).click();
   const afterReload = await request(`${api}/api/v1/report-runs/${cancelTarget.run_id}`, { headers });
@@ -502,8 +523,7 @@ try {
   await page.locator(`[data-session-id="${bootstrap.session_id}"] .session-item`).click();
   assert.equal((await queuedSessionRefresh).status(), 200);
   await waitUntil(async () => (await page.locator(`[data-session-id="${bootstrap.session_id}"] .session-item.active`).count()) === 1);
-  await page.getByLabel("报告模式").selectOption("report-harness");
-  await waitUntil(async () => (await page.locator(".report-harness-workspace").count()) === 1);
+  await enterHarnessMode(page);
   await waitUntil(async () => (await page.locator(".harness-run-list-item").filter({ hasText: queued.run_id }).count()) === 1);
   await page.locator(".harness-run-list-item").filter({ hasText: queued.run_id }).click();
   const queuedAfterReload = await request(`${api}/api/v1/report-runs/${queued.run_id}`, { headers });

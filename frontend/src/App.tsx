@@ -2161,6 +2161,8 @@ function WorkspaceApp({
 
   async function handleWorkspaceModeChange(nextMode: WorkspaceMode) {
     if (nextMode === "report-harness" && (!harnessEnabled || harnessOnline)) return;
+    // 档案切换或刷新进行中时先等它结束，不静默丢弃这次模式选择。
+    await sessionTransitionRef.current?.catch(() => undefined);
     if (workspaceMode === nextMode) {
       return;
     }

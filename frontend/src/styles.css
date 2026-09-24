@@ -3566,6 +3566,12 @@ button {
   min-width: 0;
 }
 
+/* 标题行的操作按钮让位给可折行的证据编号，自身不折行。 */
+.harness-record-header .harness-link-button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 .harness-record-header code,
 .harness-run-list-item code,
 .harness-digest-grid code,
