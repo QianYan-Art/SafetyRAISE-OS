@@ -51,6 +51,16 @@ WORKFLOW_CONFIG_PATH
 3. sidecar 地址
 4. 生产环境下更保守的默认值
 
+### 提示词模板
+
+| 文件 | 配置字段 | 用途 |
+| --- | --- | --- |
+| `backend/config/input_generation_prompt.md` | `input_generation.prompt_path` | 从图片、视频抽帧和 YOLO 摘要生成结构化事故信息 |
+| `backend/config/guidance_prompt.md` | `prompts.guidance_prompt_path` | 专家模型生成指导意见 |
+| `backend/config/report_prompt.md` | `prompts.report_prompt_template` | 检索增强的分析报告生成 |
+
+模板中的占位内容由后端按原样替换，删改占位内容会在运行时报错；`backend/tests/unit/test_report_prompt_contract.py` 检查报告模板的静态约定。0.1.0 及更早版本使用中文文件名，旧配置中的这些路径在加载时会自动映射到新文件名。
+
 ## 环境变量占位符
 
 配置文件中的字符串支持：
