@@ -150,12 +150,9 @@ def main() -> None:
         return
 
     if args.command == "serve":
-        if settings.auth.require_strong_secret and settings.auth.jwt_secret_is_insecure():
-            raise SystemExit(
-                "拒绝启动：AUTH_JWT_SECRET 仍为公开默认串或为空。"
-                "生产环境必须设置高熵随机密钥（如 `openssl rand -hex 32`），"
-                "否则任何人可伪造管理员 token。"
-            )
+        problems = settings.auth.startup_security_problems()
+        if problems:
+            raise SystemExit("拒绝启动：" + "；".join(problems) + "。")
         uvicorn.run("app.main:app", host=args.host, port=args.port, reload=False)
 
 

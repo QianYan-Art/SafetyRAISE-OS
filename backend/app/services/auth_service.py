@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Literal
 from uuid import uuid4
@@ -11,6 +12,8 @@ from app.core.security import create_access_token, hash_password, verify_passwor
 from app.core.settings import Settings
 from app.schemas.auth import AuthTokenResponse, LoginRequest, RegisterRequest, UserSummaryResponse
 from app.services.database_service import DatabaseService
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -117,6 +120,11 @@ class AuthService:
                 )
                 row = cur.fetchone()
                 if row:
+                    return
+                if not self.settings.auth.bootstrap_admin_password:
+                    # 开发环境允许不设初始口令；生产 profile 已在启动检查中拒绝这种配置。
+                    logger.warning("未设置 BOOTSTRAP_ADMIN_PASSWORD，跳过创建引导管理员 %s。",
+                                   self.settings.auth.bootstrap_admin_username)
                     return
                 cur.execute(
                     """

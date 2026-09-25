@@ -322,6 +322,9 @@ class DatabaseSettings(BaseModel):
 
 
 DEFAULT_JWT_SECRET = "change-me-in-production"
+# 曾随公开仓库发布过的管理员初始口令，无论出现在哪里都视为不安全。
+PUBLIC_BOOTSTRAP_ADMIN_PASSWORDS = frozenset({"SafetyRaise@2026"})
+MIN_BOOTSTRAP_ADMIN_PASSWORD_LENGTH = 8
 
 
 class AuthSettings(BaseModel):
@@ -329,15 +332,37 @@ class AuthSettings(BaseModel):
     jwt_algorithm: str = "HS256"
     access_token_ttl_minutes: int = Field(default=720, ge=5, le=43200)
     bootstrap_admin_username: str = "safetyraise"
-    bootstrap_admin_password: str = "SafetyRaise@2026"
+    # 没有默认值：由部署者通过 BOOTSTRAP_ADMIN_PASSWORD 提供；未提供时不创建引导管理员。
+    bootstrap_admin_password: str = ""
     bootstrap_admin_display_name: str = "SafetyRAISE 管理员"
-    # 生产 profile 置 true：启动时若 jwt_secret 仍是公开默认串则 fail-fast，
-    # 防止某次部署丢失 AUTH_JWT_SECRET 后静默回落公开默认串（可被伪造 admin）。
+    # 生产 profile 置 true：启动时 JWT 密钥或管理员初始口令不安全即 fail-fast，
+    # 防止部署丢失配置后静默回落到公开值（可被伪造 admin token 或直接登录管理员）。
     require_strong_secret: bool = False
 
     def jwt_secret_is_insecure(self) -> bool:
         secret = str(self.jwt_secret or "").strip()
         return not secret or secret == DEFAULT_JWT_SECRET
+
+    def bootstrap_admin_password_is_insecure(self) -> bool:
+        password = str(self.bootstrap_admin_password or "")
+        return len(password) < MIN_BOOTSTRAP_ADMIN_PASSWORD_LENGTH or password in PUBLIC_BOOTSTRAP_ADMIN_PASSWORDS
+
+    def startup_security_problems(self) -> list[str]:
+        """生产 profile 下必须拒绝启动的配置问题；非生产 profile 返回空列表。"""
+        if not self.require_strong_secret:
+            return []
+        problems = []
+        if self.jwt_secret_is_insecure():
+            problems.append(
+                "AUTH_JWT_SECRET 为空或仍为公开默认串，任何人可伪造管理员 token；"
+                "请设置高熵随机密钥（如 `openssl rand -hex 32`）"
+            )
+        if self.bootstrap_admin_password_is_insecure():
+            problems.append(
+                f"BOOTSTRAP_ADMIN_PASSWORD 为空、少于 {MIN_BOOTSTRAP_ADMIN_PASSWORD_LENGTH} 位或等于曾公开的默认口令；"
+                "请设置只在部署环境中保存的私有口令"
+            )
+        return problems
 
 
 class Settings(BaseModel):
