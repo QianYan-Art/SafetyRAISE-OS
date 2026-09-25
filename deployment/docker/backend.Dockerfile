@@ -5,7 +5,7 @@ COPY backend/native/query_token_accel/Cargo.toml /build/query_token_accel/Cargo.
 COPY backend/native/query_token_accel/src /build/query_token_accel/src
 RUN cargo build --release
 
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 ARG INSTALL_VIDEO_DEPS=false
 
