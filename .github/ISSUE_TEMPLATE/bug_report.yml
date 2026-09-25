@@ -1,0 +1,46 @@
+name: 缺陷报告
+description: 报告可复现的错误或异常行为
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: 安全漏洞请不要在这里提交，请按 SECURITY.md 私密报告。请勿粘贴真实凭据或真实事故材料。
+  - type: textarea
+    id: what
+    attributes:
+      label: 问题描述
+      description: 发生了什么，期望的行为是什么。
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: "1. ...\n2. ...\n3. ..."
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: 版本
+      description: 版本号或提交哈希
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: 涉及部分
+      options: [前端, 后端, 报告 Harness, 视频链路, 检索与知识库, 部署, 文档, 其他]
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: 运行环境
+      description: 操作系统、浏览器、Python / Node 版本、部署方式（本地、同机、分机）
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志或截图
+      description: 请先去除凭据、个人信息和事故材料。
+      render: text
