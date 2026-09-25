@@ -21,6 +21,15 @@ import type {
   UserSummary,
 } from "./types";
 
+
+/** 会话 ID 会成为服务端目录名和记录主键，使用安全随机数；非 HTTPS 页面没有 randomUUID 时退回 getRandomValues。 */
+function createRandomId(): string {
+  if (typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 export interface ChatSession {
   id: string;
   title: string;
@@ -726,7 +735,7 @@ export function useChatHistory(currentUser: Pick<UserSummary, "id">) {
   const createNewSession = useCallback(
     (initialData?: Partial<ChatSession>) => {
       const newSession: ChatSession = {
-        id: `session-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        id: `session-${createRandomId()}`,
         title: "新交通事故",
         createdAt: Date.now(),
         updatedAt: Date.now(),
