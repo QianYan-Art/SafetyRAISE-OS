@@ -51,4 +51,4 @@ mkdir -p \
   /srv/safetyraise/models \
   /srv/safetyraise/huggingface
 
-echo "212 基础环境已准备完成：docker / ${COMPOSE_LABEL} / sshfs / 目录骨架 / Docker 日志上限。"
+echo "应用主机基础环境已准备完成：docker / ${COMPOSE_LABEL} / sshfs / 目录骨架 / Docker 日志上限。"

@@ -4,8 +4,8 @@ from pathlib import Path
 import pytest
 
 
-SCRIPT = Path(__file__).resolve().parents[3] / "deployment" / "docker" / "prepare-213-release.py"
-SPEC = importlib.util.spec_from_file_location("prepare_213_release", SCRIPT)
+SCRIPT = Path(__file__).resolve().parents[3] / "deployment" / "docker" / "prepare-single-host-release.py"
+SPEC = importlib.util.spec_from_file_location("prepare_single_host_release", SCRIPT)
 assert SPEC and SPEC.loader
 module = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(module)

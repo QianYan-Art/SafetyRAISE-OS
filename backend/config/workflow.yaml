@@ -14,8 +14,6 @@
 # 3. 若你的服务端无需鉴权，可将对应字段保留为空字符串。
 secrets:
   openrouter_api_key: &openrouter_api_key "OPENROUTER_API_KEY"
-  lite_api_key: &lite_api_key "LITE_MODEL_API_KEY"
-  duckcoding_api_key: &duckcoding_api_key "DUCKCODING_API_KEY"
 
 # 应用级运行参数
 app:
@@ -48,7 +46,7 @@ auth:
   jwt_algorithm: "HS256"
   access_token_ttl_minutes: 720
   bootstrap_admin_username: "${BOOTSTRAP_ADMIN_USERNAME:-safetyraise}"
-  bootstrap_admin_password: "${BOOTSTRAP_ADMIN_PASSWORD:-SafetyRaise@2026}"
+  bootstrap_admin_password: "${BOOTSTRAP_ADMIN_PASSWORD:-}"
   bootstrap_admin_display_name: "${BOOTSTRAP_ADMIN_DISPLAY_NAME:-SafetyRAISE 管理员}"
 
 # 输入适配器配置

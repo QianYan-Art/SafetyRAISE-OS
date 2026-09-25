@@ -26,7 +26,7 @@ services:
       # 该外部配置必须显式包含 report_harness.enabled/online_enabled=true、
       # 绝对 runtime_manifest_path 和 resource_paths，不在覆盖层自行编造模型合同。
       WORKFLOW_CONFIG_PATH: /run/safetyraise/harness/workflow.server.yaml
-      # 大于128MiB的Starlette UploadFile临时文件必须落到212本地受控盘。
+      # 大于128MiB的Starlette UploadFile临时文件必须落到应用主机的本地受控盘。
       TMPDIR: /var/lib/safetyraise/harness-tmp
       # 不在覆盖层关闭 INSTALL_VIDEO_DEPS；正式镜像须保留已验证的视频依赖。
     # 基础镜像 CMD 带有 --config；显式覆盖它，避免环境变量被命令行参数遮蔽。
@@ -48,15 +48,15 @@ services:
       # 目录须包含 generator.md、reviewer.md、build_manifest.json、
       # approved_release_bindings.json 和 approved_evaluations/，整体只读。
       - "${HARNESS_RELEASE_DIR_HOST_PATH:?set the approved release directory path}:/app/backend/config/report_harness:ro"
-      # 这是 212 本地持久费用盘，不得指向 213 SSHFS runtime/kbase 目录。
+      # 应用主机本地持久盘上的费用账本目录，不得指向网络挂载（如 SSHFS）或共享的 runtime/kbase 目录。
       # manifest 的 ledger_path 应使用 /var/lib/safetyraise/ledger/<filename>。
-      - "${HARNESS_LOCAL_LEDGER_HOST_DIR:?set the dedicated local 212 ledger directory}:/var/lib/safetyraise/ledger:rw"
-      # 这是独立的 212 本地临时盘；不得与 ledger 或 213 共享 runtime/kbase 混用。
-      - "${HARNESS_LOCAL_TMP_HOST_DIR:?set the dedicated local 212 temporary directory}:/var/lib/safetyraise/harness-tmp:rw"
+      - "${HARNESS_LOCAL_LEDGER_HOST_DIR:?set the dedicated local ledger directory}:/var/lib/safetyraise/ledger:rw"
+      # 应用主机上独立的本地临时目录；不得与 ledger 或共享的 runtime/kbase 目录混用。
+      - "${HARNESS_LOCAL_TMP_HOST_DIR:?set the dedicated local temporary directory}:/var/lib/safetyraise/harness-tmp:rw"
 
   frontend:
-    # 只复制发布准备好的本地预构建 context；正式部署不得在 212 上执行 npm ci 或拉取 Node 依赖。
-    # 212 只有 docker-compose 1.29.2，不使用 Compose v2 additional_contexts。
+    # 只复制发布准备好的本地预构建 context；正式部署不在服务器上执行 npm ci 或拉取 Node 依赖。
+    # 兼容 docker-compose 1.29.x，不使用 Compose v2 的 additional_contexts。
     build:
       # 该目录只能包含 Dockerfile、nginx.frontend.conf 和 dist；不得指向仓库根目录或共享目录。
       context: "${FRONTEND_RUNTIME_CONTEXT_HOST_PATH:?set the prepared frontend runtime context directory}"

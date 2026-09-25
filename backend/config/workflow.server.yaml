@@ -12,7 +12,7 @@ app:
   timezone: "Asia/Shanghai"
   log_level: "INFO"
   output_dir: "backend/data/output"
-  # 只保留最近 60 个未被当前会话结果引用的旧输出目录，避免 213 上无限堆积。
+  # 只保留最近 60 个未被当前会话结果引用的旧输出目录，避免服务器磁盘无限堆积。
   output_retain_count: 60
   # 历史兼容目录：旧版会话曾按 session.json 落盘，当前仅用于迁移读取。
   chat_sessions_dir: "backend/data/chat_sessions"
@@ -20,7 +20,7 @@ app:
   lmstudio_resident_limit: 2
 
 database:
-  dsn: "${DATABASE_DSN:-postgresql://<DB_USER>:<DB_PASSWORD>@<DATA_SERVER_IP>:5432/safetyraise}"
+  dsn: "${DATABASE_DSN:-postgresql://<DB_USER>:<DB_PASSWORD>@<DB_HOST>:5432/safetyraise}"
   min_pool_size: 1
   max_pool_size: 4
   connect_timeout_seconds: 10
@@ -30,9 +30,9 @@ auth:
   jwt_algorithm: "HS256"
   access_token_ttl_minutes: 720
   bootstrap_admin_username: "${BOOTSTRAP_ADMIN_USERNAME:-safetyraise}"
-  bootstrap_admin_password: "${BOOTSTRAP_ADMIN_PASSWORD:-SafetyRaise@2026}"
+  bootstrap_admin_password: "${BOOTSTRAP_ADMIN_PASSWORD:-}"
   bootstrap_admin_display_name: "${BOOTSTRAP_ADMIN_DISPLAY_NAME:-SafetyRAISE 管理员}"
-  # 生产强制：jwt_secret 仍为公开默认串则后端拒绝启动（防回退裸奔）
+  # 生产强制：JWT 密钥为空或为公开默认串、管理员初始口令为空或不安全时，后端拒绝启动。
   require_strong_secret: true
 
 input:
@@ -41,14 +41,15 @@ input:
 
 models:
   expert_local:
-    # 服务器默认走 Modal 上的 OpenAI 兼容专家端点；可通过环境变量切换到其他兼容服务。
+    # 专家模型走 OpenAI 兼容端点，部署者必须用 EXPERT_LOCAL_BASE_URL 指定；
+    # 可用 deployment/modal/qwen3_expert.py 自行部署，或接入 vLLM、LM Studio 等兼容服务。
     provider: "${EXPERT_LOCAL_PROVIDER:-openai_compatible}"
     # 默认模型仓库：
     # https://huggingface.co/suyuan37/SafetyRAISE-TS-Qwen3
     # 必须填写推理服务实际暴露的模型名。
     model: "${EXPERT_LOCAL_MODEL:-suyuan37/SafetyRAISE-TS-Qwen3}"
     # 支持填写根地址、/v1 或完整 /chat/completions 地址。
-    base_url: "${EXPERT_LOCAL_BASE_URL:-https://qianyan-art--safetyraise-qwen3-expert-serve.eu-west.modal.run/v1}"
+    base_url: "${EXPERT_LOCAL_BASE_URL:-https://<EXPERT_ENDPOINT>/v1}"
     # 值是保存裸 Proxy Auth token 的环境变量名，运行时统一添加 Bearer 前缀。
     api_key_env: "${EXPERT_LOCAL_API_KEY_ENV:-MODAL_EXPERT_PROXY_TOKEN}"
     timeout_seconds: 1800

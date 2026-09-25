@@ -291,7 +291,7 @@ async def run(args):
     write_json(attempt_dir / "events.json", store.events(owner, run_id, 0, 500))
     candidate = record.get("candidate")
     if candidate:
-        marker = "工程验证样本（真实模型开发报告），待老师独立验收；不是正式责任认定，也不代表Q通过。"
+        marker = "工程验证样本（真实模型开发报告），待独立人工验收；不是正式责任认定，也不代表已通过质量验收。"
         if record["state"] != "published":
             marker += "\n\n系统检查未通过，不可按最终报告使用。"
         (attempt_dir / "report.md").write_text(

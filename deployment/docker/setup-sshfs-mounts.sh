@@ -35,7 +35,7 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 if ! command -v sshfs >/dev/null 2>&1; then
-  echo "未找到 sshfs，请先执行 deployment/docker/provision-212.sh。" >&2
+  echo "未找到 sshfs，请先执行 deployment/docker/provision-app-host.sh。" >&2
   exit 1
 fi
 

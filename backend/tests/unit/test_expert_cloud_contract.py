@@ -81,7 +81,8 @@ def _retry_nodes() -> WorkflowNodes:
     return nodes
 
 
-def test_server_defaults_to_modal_without_lmstudio_or_output_limit(monkeypatch: pytest.MonkeyPatch):
+def test_server_expert_defaults_to_placeholder_without_lmstudio_or_output_limit(monkeypatch: pytest.MonkeyPatch):
+    # 公开配置不指向任何具体部署；未设置 EXPERT_LOCAL_BASE_URL 时保留明确占位，由部署者替换。
     for name in (
         "EXPERT_LOCAL_PROVIDER",
         "EXPERT_LOCAL_MODEL",
@@ -95,9 +96,7 @@ def test_server_defaults_to_modal_without_lmstudio_or_output_limit(monkeypatch: 
 
     assert expert.provider == "openai_compatible"
     assert expert.model == "suyuan37/SafetyRAISE-TS-Qwen3"
-    assert expert.base_url == (
-        "https://qianyan-art--safetyraise-qwen3-expert-serve.eu-west.modal.run/v1"
-    )
+    assert expert.base_url == "https://<EXPERT_ENDPOINT>/v1"
     assert expert.api_key_env == "MODAL_EXPERT_PROXY_TOKEN"
     assert expert.timeout_seconds == 1800
     assert expert.lmstudio_ttl_seconds is None

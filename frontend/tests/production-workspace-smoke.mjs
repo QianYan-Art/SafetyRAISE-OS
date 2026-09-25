@@ -7,9 +7,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 
-const baseUrl = process.env.PRODUCTION_SMOKE_URL || "https://safetyraise.cn";
+// 冒烟测试会真实登录并读写目标站点，必须显式指定目标，不提供默认地址。
+const baseUrl = process.env.PRODUCTION_SMOKE_URL;
+if (!baseUrl) throw new Error("请用 PRODUCTION_SMOKE_URL 指定要检查的站点地址，例如 https://example.com");
 const sshHost = process.env.PRODUCTION_SMOKE_SSH_HOST;
-const sshPort = process.env.PRODUCTION_SMOKE_SSH_PORT || "23333";
+const sshPort = process.env.PRODUCTION_SMOKE_SSH_PORT || "22";
 const sshKey = process.env.PRODUCTION_SMOKE_SSH_KEY;
 const expectedCommit = process.env.PRODUCTION_SMOKE_EXPECTED_COMMIT;
 const apiTimeoutMs = Number(process.env.PRODUCTION_SMOKE_API_TIMEOUT_MS || "30000");

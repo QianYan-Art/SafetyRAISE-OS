@@ -1,4 +1,4 @@
-"""Adapt an inspected 212 release to the existing 213 Docker/Nginx topology."""
+"""Adapt an inspected split-host release (app host + data host) to a single-host Docker/Nginx layout."""
 
 from __future__ import annotations
 
