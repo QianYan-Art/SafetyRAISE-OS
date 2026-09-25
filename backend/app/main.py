@@ -33,8 +33,8 @@ from app.services.report_service import ReportService
 from app.report_harness.lifecycle import report_harness_lifespan
 
 logger = logging.getLogger(__name__)
-# 就绪接口无需登录：对外只给状态与提示，异常详情和服务器路径只写日志。
-_READINESS_PRIVATE_KEYS = frozenset({"detail", "path"})
+# 就绪接口无需登录：对外只给状态与固定提示，异常详情、服务器路径、内部端点与模型名只写日志。
+_READINESS_PUBLIC_KEYS = frozenset({"status", "ready", "checks", "ok", "message"})
 
 app = FastAPI(title="交通事故分析报告后端", version="0.3.0",
               lifespan=report_harness_lifespan)
@@ -91,11 +91,14 @@ def ready(
 
 
 def _public_readiness(value):
-    if isinstance(value, dict):
-        return {key: _public_readiness(item) for key, item in value.items() if key not in _READINESS_PRIVATE_KEYS}
-    if isinstance(value, list):
-        return [_public_readiness(item) for item in value]
-    return value
+    """顶层与每项检查只保留白名单字段；checks 的键是检查项名称，原样保留并递归处理。"""
+    if not isinstance(value, dict):
+        return value
+    public = {key: item for key, item in value.items() if key in _READINESS_PUBLIC_KEYS}
+    checks = public.get("checks")
+    if isinstance(checks, dict):
+        public["checks"] = {name: _public_readiness(item) for name, item in checks.items()}
+    return public
 
 
 def main() -> None:

@@ -160,6 +160,12 @@ def test_ready_hides_failure_details_and_server_paths():
                         "detail": "PermissionError: /srv/private/uploads",
                         "path": "/srv/private/uploads",
                     },
+                    "retrieval_reranker_available": {
+                        "ok": False,
+                        "message": "reranker 服务不可访问。",
+                        "model": "internal-reranker",
+                        "endpoint": "http://retrieval-reranker.internal:80",
+                    },
                 },
             }
 
@@ -169,4 +175,6 @@ def test_ready_hides_failure_details_and_server_paths():
     assert response.status_code == 503
     check = body["checks"]["upload_dir_writable"]
     assert check == {"ok": False, "message": "上传目录不可写。"}
-    assert "/srv/private" not in response.body.decode("utf-8")
+    assert body["checks"]["retrieval_reranker_available"] == {"ok": False, "message": "reranker 服务不可访问。"}
+    text = response.body.decode("utf-8")
+    assert "/srv/private" not in text and "internal" not in text
