@@ -4,11 +4,14 @@
 
 ## [未发布]
 
+## [0.2.0] - 2026-09-25
+
 ### 变更
 
 - 提示词模板改用英文文件名：`input_generation_prompt.md`、`guidance_prompt.md`、`report_prompt.md`。配置中的旧中文路径在加载时自动映射，已部署的配置无需修改。
 - 前端官方构建镜像升级到 Node.js 22；文档中的最低版本更正为 Python 3.11、Node.js 22.22。
 - 依赖升级：前端 vitest 5、@vitejs/plugin-react 6、vite 8.3；前端运行镜像 nginx 1.29；Rust 构建镜像 1.98。
+- 前端类型检查不再在源码目录生成 `vite.config.js`、`*.tsbuildinfo` 等文件。
 
 ### 其他
 
@@ -41,5 +44,6 @@
 - 新增 CI（后端测试、前端测试与构建、提交历史密钥扫描）、贡献指南、安全策略与 issue / PR 模板。
 - 在 README 与 NOTICE 中说明可选视频依赖 Ultralytics YOLO 的 AGPL-3.0 许可。
 
-[未发布]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.1.0...HEAD
+[未发布]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/QianYan-Art/SafetyRAISE-OS/releases/tag/v0.1.0
