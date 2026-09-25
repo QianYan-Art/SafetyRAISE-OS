@@ -55,7 +55,7 @@ docker compose -f /srv/apps/safetyraise/private/compose.prod.json config --quiet
 docker compose -f /srv/apps/safetyraise/private/compose.prod.json -p safetyraise up -d
 ```
 
-隔离验证使用 `--test-database`、独立输出、运行时、上传和账本目录，以及不同的前端回环端口；不能把测试库直接切为正式库。宿主 Nginx 参考 `deployment/docker/nginx.host-site.conf`（把 `example.com` 换成实际域名），证书续期钩子参考 `renew-host-nginx.sh`，安装到 Certbot 的 `renewal-hooks/deploy/` 目录而不是发布目录；配置前核对其他虚拟主机、证书和日志目录，执行 `nginx -t` 后才重载。Certbot 续期需做 `--dry-run`，并测试钩子重载。站点登记、日志轮转和每日备份须与宿主运维规范对齐。
+隔离验证使用 `--test-database`、独立输出、运行时、上传和账本目录，以及不同的前端回环端口；不能把测试库直接切为正式库。宿主 Nginx 参考 `deployment/docker/nginx.host-site.conf`（把 `example.com` 换成实际域名），证书续期钩子参考 `renew-host-nginx.sh`（把其中的 `DOMAIN` 改为证书名，否则钩子不会重载 Nginx），安装到 Certbot 的 `renewal-hooks/deploy/` 目录而不是发布目录；配置前核对其他虚拟主机、证书和日志目录，执行 `nginx -t` 后才重载。Certbot 续期需做 `--dry-run`，并测试钩子重载。站点登记、日志轮转和每日备份须与宿主运维规范对齐。
 
 ## 验证与回滚
 

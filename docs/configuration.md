@@ -152,6 +152,7 @@ base_url: "${RETRIEVAL_EMBEDDING_BASE_URL:-http://127.0.0.1:1234/v1}"
 | `RETRIEVAL_EMBEDDING_API_KEY_ENV` | embedding key 环境变量名 |
 | `RETRIEVAL_RERANKER_BASE_URL` | reranker sidecar 地址 |
 | `RETRIEVAL_RERANKER_MODEL` | reranker 模型名 |
+| `RETRIEVAL_RERANKER_API_KEY_ENV` | reranker key 环境变量名，sidecar 不需要鉴权时留空 |
 
 ### 5. 知识库与 YOLO
 
