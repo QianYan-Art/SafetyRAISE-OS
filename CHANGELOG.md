@@ -4,6 +4,23 @@
 
 ## [未发布]
 
+## [0.3.0] - 2026-09-25
+
+### 安全
+
+- `/api/v1/inputs/generate-from-upload` 需要登录。此前可以匿名上传文件并触发视觉模型。
+- 上传清单的 `category_id` 只接受单级路径段（字母、数字、点、下划线、连字符），服务端写入前再确认目标目录位于本次上传目录内。此前构造的分组标识可以把上传文件写到上传目录之外。
+- `/api/v1/inputs/generate-from-video` 以及报告接口的 `input_path`、`video_path` 仅限管理员。此前任何登录用户都能在服务目录范围内引用其他用户的资料。
+- `/api/v1/ready` 无需登录，现在只返回各项是否就绪及提示，不再返回异常详情与服务器路径；完整结果写入后端日志。
+- 按 trace_id 定位报告输出目录时要求其为单级路径段。
+- 前端会话 ID 与生产烟测账号口令改用安全随机数。
+
+### 不兼容变更
+
+- `/api/v1/reports/generate` 与 `/api/v1/reports/generate/stream` 必须登录。未开启报告 Harness 的部署此前允许匿名调用，并会使用系统模型端点。
+- 普通用户不能再用 `input_path`、`video_path` 提交报告或生成事故信息，改用上传接口；管理员与命令行不受影响。
+- 上传清单中不符合上述规则的 `category_id` 返回 400。仓库前端使用的八个分组标识均符合规则。
+
 ## [0.2.1] - 2026-09-25
 
 ### 修复
@@ -50,7 +67,8 @@
 - 新增 CI（后端测试、前端测试与构建、提交历史密钥扫描）、贡献指南、安全策略与 issue / PR 模板。
 - 在 README 与 NOTICE 中说明可选视频依赖 Ultralytics YOLO 的 AGPL-3.0 许可。
 
-[未发布]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.2.1...HEAD
+[未发布]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/QianYan-Art/SafetyRAISE-OS/releases/tag/v0.1.0
