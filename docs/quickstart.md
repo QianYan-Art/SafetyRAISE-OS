@@ -15,22 +15,22 @@
 
 ## 安装依赖
 
-仓库根目录执行：
+仓库根目录执行（Windows 下把 `.venv/bin/python` 换成 `.venv/Scripts/python.exe`，下同）：
 
-```powershell
+```sh
 uv venv .venv
-uv pip install --python .venv/Scripts/python.exe -r backend/requirements.txt
+uv pip install --python .venv/bin/python -r backend/requirements.txt
 ```
 
-如需启用视频链路，再安装：
+如需启用视频链路，再安装（`ultralytics` 采用 AGPL-3.0，见 README 的许可说明）：
 
-```powershell
-uv pip install --python .venv/Scripts/python.exe -r backend/requirements-video.txt
+```sh
+uv pip install --python .venv/bin/python -r backend/requirements-video.txt
 ```
 
 安装前端依赖：
 
-```powershell
+```sh
 cd frontend
 npm install
 cd ..
@@ -58,16 +58,18 @@ ${ENV_NAME:-default_value}
 docs/prepare-runtime-assets.md
 ```
 
-PowerShell 示例：
+示例（PowerShell 中写成 `$env:NAME="value"`）：
 
-```powershell
-$env:OPENROUTER_API_KEY="your-openrouter-key"
-$env:DATABASE_DSN="postgresql://<user>:<password>@127.0.0.1:5432/safetyraise"
-$env:AUTH_JWT_SECRET="<replace-with-a-strong-random-secret>"
-$env:BOOTSTRAP_ADMIN_PASSWORD="<replace-with-a-private-password>"
-$env:EXPERT_LOCAL_MODEL="suyuan37/SafetyRAISE-TS-Qwen3"
-$env:EXPERT_LOCAL_BASE_URL="http://127.0.0.1:1234/v1"
+```sh
+export OPENROUTER_API_KEY="your-openrouter-key"
+export DATABASE_DSN="postgresql://<user>:<password>@127.0.0.1:5432/safetyraise"
+export AUTH_JWT_SECRET="<replace-with-a-strong-random-secret>"
+export BOOTSTRAP_ADMIN_PASSWORD="<replace-with-a-private-password>"
+export EXPERT_LOCAL_MODEL="suyuan37/SafetyRAISE-TS-Qwen3"
+export EXPERT_LOCAL_BASE_URL="http://127.0.0.1:1234/v1"
 ```
+
+首次启动时，后端用 `BOOTSTRAP_ADMIN_USERNAME`（默认 `safetyraise`）和 `BOOTSTRAP_ADMIN_PASSWORD` 创建管理员。口令没有默认值：本地开发不设置时只跳过创建管理员，可以先注册普通用户；服务器配置下未设置或不安全会拒绝启动。
 
 ## 准备知识库
 
@@ -161,15 +163,15 @@ ffprobe
 
 ## 启动后端
 
-```powershell
-.venv\Scripts\python.exe -m uvicorn app.main:app --app-dir backend --reload --port 8000
+```sh
+.venv/bin/python -m uvicorn app.main:app --app-dir backend --reload --port 8000
 ```
 
 建议始终从仓库根目录启动这条命令，避免 Python 模块路径和相对配置路径偏移。
 
 ## 启动前端
 
-```powershell
+```sh
 cd frontend
 npm run dev
 ```
@@ -189,7 +191,7 @@ http://localhost:5173
 
 后端启动后，可先检查：
 
-```powershell
+```sh
 curl http://127.0.0.1:8000/api/v1/health
 curl http://127.0.0.1:8000/api/v1/ready
 ```

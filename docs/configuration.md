@@ -75,7 +75,7 @@ base_url: "${RETRIEVAL_EMBEDDING_BASE_URL:-http://127.0.0.1:1234/v1}"
 
 ## 报告模型说明
 
-报告生成端点已收敛为**单一端点**（默认端点名 `openrouter_primary`，当前模型 `tencent/hy4-preview`）。`max/pro/lite` 档位与 `selector_label` 已下线。
+报告生成使用**单一端点**（默认端点名 `openrouter_primary`，默认模型 `tencent/hy4-preview`）。
 
 默认报告模型使用 `reasoning.effort=high`，默认视觉模型 `openai/gpt-5.6-luna` 使用 `reasoning.effort=max`；
 用户未在能力配置中选择推理等级时沿用该默认值。报告与视觉请求不发送 `max_tokens`、`max_completion_tokens` 或 `max_output_tokens`；指定推理等级时不同时发送 `reasoning.max_tokens`。旧配置字段仍可解析，但不作为输出截断参数。供应商容量仍用于 harness 内部费用预留，费用、轮数和未知请求保护不因此取消。
@@ -91,23 +91,33 @@ base_url: "${RETRIEVAL_EMBEDDING_BASE_URL:-http://127.0.0.1:1234/v1}"
 
 ## 关键环境变量分组
 
-### 1. 专家模型
+服务器部署时这些变量写在仓库根目录的 `.env.server`（由 [`.env.example`](../.env.example) 复制而来，已被 Git 忽略）。
+
+### 1. 数据库与鉴权
+
+| 变量 | 作用 |
+| --- | --- |
+| `DATABASE_DSN` | PostgreSQL 连接串；同机部署用 Docker 网络内的服务名，分机部署用数据库主机地址 |
+| `AUTH_JWT_SECRET` | 登录令牌签名密钥，使用高熵随机值（如 `openssl rand -hex 32`） |
+| `BOOTSTRAP_ADMIN_USERNAME` | 首次启动自动创建的管理员用户名，默认 `safetyraise` |
+| `BOOTSTRAP_ADMIN_PASSWORD` | 该管理员的初始口令，至少 8 位，没有默认值 |
+| `BOOTSTRAP_ADMIN_DISPLAY_NAME` | 管理员显示名称 |
+
+`workflow.server.yaml` 设置了 `auth.require_strong_secret: true`：`AUTH_JWT_SECRET` 为空或为公开默认串、`BOOTSTRAP_ADMIN_PASSWORD` 为空、少于 8 位或等于曾公开的默认口令时，后端拒绝启动。本地开发配置不做该检查；未设置管理员口令时只跳过创建管理员并记录警告，可先注册普通用户使用。管理员只在数据库中不存在同名用户时创建，之后修改口令请在管理控制台中进行。
+
+### 2. 专家模型
 
 | 变量 | 作用 |
 | --- | --- |
 | `EXPERT_LOCAL_PROVIDER` | 专家模型提供器；服务器默认 `openai_compatible`，本地 LM Studio 可显式覆盖 |
 | `EXPERT_LOCAL_MODEL` | 专家模型名称 |
-| `EXPERT_LOCAL_BASE_URL` | 专家模型服务地址 |
+| `EXPERT_LOCAL_BASE_URL` | 专家模型服务地址；服务器配置没有可用默认值，必须显式设置 |
 | `EXPERT_LOCAL_API_KEY_ENV` | 若服务端需要鉴权，指向真实 key 的环境变量名 |
-| `MODAL_EXPERT_PROXY_TOKEN` | 默认 Modal Proxy Auth 裸 token；程序统一添加 `Bearer` 前缀，不提交仓库 |
+| `MODAL_EXPERT_PROXY_TOKEN` | 用 `deployment/modal/qwen3_expert.py` 部署时的 Proxy Auth 裸 token；程序统一添加 `Bearer` 前缀 |
 
 服务器配置把专家模型固定为系统级能力：普通用户和管理员都不能在模型接入设置中查看或修改该端点，也不能从公开 readiness、报告响应或授权预览中取得地址和凭据。`workflow.server.yaml` 默认给单次专家请求 `1800` 秒超时，用于覆盖按需 GPU 冷启动和完整的一轮生成；请求体不发送 `max_tokens`、`max_completion_tokens` 或 `max_output_tokens`。
 
 自动重试只用于明确的连接、写入、协议中断、无效 JSON 或可重试 HTTP 状态。已经进入读取阶段但超时的请求不自动重发，避免同一台单并发专家服务同时生成两份结果。Modal 冷启动返回的同次尝试恢复由 Harness transport 单独处理，规则见 [报告 Harness](report-harness.md)。
-
-### 2. lite 档位模型（已下线）
-
-`lite` 报告档位已下线，当前服务器配置与单一报告端点不读取 `LITE_MODEL_*`。`.env.example` 仍保留这些变量作为既有本地或外部配置的兼容占位；新部署无需填写，也不能依赖它们恢复多档位路由。
 
 ### 3. 报告 / 视觉模型
 
@@ -117,10 +127,9 @@ base_url: "${RETRIEVAL_EMBEDDING_BASE_URL:-http://127.0.0.1:1234/v1}"
 
 说明：
 
-1. `OPENROUTER_API_KEY` 默认同时服务于单一报告端点（`openrouter_primary`）与视觉模型端点
-2. 报告端点已收敛为单一端点，旧的 `max / pro / lite` 档位及 `DUCKCODING_API_KEY` / `LITE_MODEL_*` 多档位变量均已移除
-3. 用户在前端自填 `url + key + model` 时只需填到 `/v1`，系统自动补全 `/chat/completions`（报告/视觉）或 `/embeddings`（嵌入）
-4. 视觉 / 报告可另选推理等级，存于 `user_capability_configs.params.reasoning_effort`：留空沿用上述系统默认；
+1. `OPENROUTER_API_KEY` 默认同时服务于单一报告端点（`openrouter_primary`）、视觉模型端点与嵌入模型
+2. 用户在前端自填 `url + key + model` 时只需填到 `/v1`，系统自动补全 `/chat/completions`（报告/视觉）或 `/embeddings`（嵌入）
+3. 视觉 / 报告可另选推理等级，存于 `user_capability_configs.params.reasoning_effort`：留空沿用上述系统默认；
    选定 `none / minimal / low / medium / high / xhigh / max` 之一时按所选等级发送；选 `off` 时请求体不携带推理参数，
    供不支持该参数的上游使用。系统不探查上游能力，也不自动升降等级；该项对嵌入用途不开放
 
@@ -129,7 +138,7 @@ base_url: "${RETRIEVAL_EMBEDDING_BASE_URL:-http://127.0.0.1:1234/v1}"
 | 变量 | 作用 |
 | --- | --- |
 | `RETRIEVAL_EMBEDDING_BASE_URL` | embedding 服务地址 |
-| `RETRIEVAL_EMBEDDING_MODEL` | embedding 模型名 |
+| `RETRIEVAL_EMBEDDING_MODEL` | embedding 模型名；须与构建稠密索引时一致，默认 `qwen/qwen3-embedding-8b`（4096 维） |
 | `RETRIEVAL_EMBEDDING_API_KEY_ENV` | embedding key 环境变量名 |
 | `RETRIEVAL_RERANKER_BASE_URL` | reranker sidecar 地址 |
 | `RETRIEVAL_RERANKER_MODEL` | reranker 模型名 |

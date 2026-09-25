@@ -1,2 +1,5 @@
+# 可选视频链路依赖（YOLO 检测 + ByteTrack 跟踪）。
+# ultralytics 及其 YOLO 权重采用 AGPL-3.0（或 Ultralytics 企业许可），与本仓库的 Apache-2.0 不同；
+# 分发包含这些依赖的镜像或以网络服务提供时，请自行确认需要履行的许可义务。详见 README 的“许可”一节。
 ultralytics>=8.3.163
 lap>=0.5.12

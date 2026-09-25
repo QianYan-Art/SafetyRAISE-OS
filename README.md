@@ -54,16 +54,16 @@ SafetyRAISE 提供从图片、视频材料到结构化事故信息、专家指�
 ## 仓库结构
 
 ```text
-TS_analysis_report/
-├─ frontend/
-├─ backend/
+SafetyRAISE-OS/
+├─ .github/              CI 与 issue / PR 模板
+├─ backend/              FastAPI 后端、报告 Harness、配置与测试（backend/tests）
+├─ frontend/             React 前端与浏览器测试（frontend/tests）
 ├─ deployment/
-│  └─ docker/
-├─ docs/
-├─ examples/kbase/minimal/
-├─ backend/tests/
-├─ frontend/tests/
-└─ .env.example
+│  ├─ docker/            同机与分机部署模板、Nginx 与证书续期脚本
+│  └─ modal/             专家模型的 Modal 部署脚本
+├─ docs/                 开发与部署文档
+├─ examples/kbase/minimal/  无正文的知识库结构模板
+└─ .env.example          服务器部署环境变量示例
 ```
 
 ## 运行前准备
@@ -83,11 +83,11 @@ TS_analysis_report/
 
 ## 本地开发
 
-依赖安装：
+依赖安装（Windows 下解释器路径为 `.venv/Scripts/python.exe`，下同）：
 
-```powershell
+```sh
 uv venv .venv
-uv pip install --python .venv/Scripts/python.exe -r backend/requirements.txt
+uv pip install --python .venv/bin/python -r backend/requirements.txt
 cd frontend
 npm install
 ```
@@ -108,24 +108,25 @@ npm install
 3. [部署说明](docs/deployment.md)：同机部署拓扑、发布、回滚、备份和健康检查。
 4. [报告 Harness](docs/report-harness.md)：证据、独立审查、预算和恢复的运行契约。
 5. [前端工作台](docs/frontend-workbench.md)：页面与接口边界。
+6. [贡献指南](CONTRIBUTING.md)、[安全策略](SECURITY.md)与[变更记录](CHANGELOG.md)。
 
 ## 验证
 
 没有测试库时，先运行知识库相关的无数据库测试：
 
-```powershell
-.venv\Scripts\python.exe -m pytest -q backend/tests/unit/test_public_kbase_scaffold.py backend/tests/unit/test_knowledge_assets.py
+```sh
+.venv/bin/python -m pytest -q backend/tests/unit/test_public_kbase_scaffold.py backend/tests/unit/test_knowledge_assets.py
 ```
 
-完整后端单测包含 PostgreSQL 集成用例，须先把 `REPORT_HARNESS_TEST_DSN` 指向**回环地址**上的独立可清理测试库，数据库名以 `safetyraise_harness_test` 开头；测试拒绝回退到业务库。准备好后运行：
+完整后端测试（`backend/tests`，含单元测试与 PostgreSQL 集成用例）须先把 `REPORT_HARNESS_TEST_DSN` 指向**回环地址**上的独立可清理测试库，数据库名以 `safetyraise_harness_test` 开头；测试拒绝回退到业务库。准备好后运行：
 
-```powershell
-.venv\Scripts\python.exe -m pytest -q backend/tests/unit
+```sh
+.venv/bin/python -m pytest -q backend/tests
 ```
 
 前端验证：
 
-```powershell
+```sh
 cd frontend
 npm test
 npm run build
@@ -135,4 +136,4 @@ npm run build
 
 ## 许可
 
-本项目采用 [Apache License 2.0](LICENSE)。
+本项目采用 [Apache License 2.0](LICENSE)。可选的视频链路依赖 `ultralytics` 及其 YOLO 权重采用 AGPL-3.0（或 Ultralytics 企业许可），不随本仓库分发；安装、分发包含它们的镜像或以网络服务形式提供时，需要自行履行相应许可义务，详见 [NOTICE](NOTICE)。

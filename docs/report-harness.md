@@ -338,7 +338,7 @@ API默认端口18081，若被Windows保留则显式设置`HARNESS_TEST_API_PORT=
 前端默认15174，被保留时用`HARNESS_TEST_UI_PORT`另选，端口被占用立即失败，不接管已有服务。
 `REPORT_HARNESS_E2E_OUTPUT`指定本次截图、公开事件和结果目录。
 runner退出会关闭自己启动的服务并清理自己创建的数据库行。
-真实质量门须另有模型、预算及材料授权；浏览器通过不等于完整E门或Q门通过。
+浏览器测试通过不代表报告质量已验收；真实质量验收需要单独的模型、预算与材料授权。
 
 ## 隔离真实开发样本
 
@@ -346,13 +346,13 @@ runner退出会关闭自己启动的服务并清理自己创建的数据库行�
 不是生产服务器启动命令。参数 `--input` 指向仓外匿名文字JSON，
 `--input-sha256` 固定已批准内容，`--experiment-dir` 指定整轮私有账本及产物目录，
 `--confirm-outbound` 明确本次允许发出真实请求。输入只支持非空文字字段对象，
-不能传原图、DOCX、老师答案或未授权知识。必须显式提供回环测试库
+不能传原图、DOCX、人工参考答案或未授权知识。必须显式提供回环测试库
 `REPORT_HARNESS_TEST_DSN` 和进程级 `OPENROUTER_API_KEY`，不自动读取业务环境文件。
 
 开发依赖 `development_outbound_enabled` 默认false；打开时必须为outbound、
 强制工程导出、具备许可目录和运行时角色工厂，且没有正式发布注册表或代码绑定。
 每次请求核对持久approval的所有者、输入、模型端点、知识和策略摘要。
-开发运行始终为 `engineering_only`；老师验收与完整Q另行进行，不能自动登记正式批准。
+开发运行始终为 `engineering_only`；人工质量验收另行进行，不能自动登记正式批准。
 
 固定报告模型为 `tencent/hy4-preview`，生成与审查独立上下文。供应商和价格有上限，
 不自动回退、重定向、重试或调用外部知识/收费插件。运行前核验公开元数据和参考汇率，
@@ -380,18 +380,19 @@ runner退出会关闭自己启动的服务并清理自己创建的数据库行�
 
 ## 离线工程门
 
-在`D:/MCP_Server/TS_analysis_report`执行，DSN仅可指向回环专用测试库：
+在仓库根目录执行，DSN仅可指向回环专用测试库，`--output-dir` 使用一个尚不存在的新目录：
 
-```powershell
-$env:REPORT_HARNESS_TEST_DSN = 'host=127.0.0.1 port=15432 dbname=safetyraise_harness_test user=postgres'
-$env:HARNESS_TEST_API_PORT = '18281'
-$env:PYTHONPATH = 'backend'
-.\.venv\Scripts\python.exe -m evals.report_harness.run --output-dir C:/tmp/internal/think/.mission/20260916_23-14-07-safetyraise-report-evidence/verification/e-next
+```sh
+export REPORT_HARNESS_TEST_DSN='host=127.0.0.1 port=15432 dbname=safetyraise_harness_test user=postgres'
+export HARNESS_TEST_API_PORT=18281
+PYTHONPATH=backend .venv/bin/python -m evals.report_harness.run --output-dir <新的输出目录>
 ```
+
+Windows PowerShell 中用 `$env:NAME = '...'` 设置同样的变量，解释器路径为 `.venv\Scripts\python.exe`。
 
 输出目录必须不存在，不能覆盖历史失败证据。runner串行运行完整后端suite、
 前端测试、真实子进程清理回归、TypeScript、构建和浏览器；
-任何失败、skip或缺少必需浏览器场景都拒绝关闭E。
+任何失败、skip或缺少必需浏览器场景都判定工程门不通过。
 `manifest.json`列出故障矩阵与旧标签基线；`result.json`保存提交、工作区状态、
 命令/退出码/耗时、源码/策略/迁移/构建配置及产物SHA-256。
 验证过程中源码变化、旧标签变化或真实批准表变化也判失败。

@@ -13,7 +13,16 @@
 | 账本、模型权重、上传临时盘 | `/srv/data/safetyraise-app` | 账本使用本地磁盘，不使用 SSHFS |
 | Nginx 日志 | `/srv/logs/nginx` | 配置轮转与容量限制 |
 
-`deployment/docker/docker-compose.server.yml`、`server-compose.sh`、`provision-212.sh` 和 SSHFS 脚本是**双机部署模板**，不能直接当作上述同机拓扑的启动命令。同机迁移辅助脚本 `prepare-213-release.py` 需要已有的经检查的源编排、不可变镜像 ID、发布包和私有目录；它不是从一个空仓库自动生成生产环境的安装器。
+仓库提供两套模板：
+
+| 拓扑 | 适用 | 入口 |
+| --- | --- | --- |
+| 同机部署（推荐） | 应用、PostgreSQL 与知识库在同一台主机 | `prepare-single-host-release.py` 生成编排，宿主 Nginx 参考 `nginx.host-site.conf` |
+| 分机部署 | 应用主机与数据主机分离，知识库和运行目录经 SSHFS 挂载 | `docker-compose.server.yml`、`server-compose.sh`、`provision-app-host.sh`、`setup-sshfs-mounts.sh` / `mount-remote-*.sh` |
+
+两者不能混用。`prepare-single-host-release.py` 需要已经检查过的源编排、不可变镜像 ID、发布包和私有目录，它不是从空仓库自动生成生产环境的安装器。
+
+证书续期脚本（同机的 `renew-host-nginx.sh`、分机的 `renew-https.sh`）必须安装在发布目录之外的固定位置，由 Certbot 钩子或 cron 调用；指向某个发布目录的续期任务会在清理旧发布后静默失效。
 
 ## 先决条件
 
@@ -23,7 +32,7 @@
 4. YOLO 权重、`ffmpeg`、`ffprobe` 和包含 CPU 版 `torch/torchvision`、`ultralytics`、`lap` 的后端镜像。替换镜像前运行 `deployment/docker/verify-runtime-dependencies.py`。
 5. Harness 在线运行还需要已有费用 SQLite 账本、四角色合同、外部 runtime manifest、实际构建清单、只读批准绑定和评估证据；代码或知识版本变化后重建并审核绑定。`demo` 模式输出带标记工程稿，不等同于正式发布。
 
-所有密钥只写入受限的服务器配置，不放在 Compose 命令输出、仓库、镜像、前端或记录文档。`.env.example` 是配置字段示例，含历史双机路径；使用前必须逐项替换，不要直接作为同机生产配置。
+所有密钥只写入受限的服务器配置，不放在 Compose 命令输出、仓库、镜像、前端或记录文档。`.env.example` 是配置字段示例；复制为 `.env.server` 后逐项替换占位与空值。生产配置下 `AUTH_JWT_SECRET` 与 `BOOTSTRAP_ADMIN_PASSWORD` 为空或不安全时后端拒绝启动，见[配置说明](configuration.md)。
 
 ## 发布
 
@@ -32,7 +41,7 @@
 从经检查的私有源编排生成同机编排示例（路径和镜像 ID 按目标主机实际值填写）：
 
 ```sh
-python3 deployment/docker/prepare-213-release.py \
+python3 deployment/docker/prepare-single-host-release.py \
   --source /srv/apps/safetyraise/private/compose.source.json \
   --output /srv/apps/safetyraise/private/compose.prod.json \
   --release-dir /srv/apps/safetyraise/releases/<release> \
@@ -46,7 +55,7 @@ docker compose -f /srv/apps/safetyraise/private/compose.prod.json config --quiet
 docker compose -f /srv/apps/safetyraise/private/compose.prod.json -p safetyraise up -d
 ```
 
-隔离验证使用 `--test-database`、独立输出、运行时、上传和账本目录，以及不同的前端回环端口；不能把测试库直接切为正式库。宿主 Nginx 参考 `deployment/docker/nginx.213.site.conf`，证书续期钩子参考 `renew-213-nginx.sh`；配置前核对其他虚拟主机、证书和日志目录，执行 `nginx -t` 后才重载。Certbot 续期需做 `--dry-run`，并测试钩子重载。站点登记、日志轮转和每日备份须与宿主运维规范对齐。
+隔离验证使用 `--test-database`、独立输出、运行时、上传和账本目录，以及不同的前端回环端口；不能把测试库直接切为正式库。宿主 Nginx 参考 `deployment/docker/nginx.host-site.conf`（把 `example.com` 换成实际域名），证书续期钩子参考 `renew-host-nginx.sh`，安装到 Certbot 的 `renewal-hooks/deploy/` 目录而不是发布目录；配置前核对其他虚拟主机、证书和日志目录，执行 `nginx -t` 后才重载。Certbot 续期需做 `--dry-run`，并测试钩子重载。站点登记、日志轮转和每日备份须与宿主运维规范对齐。
 
 ## 验证与回滚
 
@@ -57,6 +66,18 @@ docker compose -f /srv/apps/safetyraise/private/compose.prod.json -p safetyraise
 5. 回滚前先停止当前后端写入，核对账本增量和数据库快照，再恢复旧镜像、编排和入口；不能只切 DNS 或直接启动旧后端。发布包和旧镜像保留到观察期结束且回滚路径完成验证。
 
 费用账本的 WAL/SHM 不应直接做在线文件归档；用 SQLite backup API 生成一致性副本。PostgreSQL 用 `pg_dump` 逻辑备份，并用 `pg_restore --list` 检查可读性。备份策略要覆盖应用私有配置、数据库、账本、证书及知识库，不把自动轮转当成独立恢复演练。
+
+## 专家模型（Modal）
+
+专家模型可以用 `deployment/modal/qwen3_expert.py` 部署到你自己的 Modal 账户。脚本要求已有持久卷 `safetyraise-qwen3-f16`，并从卷内 `/models/TS-Qwen3` 读取完整模型；卷不存在时直接失败，避免误建空卷后发布不可用端点。
+
+```sh
+modal volume create safetyraise-qwen3-f16
+modal volume put safetyraise-qwen3-f16 <LOCAL_MODEL_DIR> /models/TS-Qwen3
+modal deploy deployment/modal/qwen3_expert.py
+```
+
+脚本固定 vLLM `0.21.0`、L4、F16、单容器单并发、60 秒空闲缩容和 1800 秒启动等待，服务名为 `suyuan37/SafetyRAISE-TS-Qwen3`，上下文 `12288`，不设置输出 token 上限。部署完成后，把 Modal 给出的地址（加 `/v1`）写入 `EXPERT_LOCAL_BASE_URL`；在 Modal 控制台创建 Proxy Auth token，只保存到服务器的受限环境文件（如 `.env.server` 的 `MODAL_EXPERT_PROXY_TOKEN`），不写入仓库、镜像、前端或日志。
 
 ## 清理边界
 

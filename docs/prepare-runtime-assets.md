@@ -40,14 +40,17 @@ manifest 不包含新预算授权；迁移时不得丢弃旧请求或未知预�
 
 用途：生成专家指导意见，作为报告链路的前置分析节点。
 
-服务器默认值：
+服务器配置示例（`EXPERT_LOCAL_BASE_URL` 没有可用默认值，必须替换为你自己的端点）：
 
 ```text
 EXPERT_LOCAL_PROVIDER=openai_compatible
 EXPERT_LOCAL_MODEL=suyuan37/SafetyRAISE-TS-Qwen3
-EXPERT_LOCAL_BASE_URL=https://qianyan-art--safetyraise-qwen3-expert-serve.eu-west.modal.run/v1
+EXPERT_LOCAL_BASE_URL=https://<EXPERT_ENDPOINT>/v1
 EXPERT_LOCAL_API_KEY_ENV=MODAL_EXPERT_PROXY_TOKEN
 ```
+
+可以用 `deployment/modal/qwen3_expert.py` 把模型部署到自己的 Modal 账户（步骤见[部署说明](deployment.md#专家模型modal)），
+也可以接入 vLLM 等 OpenAI 兼容服务。
 
 本地开发若使用 LM Studio，可把 provider、base URL 和凭据变量覆盖为本地端点；
 这不是服务器默认路径。

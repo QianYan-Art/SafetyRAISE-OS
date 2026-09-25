@@ -3,3 +3,12 @@ Copyright 2026 QianYan-Art
 
 This product includes software developed by QianYan-Art and contributors
 and is distributed under the Apache License, Version 2.0.
+
+Third-party components
+----------------------
+The optional video pipeline (backend/requirements-video.txt) depends on
+Ultralytics YOLO, which is licensed under AGPL-3.0 (or an Ultralytics
+Enterprise License). YOLO model weights are distributed under the same terms.
+These components are not included in this repository; anyone who installs
+them, distributes images containing them, or offers them as a network service
+is responsible for complying with their license.
