@@ -4,6 +4,15 @@
 
 ## [未发布]
 
+### 变更
+
+- 提示词模板改用英文文件名：`input_generation_prompt.md`、`guidance_prompt.md`、`report_prompt.md`。配置中的旧中文路径在加载时自动映射，已部署的配置无需修改。
+- 前端官方构建镜像升级到 Node.js 22；文档中的最低版本更正为 Python 3.11、Node.js 22.22。
+
+### 其他
+
+- CI 在 Python 3.11、3.12、3.13 上运行后端测试；新增 Dependabot 依赖更新与行为准则。
+
 ## [0.1.0] - 2026-09-25
 
 首个带版本号的公开发布。
