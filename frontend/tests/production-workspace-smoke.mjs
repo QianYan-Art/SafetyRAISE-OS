@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -44,15 +44,17 @@ if (localStatusRun.status !== 0) throw new Error("无法核对本地工作区状
 assert.equal(localStatusRun.stdout.trim(), "", "生产候选烟测必须从干净工作区运行");
 
 await fs.mkdir(outputDir, { recursive: true });
-const suffix = (Date.now().toString(36) + Math.random().toString(36).slice(2, 6)).slice(-12);
+// 烟测会在线上创建真实账号：后缀与口令都用安全随机数，不能由时间推测。
+const suffix = randomBytes(6).toString("hex");
+const passwordEntropy = randomBytes(12).toString("base64url");
 const user = {
   username: ("smoke_u_" + suffix).slice(0, 20),
-  password: "Safe" + suffix + "9a",
+  password: "Safe" + passwordEntropy + "9a",
   displayName: "生产烟测普通用户·" + suffix,
 };
 const admin = {
   username: ("smoke_a_" + suffix).slice(0, 20),
-  password: "Safe" + suffix + "8b",
+  password: "Safe" + passwordEntropy + "8b",
   displayName: "生产烟测管理员·" + suffix,
 };
 const sessionId = "prod-smoke-" + suffix;
