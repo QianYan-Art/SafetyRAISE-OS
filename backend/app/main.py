@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 # 就绪接口无需登录：对外只给状态与提示，异常详情和服务器路径只写日志。
 _READINESS_PRIVATE_KEYS = frozenset({"detail", "path"})
 
-app = FastAPI(title="交通事故分析报告后端", version="0.2.1",
+app = FastAPI(title="交通事故分析报告后端", version="0.3.0",
               lifespan=report_harness_lifespan)
 app.add_middleware(ReportRunBodyLimit)
 app.add_middleware(
