@@ -1,4 +1,4 @@
-FROM rust:1.95-slim AS rust-token-accel-builder
+FROM rust:1.98-slim AS rust-token-accel-builder
 
 WORKDIR /build/query_token_accel
 COPY backend/native/query_token_accel/Cargo.toml backend/native/query_token_accel/Cargo.lock /build/query_token_accel/
