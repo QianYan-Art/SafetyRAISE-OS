@@ -108,7 +108,7 @@ npm install
 3. [部署说明](docs/deployment.md)：同机部署拓扑、发布、回滚、备份和健康检查。
 4. [报告 Harness](docs/report-harness.md)：证据、独立审查、预算和恢复的运行契约。
 5. [前端工作台](docs/frontend-workbench.md)：页面与接口边界。
-6. [贡献指南](CONTRIBUTING.md)、[安全策略](SECURITY.md)与[变更记录](CHANGELOG.md)。
+6. [贡献指南](CONTRIBUTING.md)、[行为准则](CODE_OF_CONDUCT.md)、[安全策略](SECURITY.md)与[变更记录](CHANGELOG.md)。
 
 ## 验证
 
