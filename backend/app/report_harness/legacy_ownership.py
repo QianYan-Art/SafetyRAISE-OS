@@ -12,6 +12,7 @@ from fastapi import Request
 from psycopg.types.json import Jsonb
 
 from app.api import deps
+from app.core.path_guard import is_safe_path_segment
 from app.schemas.workflow import GenerateReportRequest
 from app.services.auth_service import AuthenticatedUser
 
@@ -323,7 +324,7 @@ def _resolve_output_dir(
     raw_output_dir: object,
 ) -> Path | None:
     root_value = getattr(settings, "output_dir_path", None)
-    if root_value is None:
+    if root_value is None or not is_safe_path_segment(str(trace_id).strip()):
         return None
     try:
         root = Path(root_value).resolve()

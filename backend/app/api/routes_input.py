@@ -7,18 +7,19 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile
 
-from app.api.deps import get_input_generation_service
+from app.api.deps import get_current_user, get_input_generation_service, require_admin_user
 from app.core.exceptions import (
     InputValidationError,
     UnsupportedMediaError,
     UploadLimitExceededError,
 )
-from app.core.path_guard import resolve_api_path
+from app.core.path_guard import is_safe_path_segment, resolve_api_path
 from app.schemas.workflow import (
     GenerateInputFromUploadResponse,
     GenerateInputFromVideoRequest,
     GenerateInputFromVideoResponse,
 )
+from app.services.auth_service import AuthenticatedUser
 from app.services.input_generation_service import InputGenerationService
 
 router = APIRouter(prefix="/api/v1/inputs", tags=["inputs"])
@@ -29,6 +30,8 @@ UPLOAD_CHUNK_SIZE = 1024 * 1024
 def generate_input_from_video(
     request: GenerateInputFromVideoRequest,
     service: InputGenerationService = Depends(get_input_generation_service),
+    # 服务器文件路径可指向任何用户的资料，仅限管理员；普通用户通过上传接口提交材料。
+    _admin: AuthenticatedUser = Depends(require_admin_user),
 ):
     try:
         artifact = service.generate(
@@ -70,6 +73,8 @@ async def generate_input_from_upload(
     file: UploadFile | None = File(default=None),
     upload_manifest: str | None = Form(default=None),
     service: InputGenerationService = Depends(get_input_generation_service),
+    # 上传会调用视觉模型并写入服务器磁盘，必须登录。
+    _user: AuthenticatedUser = Depends(get_current_user),
 ):
     upload_files = list(files or [])
     if file is not None:
@@ -207,6 +212,9 @@ def _parse_upload_manifest(raw_payload: str | None, *, expected_count: int) -> d
         category_label = str(raw_group.get("category_label") or "").strip()
         if not category_id or not category_label:
             raise InputValidationError("upload_manifest.groups 中的分组必须包含 category_id 和 category_label。")
+        # category_id 会成为上传目录名，只接受单级安全路径段。
+        if not is_safe_path_segment(category_id):
+            raise InputValidationError("upload_manifest.groups.category_id 只能包含字母、数字、点、下划线和连字符。")
         groups[category_id] = {
             "category_id": category_id,
             "category_label": category_label,

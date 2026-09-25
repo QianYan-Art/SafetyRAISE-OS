@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Literal
 
 from app.core.exceptions import ArtifactNotFoundError, DependencyUnavailableError, InputValidationError
+from app.core.path_guard import is_safe_path_segment
 from app.core.settings import Settings
 
 try:
@@ -319,6 +320,8 @@ class ReportExportService:
         cleaned_trace_id = str(trace_id or "").strip()
         if not cleaned_trace_id:
             raise InputValidationError("报告 trace_id 不能为空。")
+        if not is_safe_path_segment(cleaned_trace_id):
+            raise InputValidationError("报告 trace_id 非法。")
 
         output_dir = (self.settings.output_dir_path / cleaned_trace_id).resolve()
         if not output_dir.is_relative_to(self.settings.output_dir_path):
