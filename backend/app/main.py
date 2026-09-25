@@ -1,4 +1,6 @@
 import argparse
+import json
+import logging
 import os
 from uuid import uuid4
 
@@ -29,6 +31,10 @@ from app.core.settings import load_settings
 from app.services.readiness_service import ReadinessService
 from app.services.report_service import ReportService
 from app.report_harness.lifecycle import report_harness_lifespan
+
+logger = logging.getLogger(__name__)
+# 就绪接口无需登录：对外只给状态与提示，异常详情和服务器路径只写日志。
+_READINESS_PRIVATE_KEYS = frozenset({"detail", "path"})
 
 app = FastAPI(title="交通事故分析报告后端", version="0.2.1",
               lifespan=report_harness_lifespan)
@@ -78,8 +84,18 @@ def ready(
     readiness_service: ReadinessService = Depends(get_readiness_service),
 ):
     payload = readiness_service.check()
-    status_code = 200 if payload.get("ready") else 503
-    return JSONResponse(status_code=status_code, content=payload)
+    ready_ok = bool(payload.get("ready"))
+    if not ready_ok:
+        logger.warning("就绪检查未通过：%s", json.dumps(payload, ensure_ascii=False, default=str))
+    return JSONResponse(status_code=200 if ready_ok else 503, content=_public_readiness(payload))
+
+
+def _public_readiness(value):
+    if isinstance(value, dict):
+        return {key: _public_readiness(item) for key, item in value.items() if key not in _READINESS_PRIVATE_KEYS}
+    if isinstance(value, list):
+        return [_public_readiness(item) for item in value]
+    return value
 
 
 def main() -> None:
