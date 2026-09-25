@@ -1,0 +1,4 @@
+# 开发与测试依赖；运行时依赖只放在 requirements.txt，复用镜像的依赖核验只检查运行时依赖。
+-r requirements.txt
+pytest>=8.0.0
+pypdf>=5.0.0
