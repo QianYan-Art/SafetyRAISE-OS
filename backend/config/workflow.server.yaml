@@ -116,14 +116,14 @@ models:
     timeout_seconds: 180
 
 prompts:
-  guidance_prompt_path: "backend/config/指导意见生成提示词.md"
-  report_prompt_template: "backend/config/分析报告生成提示词.md"
+  guidance_prompt_path: "backend/config/guidance_prompt.md"
+  report_prompt_template: "backend/config/report_prompt.md"
 
 input_generation:
   generated_input_path: "backend/data/input_accident.json"
   backup_dir: "backend/data/backup"
   workspace_dir: "backend/data/input_generation"
-  prompt_path: "backend/config/事故信息生成提示词.md"
+  prompt_path: "backend/config/input_generation_prompt.md"
   template_path: "backend/config/input_accident_template.json"
   retain_debug_artifacts: false
   retain_workspace_count: 6

@@ -167,9 +167,9 @@ models:
 # 提示词模板路径
 prompts:
   # 指导意见提示词文件路径。
-  guidance_prompt_path: "backend/config/指导意见生成提示词.md"
+  guidance_prompt_path: "backend/config/guidance_prompt.md"
   # 报告生成提示词模板路径。
-  report_prompt_template: "backend/config/分析报告生成提示词.md"
+  report_prompt_template: "backend/config/report_prompt.md"
 
 # 事故信息草稿生成配置
 input_generation:
@@ -180,7 +180,7 @@ input_generation:
   # 每轮输入生成的工作区目录，里面会保存关键帧、YOLO 摘要、草稿等中间产物。
   workspace_dir: "backend/data/input_generation"
   # 事故信息生成提示词路径。
-  prompt_path: "backend/config/事故信息生成提示词.md"
+  prompt_path: "backend/config/input_generation_prompt.md"
   # 事故信息模板路径，模型输出最终会投影到这个模板结构上。
   template_path: "backend/config/input_accident_template.json"
   # 是否保留调试产物，例如视觉原始响应、YOLO stdout/stderr 等。

@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any, Literal, Optional
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.core.exceptions import ConfigurationError
 from app.report_harness.config import ReportHarnessSettings
@@ -72,9 +72,26 @@ class RetrievalSettings(BaseModel):
     agentic: AgenticRagSettings = Field(default_factory=AgenticRagSettings)
 
 
+# 0.1.0 使用中文提示词文件名；生产环境常单独挂载 workflow.server.yaml，
+# 旧配置里的这些路径在加载时映射到新文件名。
+LEGACY_PROMPT_PATHS = {
+    "backend/config/指导意见生成提示词.md": "backend/config/guidance_prompt.md",
+    "backend/config/分析报告生成提示词.md": "backend/config/report_prompt.md",
+    "backend/config/事故信息生成提示词.md": "backend/config/input_generation_prompt.md",
+}
+
+
+def _migrate_legacy_prompt_path(value: str) -> str:
+    return LEGACY_PROMPT_PATHS.get(value, value)
+
+
 class PromptSettings(BaseModel):
     guidance_prompt_path: str
     report_prompt_template: str
+
+    _migrate_legacy_paths = field_validator("guidance_prompt_path", "report_prompt_template")(
+        _migrate_legacy_prompt_path
+    )
 
 
 class InputGenerationYoloSettings(BaseModel):
@@ -125,13 +142,15 @@ class InputGenerationSettings(BaseModel):
     generated_input_path: str = "backend/data/input_accident.json"
     backup_dir: str = "backend/data/backup"
     workspace_dir: str = "backend/data/input_generation"
-    prompt_path: str = "backend/config/事故信息生成提示词.md"
+    prompt_path: str = "backend/config/input_generation_prompt.md"
     template_path: str = "backend/config/input_accident_template.json"
     retain_debug_artifacts: bool = False
     retain_workspace_count: int = Field(default=2, ge=1, le=20)
     yolo: InputGenerationYoloSettings = Field(default_factory=InputGenerationYoloSettings)
     frames: InputGenerationFrameSettings = Field(default_factory=InputGenerationFrameSettings)
     upload: InputGenerationUploadSettings = Field(default_factory=InputGenerationUploadSettings)
+
+    _migrate_legacy_path = field_validator("prompt_path")(_migrate_legacy_prompt_path)
 
     @model_validator(mode="after")
     def _validate_frame_budget(self) -> "InputGenerationSettings":

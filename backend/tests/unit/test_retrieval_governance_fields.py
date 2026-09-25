@@ -38,6 +38,6 @@ def test_sparse_result_unchanged_for_records_without_governance_fields():
 
 def test_report_prompt_explains_governance_fields():
     root = Path(__file__).resolve().parents[2]
-    text = (root / "config" / "分析报告生成提示词.md").read_text(encoding="utf-8")
+    text = (root / "config" / "report_prompt.md").read_text(encoding="utf-8")
     for field in ("effect_level", "usage_note", "jurisdiction", "effective_date", "supersedes"):
         assert f"`{field}`" in text

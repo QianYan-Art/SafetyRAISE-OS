@@ -5,7 +5,7 @@ import re
 def test_original_report_template_keeps_business_inputs_without_length_targets():
     """仅验证提示词静态契约，不代表真实模型质量通过。"""
     root = Path(__file__).resolve().parents[2]
-    text = (root / "config" / "分析报告生成提示词.md").read_text(encoding="utf-8")
+    text = (root / "config" / "report_prompt.md").read_text(encoding="utf-8")
     for placeholder in (
         "{在这里粘贴指导意见JSON}",
         "{在这里粘贴结构化事故信息JSON}",
