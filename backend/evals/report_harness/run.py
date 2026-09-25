@@ -55,7 +55,8 @@ def source_fingerprints() -> dict:
              if path.suffix in suffixes and "__pycache__" not in path.parts}
     paths.update(path for path in (ROOT / "frontend").glob("*")
                  if path.suffix in suffixes)
-    paths.update({ROOT / "backend/requirements.txt", ROOT / "pyproject.toml"})
+    paths.update({ROOT / "backend/requirements.txt", ROOT / "backend/requirements-dev.txt",
+                  ROOT / "pyproject.toml"})
     return {path.relative_to(ROOT).as_posix(): digest(path)
             for path in sorted(paths) if path.is_file()}
 

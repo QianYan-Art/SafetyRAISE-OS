@@ -87,7 +87,7 @@ SafetyRAISE-OS/
 
 ```sh
 uv venv .venv
-uv pip install --python .venv/bin/python -r backend/requirements.txt
+uv pip install --python .venv/bin/python -r backend/requirements-dev.txt
 cd frontend
 npm install
 ```

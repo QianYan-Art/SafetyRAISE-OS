@@ -19,8 +19,10 @@
 
 ```sh
 uv venv .venv
-uv pip install --python .venv/bin/python -r backend/requirements.txt
+uv pip install --python .venv/bin/python -r backend/requirements-dev.txt
 ```
+
+`requirements-dev.txt` 在运行时依赖 `requirements.txt` 之外加入测试工具；只部署运行时可只装后者。
 
 如需启用视频链路，再安装（`ultralytics` 采用 AGPL-3.0，见 README 的许可说明）：
 
