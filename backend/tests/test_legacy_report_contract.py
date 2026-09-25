@@ -5,6 +5,7 @@ import json
 import threading
 from types import SimpleNamespace
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -13,9 +14,12 @@ from app.api.deps import (
     get_report_service,
     get_user_capability_config_service,
 )
+from app.api.error_handling import register_exception_handlers
+from app.api import routes_report
 from app.api.routes_report import router
 from app.core.exceptions import RequestCancelledError
 from app.schemas.report import ReportResult
+from app.services.auth_service import AuthenticatedUser
 
 
 class LegacyReportStub:
@@ -53,12 +57,36 @@ class LegacyReportStub:
         self.cancel_calls += 1
 
 
-def legacy_app(service: LegacyReportStub) -> FastAPI:
+@pytest.fixture(autouse=True)
+def _no_ownership_database(monkeypatch):
+    """所有权持久化依赖数据库，另有集成测试覆盖；这里只验证旧接口契约。"""
+    monkeypatch.setattr(routes_report, "assert_legacy_session_access", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        routes_report,
+        "persist_legacy_report_ownership",
+        lambda *args, **kwargs: SimpleNamespace(session_id=None),
+    )
+
+
+class DefaultCapabilityConfig:
+    def resolve_overrides(self, current_user):
+        return None
+
+
+def synthetic_user() -> AuthenticatedUser:
+    return AuthenticatedUser(
+        id="legacy-user", username="legacy-user", display_name=None, role="user",
+        is_active=True, created_at="", updated_at="",
+    )
+
+
+def legacy_app(service: LegacyReportStub, *, user=synthetic_user) -> FastAPI:
     app = FastAPI()
+    register_exception_handlers(app)
     app.include_router(router)
     app.dependency_overrides[get_report_service] = lambda: service
-    app.dependency_overrides[get_optional_current_user] = lambda: None
-    app.dependency_overrides[get_user_capability_config_service] = lambda: object()
+    app.dependency_overrides[get_optional_current_user] = user
+    app.dependency_overrides[get_user_capability_config_service] = DefaultCapabilityConfig
     return app
 
 
@@ -69,7 +97,7 @@ def legacy_payload() -> dict:
     }
 
 
-def test_legacy_anonymous_generate_and_stream_remain_usable():
+def test_legacy_generate_and_stream_work_for_signed_in_user():
     service = LegacyReportStub()
     app = legacy_app(service)
 
@@ -85,6 +113,20 @@ def test_legacy_anonymous_generate_and_stream_remain_usable():
     assert '"status": "success"' in streamed.text
     assert len(service.calls) == 2
     assert all(call["capability_overrides"] is None for call in service.calls)
+
+
+def test_legacy_generate_and_stream_reject_anonymous_requests():
+    # 生成会调用系统模型端点；匿名请求不能消耗系统额度。
+    service = LegacyReportStub()
+    app = legacy_app(service, user=lambda: None)
+
+    with TestClient(app) as client:
+        for endpoint in ("/api/v1/reports/generate", "/api/v1/reports/generate/stream"):
+            response = client.post(endpoint, json=legacy_payload())
+            assert response.status_code == 401
+            assert response.json()["error"]["code"] == "AUTHENTICATION_REQUIRED"
+
+    assert service.calls == []
 
 
 def test_legacy_stream_disconnect_cancels_generation():

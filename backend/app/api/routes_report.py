@@ -16,7 +16,12 @@ from app.api.deps import (
     get_user_capability_config_service,
 )
 from app.api.error_handling import build_sse_error_event
-from app.core.exceptions import RequestCancelledError, WorkflowError
+from app.core.exceptions import (
+    AuthenticationError,
+    PermissionDeniedError,
+    RequestCancelledError,
+    WorkflowError,
+)
 from app.core.path_guard import resolve_api_path
 from app.report_harness.errors import HarnessError
 from app.report_harness.legacy_api_adapter import (
@@ -54,6 +59,7 @@ def generate_report(
     capability_config_service: UserCapabilityConfigService = Depends(get_user_capability_config_service),
     harness_context: LegacyHarnessContext | None = Depends(get_legacy_harness_context),
 ):
+    _authorize_report_request(request, current_user)
     if harness_context is not None:
         run = prepare_legacy_run(harness_context, request, current_user, http_request)
         return build_legacy_response(run, run.execute_sync())
@@ -99,6 +105,7 @@ def generate_report_stream(
     capability_config_service: UserCapabilityConfigService = Depends(get_user_capability_config_service),
     harness_context: LegacyHarnessContext | None = Depends(get_legacy_harness_context),
 ):
+    _authorize_report_request(request, current_user)
     if harness_context is not None:
         run = prepare_legacy_run(harness_context, request, current_user, http_request)
         return _generate_harness_report_stream(http_request, run)
@@ -476,6 +483,17 @@ def download_report_export(
         filename=service.build_download_name(trace_id, export_format),
         headers={"Cache-Control": "no-store"},
     )
+
+
+def _authorize_report_request(
+    request: GenerateReportRequest,
+    current_user: AuthenticatedUser | None,
+) -> None:
+    """报告生成会调用系统模型端点，必须登录；服务器文件路径可指向任何用户的资料，仅限管理员。"""
+    if current_user is None:
+        raise AuthenticationError("生成报告需要先登录。", code="AUTHENTICATION_REQUIRED")
+    if (request.input_path or request.video_path) and not current_user.is_admin:
+        raise PermissionDeniedError("只有管理员可以使用服务器文件路径作为报告输入。")
 
 
 def _run_report_generation(

@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from app.core.exceptions import ConfigurationError, InputValidationError, ProviderError
 from app.core.json_parser import extract_json_from_text
+from app.core.path_guard import is_safe_path_segment
 from app.core.settings import Settings
 from app.providers.llm.openai_vision import OpenAIVisionProvider
 from app.schemas.input_generation import InputGenerationArtifact, UploadGroupSummary
@@ -796,6 +797,8 @@ class InputGenerationService:
                 raise InputValidationError(f"上传文件不存在: {source_path}")
 
             category_id = str(entry.get("category_id") or "").strip() or "uncategorized"
+            if not is_safe_path_segment(category_id):
+                raise InputValidationError("上传分组标识非法。")
             category_label = str(entry.get("category_label") or "").strip() or "未分组材料"
             category_subtitle = str(entry.get("category_subtitle") or "").strip()
             category_sequence = int(entry.get("category_sequence", 0) or 0)
@@ -806,6 +809,8 @@ class InputGenerationService:
             group_sequence = int(entry.get("group_sequence", 0) or 0)
             global_sequence = int(entry.get("sequence", 0) or 0)
             category_dir = uploads_dir / category_id
+            if category_dir.resolve().parent != uploads_dir.resolve():
+                raise InputValidationError("上传分组目录非法。")
             category_dir.mkdir(parents=True, exist_ok=True)
             suffix = source_path.suffix.lower() or (".jpg" if media_type == "image" else ".mp4")
             target_path = category_dir / f"{group_sequence:03d}_{source_path.stem}{suffix}"

@@ -177,6 +177,12 @@ def _user() -> AuthenticatedUser:
     )
 
 
+def _admin() -> AuthenticatedUser:
+    return AuthenticatedUser(
+        id="owner", username="owner", display_name=None, role="admin",
+        is_active=True, created_at="", updated_at="",
+    )
+
 def _app(
     service: FakeHarnessService,
     old_service: OldServiceBomb,
@@ -333,6 +339,8 @@ def test_online_legacy_input_path_is_frozen_into_harness_snapshot(monkeypatch, t
     monkeypatch.setattr(adapter, "EvidenceStore", FakeEvidenceStore)
     monkeypatch.setattr(deps, "get_settings", lambda: _path_settings(tmp_path))
     app = _app(service, old_service)
+    # 服务器文件路径输入仅限管理员。
+    app.dependency_overrides[get_optional_current_user] = _admin
 
     with TestClient(app) as client:
         response = client.post(
@@ -374,6 +382,8 @@ def test_online_legacy_video_path_reuses_original_input_generation_and_enters_ha
         session_service=session_service,
         input_generation_service=input_service,
     )
+    # 服务器文件路径输入仅限管理员。
+    app.dependency_overrides[get_optional_current_user] = _admin
 
     with TestClient(app) as client:
         response = client.post(
@@ -416,6 +426,8 @@ def test_online_legacy_video_owner_is_checked_before_path_and_visual_access(monk
         session_service=session_service,
         input_generation_service=input_service,
     )
+    # 服务器文件路径输入仅限管理员。
+    app.dependency_overrides[get_optional_current_user] = _admin
 
     with TestClient(app) as client:
         response = client.post(
@@ -449,6 +461,8 @@ def test_online_legacy_video_failure_creates_no_report_run_and_never_falls_back(
         old_service,
         input_generation_service=input_service,
     )
+    # 服务器文件路径输入仅限管理员。
+    app.dependency_overrides[get_optional_current_user] = _admin
 
     with TestClient(app) as client:
         response = client.post(
@@ -470,6 +484,8 @@ def test_online_legacy_input_paths_keep_root_guard(monkeypatch, tmp_path, field)
     monkeypatch.setattr(adapter, "EvidenceStore", FakeEvidenceStore)
     monkeypatch.setattr(deps, "get_settings", lambda: _path_settings(tmp_path))
     app = _app(service, old_service)
+    # 服务器文件路径输入仅限管理员。
+    app.dependency_overrides[get_optional_current_user] = _admin
 
     with TestClient(app) as client:
         response = client.post(
@@ -481,6 +497,26 @@ def test_online_legacy_input_paths_keep_root_guard(monkeypatch, tmp_path, field)
     assert response.json()["error"]["code"] == "INVALID_REQUEST"
     assert old_service.calls == 0
     assert service.calls == []
+
+
+@pytest.mark.parametrize("field", ["input_path", "video_path"])
+def test_legacy_server_path_inputs_are_admin_only(monkeypatch, tmp_path, field):
+    service = FakeHarnessService()
+    old_service = OldServiceBomb()
+    target = tmp_path / f"other-user-{field}.json"
+    target.write_text('{"事实": "其他用户的合成资料"}', encoding="utf-8")
+    monkeypatch.setattr(adapter, "EvidenceStore", FakeEvidenceStore)
+    monkeypatch.setattr(deps, "get_settings", lambda: _path_settings(tmp_path))
+    app = _app(service, old_service)
+
+    with TestClient(app) as client:
+        for endpoint in ("/api/v1/reports/generate", "/api/v1/reports/generate/stream"):
+            response = client.post(endpoint, json={"session_id": "session-1", field: str(target)})
+            assert response.status_code == 403
+            assert response.json()["error"]["code"] == "PERMISSION_DENIED"
+
+    assert service.calls == []
+    assert old_service.calls == 0
 
 
 def test_legacy_harness_export_is_owner_scoped(monkeypatch):
