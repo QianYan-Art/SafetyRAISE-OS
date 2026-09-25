@@ -36,6 +36,7 @@ pull request 会自动运行 CI（Python 3.11–3.13 后端测试、前端测试
 ## 提交与 pull request
 
 - 提交信息使用 [Conventional Commits](https://www.conventionalcommits.org/)，例如 `fix(frontend): ...`、`feat(report): ...`、`docs: ...`，一次提交只做一件事。
+- 外部贡献请从 fork 提交 pull request；维护者在本仓库建分支时须以 `feat/`、`fix/`、`docs/`、`chore/`、`ci/`、`build/`、`refactor/`、`test/` 或 `perf/` 开头，其他分支名会被仓库规则拒绝。
 - pull request 说明改动动机、影响范围和验证方式；修复缺陷时补充能复现问题的测试。
 - 修改配置字段、接口或部署方式时，同步更新 `docs/` 中对应的文档，并在 [CHANGELOG](CHANGELOG.md) 的 “未发布” 一节记录。
 - 代码和文档沿用现有风格：后端 Python 类型标注，前端 TypeScript；界面样式只使用 `frontend/src/styles.css` 中的设计令牌。
