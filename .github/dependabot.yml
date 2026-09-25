@@ -1,13 +1,12 @@
 version: 2
 updates:
+  # 后端依赖只写版本下限：常规更新不抬高下限，安全修复由 Dependabot 安全更新单独提交。
   - package-ecosystem: pip
     directory: /backend
     schedule:
       interval: weekly
+    versioning-strategy: increase-if-necessary
     open-pull-requests-limit: 5
-    groups:
-      python-minor-and-patch:
-        update-types: [minor, patch]
 
   - package-ecosystem: npm
     directory: /frontend
@@ -17,6 +16,18 @@ updates:
     groups:
       npm-minor-and-patch:
         update-types: [minor, patch]
+      # React 与其类型定义必须同步升级大版本。
+      react:
+        patterns: ["react", "react-dom", "@types/react", "@types/react-dom"]
+    ignore:
+      # 类型定义跟随所用的 Node.js 大版本。
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: cargo
+    directory: /backend/native/query_token_accel
+    schedule:
+      interval: monthly
 
   - package-ecosystem: github-actions
     directory: /
@@ -30,3 +41,9 @@ updates:
     directory: /deployment/docker
     schedule:
       interval: monthly
+    ignore:
+      # 运行时版本（Node.js LTS、Python）随代码一起评估后手动升级。
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]
+      - dependency-name: python
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
