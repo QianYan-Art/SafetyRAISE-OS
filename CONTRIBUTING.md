@@ -22,7 +22,7 @@ npm run build
 
 浏览器测试（`frontend/tests/*.mjs`）用合成数据拦截接口，不调用真实模型，说明见 [前端工作台](docs/frontend-workbench.md) 和 [报告 Harness](docs/report-harness.md)。
 
-pull request 会自动运行 CI（Python 3.11–3.13 后端测试、前端测试与构建、提交历史中的密钥扫描），全部通过后才会被合并。依赖更新由 Dependabot 每周提交。
+pull request 会自动运行 CI（Python 3.11–3.13 后端测试、前端测试与构建、Docker 镜像构建、提交历史中的密钥扫描），全部通过后才会被合并。依赖更新由 Dependabot 每周提交。
 
 ## 不要提交的内容
 

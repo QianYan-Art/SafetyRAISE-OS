@@ -55,7 +55,7 @@ SafetyRAISE 提供从图片、视频材料到结构化事故信息、专家指�
 
 ```text
 SafetyRAISE-OS/
-├─ .github/              CI 与 issue / PR 模板
+├─ .github/              CI、Dependabot 与 issue / PR 模板
 ├─ backend/              FastAPI 后端、报告 Harness、配置与测试（backend/tests）
 ├─ frontend/             React 前端与浏览器测试（frontend/tests）
 ├─ deployment/
