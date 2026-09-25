@@ -1,3 +1,13 @@
+# 本地密钥、知识库与工具状态不进入构建上下文
+.env
+.env.*
+!.env.example
+/kbase
+.serena
+.mission
+.doc-maintenance
+deployment/dist
+
 .git
 .venv
 __pycache__
@@ -18,3 +28,5 @@ frontend/.vite
 frontend/vite.config.js
 frontend/vite.config.d.ts
 *.tsbuildinfo
+
+backend/native/query_token_accel/target

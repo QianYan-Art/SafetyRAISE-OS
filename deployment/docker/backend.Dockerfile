@@ -1,9 +1,9 @@
 FROM rust:1.95-slim AS rust-token-accel-builder
 
 WORKDIR /build/query_token_accel
-COPY backend/native/query_token_accel/Cargo.toml /build/query_token_accel/Cargo.toml
+COPY backend/native/query_token_accel/Cargo.toml backend/native/query_token_accel/Cargo.lock /build/query_token_accel/
 COPY backend/native/query_token_accel/src /build/query_token_accel/src
-RUN cargo build --release
+RUN cargo build --release --locked
 
 FROM python:3.12-slim
 

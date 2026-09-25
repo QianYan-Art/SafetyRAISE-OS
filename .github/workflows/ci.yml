@@ -76,3 +76,15 @@ jobs:
       - uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  docker:
+    name: Docker images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build backend image
+        run: docker build -f deployment/docker/backend.Dockerfile -t safetyraise-backend:ci .
+      - name: Import backend in image
+        run: docker run --rm safetyraise-backend:ci python -c "import app.main"
+      - name: Build frontend image
+        run: docker build -f deployment/docker/frontend.Dockerfile -t safetyraise-frontend:ci .
