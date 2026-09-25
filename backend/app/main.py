@@ -30,7 +30,7 @@ from app.services.readiness_service import ReadinessService
 from app.services.report_service import ReportService
 from app.report_harness.lifecycle import report_harness_lifespan
 
-app = FastAPI(title="交通事故分析报告后端", version="0.2.0",
+app = FastAPI(title="交通事故分析报告后端", version="0.2.1",
               lifespan=report_harness_lifespan)
 app.add_middleware(ReportRunBodyLimit)
 app.add_middleware(
