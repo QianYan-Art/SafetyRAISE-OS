@@ -1,13 +1,16 @@
 import json
+import errno
 import mimetypes
 import shutil
 from collections import Counter
 from pathlib import Path
-from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile
+from starlette.concurrency import run_in_threadpool
 
-from app.api.deps import get_current_user, get_input_generation_service, require_admin_user
+from app.api.deps import (
+    get_authed_chat_session_service, get_current_user, get_input_generation_service, require_admin_user,
+)
 from app.core.exceptions import (
     InputValidationError,
     UnsupportedMediaError,
@@ -21,6 +24,8 @@ from app.schemas.workflow import (
 )
 from app.services.auth_service import AuthenticatedUser
 from app.services.input_generation_service import InputGenerationService
+from app.services.chat_session_service import ChatSessionService
+from app.report_harness.session_deletion import guarded_session_file_write
 
 router = APIRouter(prefix="/api/v1/inputs", tags=["inputs"])
 UPLOAD_CHUNK_SIZE = 1024 * 1024
@@ -72,9 +77,11 @@ async def generate_input_from_upload(
     files: list[UploadFile] | None = File(default=None),
     file: UploadFile | None = File(default=None),
     upload_manifest: str | None = Form(default=None),
+    session_id: str | None = Form(default=None),
     service: InputGenerationService = Depends(get_input_generation_service),
     # 上传会调用视觉模型并写入服务器磁盘，必须登录。
     _user: AuthenticatedUser = Depends(get_current_user),
+    session_service: ChatSessionService = Depends(get_authed_chat_session_service),
 ):
     upload_files = list(files or [])
     if file is not None:
@@ -90,7 +97,11 @@ async def generate_input_from_upload(
 
     parsed_manifest = _parse_upload_manifest(upload_manifest, expected_count=len(upload_files))
     _validate_upload_manifest(parsed_manifest, upload_settings)
-    upload_dir = service.settings.resolve_path("backend/data/runtime/uploads") / f"upload-{uuid4().hex[:12]}"
+    if session_id:
+        workspace_dir = session_service.create_input_workspace(session_id)
+    else:
+        workspace_dir = session_service.create_unbound_input_workspace()
+    upload_dir = workspace_dir / ".incoming"
     upload_dir.mkdir(parents=True, exist_ok=True)
     original_names: list[str] = []
     media_entries: list[dict] = []
@@ -136,11 +147,35 @@ async def generate_input_from_upload(
                 }
             )
 
-        artifact = service.generate_from_media(
+        artifact = await run_in_threadpool(
+            service.generate_from_media,
             media_entries=media_entries,
             group_definitions=parsed_manifest.get("groups"),
             persist_generated_input=False,
+            workspace_dir=workspace_dir,
         )
+        if session_id:
+            # 模型可能在删除请求之后才返回；必须重查屏障，不能把旧结果带回前端。
+            guarded_session_file_write(
+                session_service.database_service.connection, session_id, lambda: None,
+            )
+        else:
+            with session_service.database_service.connection() as conn:
+                session_service.assert_upload_user_exists(conn)
+    except BaseException:
+        if workspace_dir and workspace_dir.exists():
+            shutil.rmtree(workspace_dir)
+        if session_id:
+            # 迟到写入可能重建空父目录；只移除空目录，不触碰其他批次或会话文件。
+            for parent in (workspace_dir.parent, session_service._session_dir(session_id)):
+                try:
+                    parent.rmdir()
+                except FileNotFoundError:
+                    pass
+                except OSError as exc:
+                    if exc.errno not in {errno.ENOTEMPTY, errno.EEXIST}:
+                        raise
+        raise
     finally:
         for upload in upload_files:
             await upload.close()

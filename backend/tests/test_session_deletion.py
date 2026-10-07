@@ -15,7 +15,7 @@ from psycopg.types.json import Jsonb
 
 from app.api.deps import get_authed_chat_session_service
 from app.api.routes_chat_sessions import router
-from app.core.exceptions import SessionNotFoundError
+from app.core.exceptions import SessionNotFoundError, WorkflowError
 from app.report_harness.errors import HarnessError
 from app.report_harness.session_deletion import lock_session_identity
 from app.schemas.chat_session import ChatSessionLinkedFile, ChatSessionRecord
@@ -530,6 +530,97 @@ def test_delete_only_removes_current_session_descendants(pg_store, tmp_path):
     assert other_dir.exists()
     assert other_sentinel.read_text(encoding="utf-8") == "其他会话"
     assert root_sentinel.read_text(encoding="utf-8") == "根目录"
+
+
+def test_cleanup_failure_preserves_records_and_can_retry(pg_store, tmp_path, monkeypatch):
+    store, owner, _, session_id = pg_store
+    service = _service_for_session(store, owner, session_id, tmp_path)
+    current_dir = tmp_path / session_id
+    current_dir.mkdir()
+    document = _run_document(session_id)
+    run = store.create(owner, uuid4(), "q" * 64, document)
+    import app.services.chat_session_service as module
+    original = module.shutil.rmtree
+    monkeypatch.setattr(module.shutil, "rmtree", lambda *_args, **_kwargs: (_ for _ in ()).throw(PermissionError("锁定")))
+    with pytest.raises(WorkflowError, match="仍保留") as error:
+        service.delete_session(session_id)
+    assert error.value.code == "SESSION_CLEANUP_FAILED"
+    with store.connection() as conn:
+        assert conn.execute("SELECT 1 FROM chat_sessions WHERE id=%s", (session_id,)).fetchone()
+        assert not conn.execute("SELECT 1 FROM session_deletion_barriers WHERE session_id=%s", (session_id,)).fetchone()
+        assert conn.execute("SELECT deleted_at FROM report_runs WHERE run_id=%s", (run["run_id"],)).fetchone()["deleted_at"] is None
+    monkeypatch.setattr(module.shutil, "rmtree", original)
+    service.delete_session(session_id)
+    assert not current_dir.exists()
+
+
+def test_deletion_cleans_all_owned_external_generations_not_metadata_paths(pg_store, tmp_path):
+    store, owner, _, session_id = pg_store
+    sessions_root = tmp_path / "sessions"
+    input_root = tmp_path / "inputs"
+    output_root = tmp_path / "outputs"
+    sessions_root.mkdir()
+    input_root.mkdir()
+    output_root.mkdir()
+    service = _service_for_session(store, owner, session_id, sessions_root)
+    service.settings.input_generation_workspace_dir_path = input_root
+    service.settings.output_dir_path = output_root
+    owned = []
+    for root, name, marker in [
+        (input_root, "input-old", ".session-owner.json"),
+        (input_root, "input-latest", ".session-owner.json"),
+        (output_root, "old-report", ".legacy_report_ownership.json"),
+        (output_root, "new-report", ".legacy_report_ownership.json"),
+    ]:
+        path = root / name
+        path.mkdir()
+        (path / marker).write_text(json.dumps({"session_id": session_id}), encoding="utf-8")
+        (path / "data.bin").write_bytes(b"test-only")
+        owned.append(path)
+    other = input_root / "input-other"
+    other.mkdir()
+    (other / ".session-owner.json").write_text(json.dumps({"session_id": "other"}), encoding="utf-8")
+    unowned = input_root / "unowned"
+    unowned.mkdir()
+    service.delete_session(session_id)
+    assert all(not path.exists() for path in owned)
+    assert other.is_dir() and unowned.is_dir()
+
+
+def test_owned_input_workspace_uses_session_tree_and_deletion_barrier(pg_store, tmp_path):
+    store, owner, _, session_id = pg_store
+    service = _service_for_session(store, owner, session_id, tmp_path)
+    service.get_session = lambda *_args, **_kwargs: ChatSessionRecord(id=session_id, created_at=1, updated_at=1)
+    workspace = service.create_input_workspace(session_id)
+    assert workspace.is_relative_to(tmp_path / session_id)
+    (workspace / "source.png").write_bytes(b"test-only")
+    service.delete_session(session_id)
+    assert not workspace.exists()
+    with pytest.raises(SessionNotFoundError):
+        service.create_input_workspace(session_id)
+    assert not (tmp_path / session_id).exists()
+
+
+def test_legacy_upload_owner_is_bound_before_metadata_changes(pg_store, tmp_path):
+    store, owner, other, session_id = pg_store
+    service = _service_for_session(store, owner, session_id, tmp_path / "sessions")
+    root = tmp_path / "inputs"
+    root.mkdir()
+    service.settings.input_generation_workspace_dir_path = root
+    workspace = root / "input-unbound"
+    workspace.mkdir()
+    marker = workspace / ".session-owner.json"
+    marker.write_text(json.dumps({"owner_user_id": owner, "session_id": None}), "utf-8")
+    record = ChatSessionRecord(
+        id=session_id, owner_user_id=other, created_at=1, updated_at=1,
+        draft_meta={"workspace_dir": str(workspace)},
+    )
+    service._bind_legacy_input_workspace(record)
+    assert json.loads(marker.read_text("utf-8"))["session_id"] is None
+    service._bind_legacy_input_workspace(record.model_copy(update={"owner_user_id": owner}))
+    assert json.loads(marker.read_text("utf-8"))["session_id"] == session_id
+    service.delete_session(session_id)
+    assert not workspace.exists()
 
 
 def test_session_dir_rejects_path_segments_and_preserves_simple_ids(tmp_path):

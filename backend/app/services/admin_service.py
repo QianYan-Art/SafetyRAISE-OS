@@ -107,7 +107,7 @@ class AdminService:
         with self.database_service.connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "select username from users where id = %s",
+                    "select username from users where id = %s for update",
                     (user_id,),
                 )
                 row = cur.fetchone()
@@ -119,17 +119,20 @@ class AdminService:
                 if user_id == current_user.id:
                     raise PermissionDeniedError("不能删除当前登录中的管理员账号。")
                 cur.execute(
-                    "select id from chat_sessions where owner_user_id = %s order by updated_at desc, created_at desc",
-                    (user_id,),
+                    "select id from chat_sessions where owner_user_id = %s "
+                    "or (owner_user_id is null and owner_username = %s) "
+                    "order by updated_at desc, created_at desc",
+                    (user_id, username),
                 )
                 owned_session_ids = [str(item["id"]) for item in cur.fetchall()]
-        service = ChatSessionService(settings=self.settings)
-        for session_id in owned_session_ids:
-            try:
-                service.delete_session(session_id)
-            except SessionNotFoundError:
-                continue
-        with self.database_service.connection() as conn:
+            service = ChatSessionService(settings=self.settings)
+            for session_id in owned_session_ids:
+                try:
+                    service.delete_session(session_id, owner_user_id=user_id, owner_username=username)
+                except SessionNotFoundError:
+                    if conn.execute("SELECT 1 FROM chat_sessions WHERE id=%s", (session_id,)).fetchone():
+                        raise InputValidationError("空间归属已变化，未删除用户，请刷新后重试。")
+            service.cleanup_unbound_user_workspaces(user_id)
             with conn.cursor() as cur:
                 cur.execute("delete from users where id = %s", (user_id,))
             conn.commit()
@@ -284,8 +287,9 @@ class AdminService:
                 cur.execute(
                     """
                     select id
-                    from chat_sessions
+                    from chat_sessions s
                     where owner_user_id is null
+                      and not exists (select 1 from users u where u.username=s.owner_username)
                     order by updated_at desc, created_at desc
                     """
                 )
@@ -294,8 +298,11 @@ class AdminService:
         deleted_count = 0
         for session_id in session_ids:
             try:
-                service.delete_session(session_id)
+                service.delete_session(session_id, only_orphan=True)
             except SessionNotFoundError:
+                with self.database_service.connection() as conn:
+                    if conn.execute("SELECT 1 FROM chat_sessions WHERE id=%s", (session_id,)).fetchone():
+                        raise InputValidationError("空间未能清理，请刷新后重试。")
                 continue
             deleted_count += 1
         return deleted_count

@@ -205,6 +205,20 @@ describe("AdminConsole", () => {
     await waitFor(() => expect(api.deleteAdminSpace).toHaveBeenCalledWith("session-1"));
   });
 
+  it("空间删除失败不显示成功，保留列表供重试", async () => {
+    api.deleteAdminSpace.mockRejectedValueOnce(new Error("关联文件未全部清理"));
+    const user = userEvent.setup();
+    render(<AdminConsole currentUser={currentUser} activeTab="spaces" />);
+    await user.click(await screen.findByRole("button", { name: "删除 追尾事故档案" }));
+    await user.click(screen.getByRole("button", { name: "删除空间" }));
+    await screen.findByText("删除空间失败，请稍后重试。");
+    expect(screen.getByText("追尾事故档案")).not.toBeNull();
+    expect(screen.queryByText("空间「追尾事故档案」已删除。")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "删除 追尾事故档案" }));
+    await user.click(screen.getByRole("button", { name: "删除空间" }));
+    await waitFor(() => expect(api.deleteAdminSpace).toHaveBeenCalledTimes(2));
+  });
+
   it("空间抽屉有草稿时确认后才允许关闭", async () => {
     const user = userEvent.setup();
     const confirmDiscard = vi.spyOn(window, "confirm")

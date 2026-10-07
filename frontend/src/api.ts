@@ -168,6 +168,7 @@ export async function login(
   username: string,
   password: string,
 ): Promise<AuthTokenResponse> {
+  await clearChatSessionMediaAccess();
   const response = await fetch(`${API_BASE}/api/v1/auth/login`, {
     method: "POST",
     headers: {
@@ -342,12 +343,14 @@ export async function generateInputFromUpload(file: File): Promise<GenerateInput
 
 export async function generateInputFromUploads(
   payload: GenerateInputUploadRequest,
+  sessionId?: string,
 ): Promise<GenerateInputFromUploadResponse> {
   const formData = new FormData();
   for (const file of payload.files) {
     formData.append("files", file);
   }
   formData.append("upload_manifest", JSON.stringify(payload.uploadManifest));
+  if (sessionId) formData.append("session_id", sessionId);
 
   const response = await authFetch(`${API_BASE}/api/v1/inputs/generate-from-upload`, {
     method: "POST",
@@ -836,6 +839,22 @@ export function buildChatSessionLinkedArtifactAssetUrl(
   assetId: string,
 ): string {
   return `${API_BASE}/api/v1/chat-sessions/${sessionId}/linked-artifacts/${encodeURIComponent(category)}/assets/${encodeURIComponent(assetId)}`;
+}
+
+export async function authorizeChatSessionMedia(sessionId: string): Promise<void> {
+  const response = await authFetch(`${API_BASE}/api/v1/chat-sessions/${encodeURIComponent(sessionId)}/media-access`, {
+    method: "POST",
+    credentials: "include",
+  });
+  await parseJsonResponse<{ status: string }>(response);
+}
+
+export async function clearChatSessionMediaAccess(): Promise<void> {
+  const response = await fetch(`${API_BASE}/api/v1/chat-sessions/media-access`, {
+    method: "DELETE",
+    credentials: "include",
+  });
+  await parseJsonResponse<{ status: string }>(response);
 }
 
 export async function fetchPublicAppConfig(): Promise<PublicAppConfig> {

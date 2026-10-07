@@ -17,6 +17,8 @@ import {
   fetchUserModelConfigs,
   formatApiErrorMessage,
   generateInputFromUploads,
+  authorizeChatSessionMedia,
+  clearChatSessionMediaAccess,
   generateReportFromConfirmedInputStream,
   login,
   listChatSessionLinkedArtifacts,
@@ -809,6 +811,11 @@ function WorkspaceApp({
   const harnessOnline = harnessEnabled && publicAppConfig.report_harness?.online_enabled === true;
   const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
   const [artifactPreview, setArtifactPreview] = useState<ArtifactPreviewState | null>(null);
+  const artifactPreviewRequestRef = useRef(0);
+  useEffect(() => {
+    artifactPreviewRequestRef.current += 1;
+    setArtifactPreview(null);
+  }, [activeSessionId]);
   const artifactPreviewDialogRef = useRef<HTMLDivElement>(null);
   useDialogFocus(artifactPreviewDialogRef, Boolean(artifactPreview));
   const [exportingFormat, setExportingFormat] = useState<ReportExportFormat | null>(null);
@@ -1491,6 +1498,8 @@ function WorkspaceApp({
     if (!activeSession?.id) {
       return;
     }
+    const requestId = ++artifactPreviewRequestRef.current;
+    const sessionId = activeSession.id;
     setArtifactPreview({
       category,
       detail: null,
@@ -1498,7 +1507,9 @@ function WorkspaceApp({
       error: "",
     });
     try {
-      const detail = await fetchChatSessionLinkedArtifactDetail(activeSession.id, category);
+      if (category === "images_and_keyframes") await authorizeChatSessionMedia(sessionId);
+      const detail = await fetchChatSessionLinkedArtifactDetail(sessionId, category);
+      if (requestId !== artifactPreviewRequestRef.current || activeSessionIdRef.current !== sessionId) return;
       setArtifactPreview({
         category,
         detail,
@@ -1506,6 +1517,7 @@ function WorkspaceApp({
         error: "",
       });
     } catch (error) {
+      if (requestId !== artifactPreviewRequestRef.current || activeSessionIdRef.current !== sessionId) return;
       setArtifactPreview({
         category,
         detail: null,
@@ -1516,6 +1528,7 @@ function WorkspaceApp({
   }
 
   function handleCloseArtifactPreview() {
+    artifactPreviewRequestRef.current += 1;
     setArtifactPreview(null);
   }
 
@@ -1593,7 +1606,7 @@ function WorkspaceApp({
 
     try {
       await flushSessionById(sessionId);
-      const response = await generateInputFromUploads(uploadPayload);
+      const response = await generateInputFromUploads(uploadPayload, sessionId);
       const draftJsonString = prettyJson(response.generated_input);
       const processHint = response.media_type === "mixed"
         ? `已完成多源识别，共处理 ${response.source_count} 个文件，送入视觉模型 ${response.frame_manifest.length} 张代表图片/关键帧。`
@@ -2107,7 +2120,7 @@ function WorkspaceApp({
   );
 
   async function handleDeleteSession(sessionId: string) {
-    const confirmed = window.confirm("此操作会将会话相关的所有中间文件都删除，是否继续？");
+    const confirmed = window.confirm("删除会话及其上传资料、历史中间产物和报告文件？此操作不可撤销。");
     if (!confirmed) {
       return;
     }
@@ -2194,6 +2207,12 @@ function WorkspaceApp({
         return;
       }
       if (sequence !== sessionTransitionSequenceRef.current) {
+        return;
+      }
+      try {
+        await clearChatSessionMediaAccess();
+      } catch (error) {
+        setErrorMessage(resolveUiErrorMessage(error, "媒体访问凭据尚未清除，未退出登录，请重试。"));
         return;
       }
       onLogout();

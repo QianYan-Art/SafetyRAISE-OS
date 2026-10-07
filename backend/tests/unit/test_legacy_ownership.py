@@ -51,6 +51,8 @@ class _Connection:
         self.statements.append(normalized)
         if self.fail or (self.fail_report_lookup and "report_result is not null" in normalized):
             raise RuntimeError("合成数据库故障")
+        if "to_regclass" in normalized:
+            return _Result(row={"relation": None})
         if "report_result is not null" in normalized:
             return _Result(rows=self.report_rows)
         return _Result(row=self.session_row)

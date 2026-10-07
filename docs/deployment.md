@@ -59,6 +59,26 @@ docker compose -f /srv/apps/safetyraise/private/compose.prod.json -p safetyraise
 
 ## 验证与回滚
 
+### 旧上传归属升级
+
+新前端上传传入 `session_id`，上传批次写入 `chat_sessions/<id>/input_generation/`。
+升级旧版本时，暂停业务写入，使用候选版本代码和已有服务器配置核对旧工作区：
+
+```sh
+PYTHONPATH=backend python backend/scripts/backfill_session_resources.py
+PYTHONPATH=backend python backend/scripts/backfill_session_resources.py --apply
+```
+
+默认只核对，`--apply` 只为数据库唯一引用、位于配置上传根下一层且非符号链接的旧目录
+建立 `.session-owner.json`，不删除或覆盖任何原文件。不读取或输出事故正文；
+出现冲突时退出码为2，须先核对归属，不用强制覆盖解决。
+历史记录只保存最后一次上传引用时，不能据此推断其他无主目录的所有者。
+脚本应在停止后端写入后执行；随后启动新版本，核对历史图片和视频预览。
+
+媒体预览需同源代理转发 Cookie、Authorization 和 Range，不能把鉴权资源转成公开静态目录，
+也不能缓存受保护的媒体响应。开发服务器可用同源 Vite 代理；分离域名需另行核验
+凭据 CORS、SameSite 与浏览器策略，不能只设置前端 `credentials` 就声称支持跨站。
+
 1. 检查 Compose 实际挂载：真实知识库为 `:ro`，运行时与账本路径正确，前端只监听回环；检查 backend/frontend/PostgreSQL 运行和重启计数。
 2. 从宿主指定域名/SNI 检查 TLS、首页、`/api/v1/health` 和 `/api/v1/ready`；再以真实 HTTP 验证登录、会话隔离、事故信息保存和导出。`/ready` 只证明配置与依赖就绪，不证明法律引用或模型质量。
 3. 受控报告验证需分别记录视觉、专家、检索、生成、审查和导出结果；付费请求与真实事故证据必须单独获得授权。前端合成路径可用 `frontend/tests/production-workspace-smoke.mjs`，它不调用模型、不能替代完整报告验收。

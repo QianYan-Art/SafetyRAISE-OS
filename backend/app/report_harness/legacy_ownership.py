@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,6 +14,10 @@ from psycopg.types.json import Jsonb
 
 from app.api import deps
 from app.core.path_guard import is_safe_path_segment
+from app.core.exceptions import SessionNotFoundError
+from app.report_harness.session_deletion import (
+    assert_session_not_deleted, guarded_session_file_write, lock_session_identity,
+)
 from app.schemas.workflow import GenerateReportRequest
 from app.services.auth_service import AuthenticatedUser
 
@@ -124,8 +129,10 @@ def persist_legacy_report_ownership(
             if session_state == "bound":
                 session_source = "chat_sessions"
         except LegacyOwnershipError:
+            _cleanup_unbound_output(output_dir, trace_id)
             raise
         except Exception as exc:
+            _cleanup_unbound_output(output_dir, trace_id)
             raise LegacyOwnershipError(
                 "旧报告归属无法持久化，未提供可追踪导出。",
                 code="legacy_export_owner_persistence_failed",
@@ -135,25 +142,34 @@ def persist_legacy_report_ownership(
     sidecar_written = False
     if output_dir is not None:
         try:
-            _write_ownership_sidecar(
-                output_dir,
-                {
+            payload = {
                     "version": 1,
                     "trace_id": trace_id,
                     "owner_user_id": str(current_user.id),
                     "owner_username": str(current_user.username or ""),
                     "session_id": session_id,
                     "output_dir": str(output_dir),
-                },
-            )
+                }
+            writer = lambda: _write_ownership_sidecar(output_dir, payload)
+            if database is not None and session_id is not None:
+                guarded_session_file_write(database.connection, session_id, writer)
+            else:
+                writer()
             sidecar_written = True
+        except SessionNotFoundError as exc:
+            _cleanup_unbound_output(output_dir, trace_id)
+            raise LegacyOwnershipError(
+                "会话已删除，未保留迟到的报告文件。",
+                code="legacy_session_owner_required",
+                status_code=404,
+            ) from exc
         except OSError as exc:
-            if session_source is None:
-                raise LegacyOwnershipError(
-                    "旧报告归属无法持久化，未提供可追踪导出。",
-                    code="legacy_export_owner_persistence_failed",
-                    status_code=503,
-                ) from exc
+            _cleanup_unbound_output(output_dir, trace_id)
+            raise LegacyOwnershipError(
+                "旧报告文件归属无法持久化，未提供可追踪导出。",
+                code="legacy_export_owner_persistence_failed",
+                status_code=503,
+            ) from exc
 
     if session_source is None and not sidecar_written:
         raise LegacyOwnershipError(
@@ -165,6 +181,15 @@ def persist_legacy_report_ownership(
         session_id=session_id,
         source=session_source or "output_sidecar",
     )
+
+
+def _cleanup_unbound_output(output_dir: Path | None, trace_id: str) -> None:
+    if (
+        output_dir is not None and output_dir.name == trace_id and not output_dir.is_symlink()
+        and not (output_dir / LEGACY_OWNERSHIP_FILENAME).exists()
+        and output_dir.exists()
+    ):
+        shutil.rmtree(output_dir)
 
 
 def is_legacy_export_authorized(
@@ -226,6 +251,8 @@ def _persist_session_result(
     now = int(time.time() * 1000)
     with database.connection() as conn, conn.transaction():
         if session_id:
+            lock_session_identity(conn, session_id)
+            assert_session_not_deleted(conn, session_id)
             row = conn.execute(
                 """
                 select id, owner_user_id::text as owner_user_id, owner_username

@@ -108,6 +108,16 @@ afterEach(() => {
 });
 
 describe("useChatHistory 持久化交互", () => {
+  it("删除清理失败保留会话，并允许再次删除", async () => {
+    api.deleteChatSession.mockRejectedValueOnce(new Error("关联文件未全部清理"));
+    render(<Probe />);
+    await waitForLoaded();
+    await expect(currentHook().deleteSession("session-1")).rejects.toThrow("未全部清理");
+    expect(currentHook().sessions.some((session) => session.id === "session-1")).toBe(true);
+    await act(async () => { await currentHook().deleteSession("session-1"); });
+    expect(currentHook().sessions.some((session) => session.id === "session-1")).toBe(false);
+    expect(api.deleteChatSession).toHaveBeenCalledTimes(2);
+  });
   it("普通已有会话同步携带 expected_updated_at CAS 版本", async () => {
     render(<Probe />);
     await waitForLoaded();

@@ -8,7 +8,7 @@ from typing import Any
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from app.core.exceptions import SessionNotFoundError
+from app.core.exceptions import InvalidSessionStateError, SessionNotFoundError
 
 _ACTIVE_RUN_STATES = frozenset(
     {"queued", "preparing", "generating", "checking", "revising", "suspended"}
@@ -206,6 +206,8 @@ def delete_session(
     *,
     owner_user_id: str | None = None,
     owner_username: str | None = None,
+    cleanup_files: Callable[[], None] | None = None,
+    only_orphan: bool = False,
 ) -> dict:
     """在一个事务内建立屏障、撤销run并删除会话持久记录。"""
     with connection_factory() as conn, conn.transaction():
@@ -213,16 +215,23 @@ def delete_session(
         lock_session_identity(conn, session_id)
         assert_session_not_deleted(conn, session_id)
         assert_session_identity_available(conn, session_id)
-        _lock_owned_session(
+        session = _lock_owned_session(
             conn,
             session_id,
             owner_user_id=owner_user_id,
             owner_username=owner_username,
         )
+        if only_orphan and (
+            session["owner_user_id"] is not None
+            or conn.execute("SELECT 1 FROM users WHERE username=%s", (session["owner_username"],)).fetchone()
+        ):
+            raise InvalidSessionStateError("空间已分配给用户，请刷新后重新清理无主空间。")
 
         barrier_enabled = relation_exists(conn, "session_deletion_barriers")
         if not barrier_enabled:
             # 没有新账本表时保持旧模式语义，由数据库原有外键决定是否可删除。
+            if cleanup_files is not None:
+                cleanup_files()
             conn.execute("DELETE FROM chat_sessions WHERE id=%s", (session_id,))
             return {
                 "session_id": session_id,
@@ -263,6 +272,10 @@ def delete_session(
                 "DELETE FROM report_session_evidence WHERE session_id=%s",
                 (session_id,),
             )
+        # 文件系统不能回滚；失败保留会话和归属元数据，让用户重试剩余清理。
+        # 持有会话事务锁，阻止受控写回与旧文件迁移重建已清理的目录。
+        if cleanup_files is not None:
+            cleanup_files()
         conn.execute("DELETE FROM chat_sessions WHERE id=%s", (session_id,))
         return {
             "session_id": session_id,

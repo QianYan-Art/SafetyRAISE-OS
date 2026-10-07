@@ -57,6 +57,7 @@ class InputGenerationService:
         group_definitions: list[dict[str, Any]] | None = None,
         existing_accident_data: dict[str, Any] | None = None,
         persist_generated_input: bool = True,
+        workspace_dir: Path | None = None,
     ) -> InputGenerationArtifact:
         resolved_media_entries = self._coerce_media_entries(
             image_paths=image_paths,
@@ -70,7 +71,7 @@ class InputGenerationService:
         if existing_accident_data:
             normalized_existing = self._normalize_generated_input(existing_accident_data)
 
-        workspace_dir = self._create_workspace_dir()
+        workspace_dir = workspace_dir or self._create_workspace_dir()
         frames_dir = workspace_dir / "frames"
         uploads_dir = workspace_dir / "uploads"
         yolo_root_dir = workspace_dir / "yolo"

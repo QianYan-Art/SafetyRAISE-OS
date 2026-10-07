@@ -13,7 +13,7 @@ from uuid import uuid4
 from pydantic import ValidationError
 from psycopg.types.json import Jsonb
 
-from app.core.exceptions import SessionNotFoundError, SessionVersionConflictError
+from app.core.exceptions import AuthenticationError, SessionNotFoundError, SessionVersionConflictError, WorkflowError
 from app.core.settings import Settings
 from app.report_harness.session_deletion import (
     assert_session_identity_available,
@@ -150,6 +150,16 @@ class ChatSessionService:
         return record
 
     def create_session(self, request: CreateChatSessionRequest) -> ChatSessionRecord:
+        owner_id = getattr(self.current_user, "id", None)
+        if owner_id is None:
+            return self._create_session(request)
+        # 先锁用户再锁会话，与管理员删用户的顺序一致；禁止迟到创建留下无主目录。
+        with self.database_service.connection() as conn, conn.transaction():
+            if conn.execute("SELECT id FROM users WHERE id=%s FOR KEY SHARE", (owner_id,)).fetchone() is None:
+                raise AuthenticationError("账号已删除，请重新登录。")
+            return self._create_session(request)
+
+    def _create_session(self, request: CreateChatSessionRequest) -> ChatSessionRecord:
         timestamp = request.created_at or request.updated_at or self._now_ms()
         session_id = request.id or f"session-{uuid4().hex[:12]}"
         with _get_session_lock(session_id):
@@ -201,32 +211,148 @@ class ChatSessionService:
                 self._sync_draft_artifacts(merged, expected_updated_at=merged.updated_at)
             return merged
 
-    def delete_session(self, session_id: str) -> None:
+    def delete_session(
+        self, session_id: str, *, owner_user_id: str | None = None,
+        owner_username: str | None = None, only_orphan: bool = False,
+    ) -> None:
         with _get_session_lock(session_id):
             session_dir = self._session_dir(session_id)
             record = self.get_session(session_id)
+            def cleanup() -> None:
+                try:
+                    paths = self._owned_external_directories(record) + [session_dir]
+                    for path in paths:
+                        if path.is_symlink():
+                            raise OSError("拒绝清理符号链接目录")
+                        if path.exists():
+                            shutil.rmtree(path)
+                except (OSError, ValueError) as exc:
+                    logger.exception("会话文件清理失败：%s", session_id)
+                    raise WorkflowError(
+                        "关联文件未全部清理，会话仍保留。请重试删除；持续失败时请联系管理员。",
+                        code="SESSION_CLEANUP_FAILED",
+                        status_code=503,
+                        retryable=True,
+                    ) from exc
+
             delete_session_records(
                 self.database_service.connection,
                 session_id,
-                owner_user_id=getattr(self.current_user, "id", None),
-                owner_username=getattr(self.current_user, "username", None),
+                owner_user_id=owner_user_id or getattr(self.current_user, "id", None),
+                owner_username=owner_username or getattr(self.current_user, "username", None),
+                cleanup_files=cleanup,
+                only_orphan=only_orphan,
             )
-            seen: set[Path] = set()
-            for linked_file in record.linked_files:
-                raw_path = self._resolve_session_owned_path(linked_file.path, session_dir)
-                if raw_path is None:
-                    # 元数据不能证明外部路径属于当前会话时保留，避免误删其他会话或根目录。
-                    continue
-                if raw_path in seen:
-                    continue
-                seen.add(raw_path)
-                if raw_path.is_dir():
-                    shutil.rmtree(raw_path, ignore_errors=True)
-                elif raw_path.exists():
-                    raw_path.unlink(missing_ok=True)
 
-            if session_dir.exists():
-                shutil.rmtree(session_dir, ignore_errors=True)
+    def _owned_external_directories(self, record: ChatSessionRecord) -> list[Path]:
+        paths: list[Path] = []
+        for root_attr, marker_name in (
+            ("input_generation_workspace_dir_path", ".session-owner.json"),
+            ("output_dir_path", ".legacy_report_ownership.json"),
+        ):
+            root_value = getattr(self.settings, root_attr, None)
+            if root_value is None:
+                continue
+            root = Path(root_value).resolve()
+            if not root.is_dir():
+                continue
+            for path in root.iterdir():
+                if path.is_symlink() or not path.is_dir():
+                    continue
+                marker = path / marker_name
+                if not marker.exists():
+                    continue
+                if marker.is_symlink():
+                    raise OSError("拒绝读取符号链接归属文件")
+                payload = json.loads(marker.read_text(encoding="utf-8"))
+                if not isinstance(payload, dict):
+                    raise OSError("目录归属记录损坏")
+                if payload.get("session_id") == record.id:
+                    paths.append(path.resolve())
+        return paths
+
+    def create_input_workspace(self, session_id: str) -> Path:
+        with _get_session_lock(session_id):
+            self.get_session(session_id, include_linked_files=False, include_linked_artifacts=False)
+
+            def create() -> Path:
+                workspace = self._session_dir(session_id) / "input_generation" / f"input-{uuid4().hex[:12]}"
+                workspace.mkdir(parents=True, exist_ok=False)
+                return workspace
+
+            return guarded_session_file_write(self.database_service.connection, session_id, create)
+
+    def _bind_legacy_input_workspace(self, record: ChatSessionRecord) -> None:
+        raw = (record.draft_meta or {}).get("workspace_dir")
+        if not raw or not record.owner_user_id:
+            return
+        workspace = Path(str(raw))
+        root_value = getattr(self.settings, "input_generation_workspace_dir_path", None)
+        if root_value is None:
+            return
+        root = Path(root_value).resolve()
+        if workspace.is_symlink() or workspace.resolve().parent != root:
+            return
+        marker = workspace / ".session-owner.json"
+        if not marker.is_file() or marker.is_symlink():
+            return
+        with self.database_service.connection() as conn, conn.transaction():
+            lock_session_identity(conn, record.id)
+            assert_session_not_deleted(conn, record.id)
+            assert_session_identity_available(conn, record.id)
+            lock_session_identity(conn, "input-resource:" + str(workspace.resolve()))
+            payload = json.loads(marker.read_text("utf-8"))
+            if (
+                not isinstance(payload, dict) or payload.get("session_id") is not None
+                or payload.get("owner_user_id") != record.owner_user_id
+            ):
+                return
+            payload["session_id"] = record.id
+            temporary = workspace / f".session-owner-{uuid4().hex}.tmp"
+            try:
+                temporary.write_text(json.dumps(payload), "utf-8")
+                temporary.replace(marker)
+            finally:
+                temporary.unlink(missing_ok=True)
+
+    def create_unbound_input_workspace(self) -> Path:
+        with self.database_service.connection() as conn, conn.transaction():
+            self.assert_upload_user_exists(conn)
+            root = Path(self.settings.input_generation_workspace_dir_path).resolve()
+            workspace = root / f"input-{uuid4().hex[:12]}"
+            workspace.mkdir(parents=True, exist_ok=False)
+            (workspace / ".session-owner.json").write_text(
+                json.dumps({"version": 1, "owner_user_id": self.current_user.id, "session_id": None}),
+                "utf-8",
+            )
+            return workspace
+
+    def assert_upload_user_exists(self, conn: Any) -> None:
+        if conn.execute(
+            "SELECT id FROM users WHERE id=%s FOR KEY SHARE", (self.current_user.id,),
+        ).fetchone() is None:
+            raise AuthenticationError("上传账号已删除，未保留识别结果。")
+
+    def cleanup_unbound_user_workspaces(self, owner_user_id: str) -> None:
+        root = Path(self.settings.input_generation_workspace_dir_path).resolve()
+        if not root.is_dir():
+            return
+        try:
+            for path in root.iterdir():
+                marker = path / ".session-owner.json"
+                if path.is_symlink() or not path.is_dir() or not marker.is_file() or marker.is_symlink():
+                    continue
+                payload = json.loads(marker.read_text("utf-8"))
+                if (
+                    isinstance(payload, dict) and payload.get("owner_user_id") == owner_user_id
+                    and payload.get("session_id") is None
+                ):
+                    shutil.rmtree(path)
+        except (OSError, ValueError) as exc:
+            raise WorkflowError(
+                "用户的未绑定上传资料未全部清理，请重试删除用户。",
+                code="SESSION_CLEANUP_FAILED", status_code=503, retryable=True,
+            ) from exc
 
     def list_linked_artifacts(self, session_id: str) -> list[ChatSessionLinkedArtifact]:
         return list(self.get_session(session_id, include_linked_files=False).linked_artifacts)
@@ -286,8 +412,35 @@ class ChatSessionService:
                 raise SessionNotFoundError(f"会话产物资源不存在: {session_id}/{category}/{asset_id}")
             if not self._is_safe_data_path(asset_path):
                 raise SessionNotFoundError(f"会话产物资源不在允许目录内: {session_id}/{category}/{asset_id}")
+            if not self._is_owned_media_path(asset_path, session_id):
+                raise SessionNotFoundError("媒体不属于当前会话")
             return asset
         raise SessionNotFoundError(f"会话产物资源不存在: {session_id}/{category}/{asset_id}")
+
+    def _is_owned_media_path(self, path: Path, session_id: str) -> bool:
+        if self._is_strict_descendant(path, self._session_dir(session_id)):
+            return True
+        for root_attr, marker_name in (
+            ("input_generation_workspace_dir_path", ".session-owner.json"),
+            ("output_dir_path", ".legacy_report_ownership.json"),
+        ):
+            root_value = getattr(self.settings, root_attr, None)
+            if root_value is None:
+                continue
+            root = Path(root_value).resolve()
+            if not path.is_relative_to(root) or path == root:
+                continue
+            directory = root / path.relative_to(root).parts[0]
+            marker = directory / marker_name
+            if directory.is_symlink() or marker.is_symlink():
+                continue
+            try:
+                owner = json.loads(marker.read_text("utf-8"))
+            except (OSError, ValueError):
+                continue
+            if isinstance(owner, dict) and owner.get("session_id") == session_id:
+                return True
+        return False
 
     def _refresh_linked_views(
         self,
@@ -1915,6 +2068,7 @@ class ChatSessionService:
 
     def _sync_draft_artifacts(self, record: ChatSessionRecord, *, write_artifacts: bool = True,
                               expected_updated_at: int | None = None) -> ChatSessionRecord:
+        self._bind_legacy_input_workspace(record)
         draft_payload = self._parse_json_object(record.draft_json)
         if not draft_payload:
             return record
@@ -1945,7 +2099,9 @@ class ChatSessionService:
                 allowed = not self._is_shared_input_path(resolved) and self._is_safe_data_path(resolved)
             else:
                 allowed = False
-            if allowed:
+            if allowed and resolved.name.casefold() not in {
+                ".session-owner.json", ".legacy_report_ownership.json",
+            }:
                 guarded_session_file_write(
                     self.database_service.connection,
                     record.id,

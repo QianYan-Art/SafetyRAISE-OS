@@ -216,6 +216,7 @@ export function AdminConsole(props: AdminConsoleProps) {
   }
 
   async function handleDeleteUser(user: AdminUserRecord) {
+    if (saving) return;
     setSaving(true);
     setUsersError("");
     try {
@@ -253,6 +254,7 @@ export function AdminConsole(props: AdminConsoleProps) {
   }
 
   async function handleDeleteSpace(space: AdminSpaceRecord) {
+    if (saving) return;
     setSaving(true);
     setSpacesError("");
     try {
@@ -269,6 +271,7 @@ export function AdminConsole(props: AdminConsoleProps) {
   }
 
   async function handleCleanupOrphanSpaces() {
+    if (saving) return;
     setSaving(true);
     setSpacesError("");
     try {
