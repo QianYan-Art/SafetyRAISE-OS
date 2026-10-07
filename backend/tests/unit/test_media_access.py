@@ -1,8 +1,10 @@
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 
 import jwt
 import pytest
+import yaml
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
@@ -11,13 +13,17 @@ from app.api import deps, routes_chat_sessions
 from app.core.exceptions import AuthenticationError, SessionNotFoundError, WorkflowError
 from app.core.media_access import MEDIA_AUDIENCE, MEDIA_COOKIE, decode_media_token, issue_media_token
 from app.core.security import create_access_token
-from app.core.settings import AuthSettings
+from app.core.settings import AuthSettings, Settings
 
 
 @pytest.fixture
-def media_client(tmp_path, monkeypatch):
+def media_client(tmp_path, monkeypatch, request):
     settings_dependency = deps.get_settings
-    settings = SimpleNamespace(auth=AuthSettings(jwt_secret="test-media-only-" + "x" * 40), runtime_profile="local")
+    environment, scheme = getattr(request, "param", ("dev", "https"))
+    config_path = Path(__file__).resolve().parents[2] / "config" / "workflow.yaml"
+    settings = Settings.model_validate(yaml.safe_load(config_path.read_text("utf-8")))
+    settings.app.env = environment
+    settings.auth = AuthSettings(jwt_secret="test-media-only-" + "x" * 40)
     owner = SimpleNamespace(id="owner", username="owner")
     live_users = {"owner": owner, "other": SimpleNamespace(id="other", username="other")}
     image = tmp_path / "sample.png"
@@ -57,7 +63,7 @@ def media_client(tmp_path, monkeypatch):
     async def error(_request: Request, exc: WorkflowError):
         return JSONResponse(status_code=exc.status_code, content={"detail": str(exc)})
 
-    with TestClient(app, base_url="https://testserver") as client:
+    with TestClient(app, base_url=f"{scheme}://testserver") as client:
         yield client, settings, live_users
 
 
@@ -93,6 +99,18 @@ def test_deleted_account_cannot_use_media_cookie(media_client):
     assert client.post("/api/v1/chat-sessions/owned/media-access", headers=_headers(settings)).status_code == 200
     del live_users["owner"]
     assert client.get("/api/v1/chat-sessions/owned/linked-artifacts/images_and_keyframes/assets/image").status_code == 401
+
+
+@pytest.mark.parametrize(
+    "media_client", [("prod", "http"), ("dev", "http"), ("dev", "https")], indirect=True,
+)
+def test_media_grant_secure_flag_uses_actual_settings_behind_http_proxy(media_client):
+    client, settings, _ = media_client
+    response = client.post("/api/v1/chat-sessions/owned/media-access", headers=_headers(settings))
+    assert response.status_code == 200
+    assert ("Secure" in response.headers["set-cookie"]) == (
+        settings.app.env == "prod" or client.base_url.scheme == "https"
+    )
 
 
 def test_media_token_rejects_expiry_and_wrong_audience():

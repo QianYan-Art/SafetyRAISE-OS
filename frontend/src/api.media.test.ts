@@ -2,10 +2,24 @@
 import { afterEach, expect, it, vi } from "vitest";
 import {
   authorizeChatSessionMedia, buildChatSessionLinkedArtifactAssetUrl,
-  clearChatSessionMediaAccess, generateInputFromUploads, persistAuthToken,
+  clearChatSessionMediaAccess, generateInputFromUploads, login, persistAuthToken, register,
 } from "./api";
 
 afterEach(() => { vi.unstubAllGlobals(); localStorage.clear(); });
+
+it.each([["登录", login, "login"], ["注册", register, "register"]] as const)(
+  "%s新账号前清除旧媒体凭据",
+  async (_label, authenticate, endpoint) => {
+    const fetcher = vi.fn().mockImplementation(async () => new Response(JSON.stringify({
+      status: "success", access_token: "next-test-token",
+    })));
+    vi.stubGlobal("fetch", fetcher);
+    await authenticate("test-user", "test-password");
+    expect(fetcher.mock.calls[0][0]).toContain("/chat-sessions/media-access");
+    expect(fetcher.mock.calls[0][1].method).toBe("DELETE");
+    expect(fetcher.mock.calls[1][0]).toContain(`/auth/${endpoint}`);
+  },
+);
 
 it("媒体授权带登录头和Cookie，媒体URL不含登录token", async () => {
   const fetcher = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ status: "success" })));

@@ -62,7 +62,7 @@ def grant_media_access(
         issue_media_token(service.settings.auth, service.current_user.id),
         max_age=MEDIA_TTL_SECONDS,
         httponly=True,
-        secure=request.url.scheme == "https" or service.settings.runtime_profile == "server",
+        secure=request.url.scheme == "https" or service.settings.app.env == "prod",
         samesite="strict",
         path=MEDIA_COOKIE_PATH,
     )

@@ -186,6 +186,7 @@ export async function register(
   password: string,
   displayName?: string,
 ): Promise<AuthTokenResponse> {
+  await clearChatSessionMediaAccess();
   const response = await fetch(`${API_BASE}/api/v1/auth/register`, {
     method: "POST",
     headers: {
