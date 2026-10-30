@@ -126,3 +126,97 @@ def test_modal_attempt_retrieval_failure_does_not_leak_token_or_retry_post():
 
     asyncio.run(run())
     assert [request.method for request in requests] == ["POST", "GET"]
+
+
+def _modal_location(token):
+    return (
+        "https://safetyraise.modal.run/v1/chat/completions"
+        f"?__modal_attempt_token={token}"
+    )
+
+
+def test_modal_attempt_follows_repeated_redirects_without_second_post():
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        if request.method == "POST":
+            return httpx.Response(303, headers={"Location": _modal_location("hop-1")})
+        if len(requests) < 4:
+            return httpx.Response(
+                303, headers={"Location": _modal_location(f"hop-{len(requests)}")},
+            )
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"finish_reason": "stop", "message": {"content": "{}"}}],
+                "usage": {"total_tokens": 9},
+            },
+        )
+
+    async def run():
+        client, original = _client(handler)
+        await original.aclose()
+        try:
+            result = await client.attempt("expert", {"model": "synthetic"}, 2)
+            assert result["usage"]["total_tokens"] == 9
+        finally:
+            await client.close()
+
+    asyncio.run(run())
+    assert [request.method for request in requests] == ["POST", "GET", "GET", "GET"]
+    assert [request.url.params["__modal_attempt_token"] for request in requests[1:]] == [
+        "hop-1", "hop-2", "hop-3",
+    ]
+
+
+def test_modal_attempt_rejects_untrusted_later_redirect():
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        if request.method == "POST":
+            return httpx.Response(303, headers={"Location": _modal_location("hop-1")})
+        return httpx.Response(
+            303,
+            headers={
+                "Location": "https://attacker.invalid/v1/chat/completions"
+                "?__modal_attempt_token=secret",
+            },
+        )
+
+    async def run():
+        client, original = _client(handler)
+        await original.aclose()
+        try:
+            with pytest.raises(HarnessError, match="physical_redirect_rejected") as exc:
+                await client.attempt("expert", {"model": "synthetic"}, 2)
+            assert "secret" not in str(exc.value)
+        finally:
+            await client.close()
+
+    asyncio.run(run())
+    assert [request.method for request in requests] == ["POST", "GET"]
+
+
+def test_modal_attempt_redirect_chain_is_bounded():
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(303, headers={"Location": _modal_location("loop")})
+
+    async def run():
+        client, original = _client(handler)
+        await original.aclose()
+        try:
+            with pytest.raises(HarnessError, match="physical_attempt_retrieval_failed"):
+                await client.attempt("expert", {"model": "synthetic"}, 2)
+        finally:
+            await client.close()
+
+    asyncio.run(run())
+    assert requests[0].method == "POST"
+    assert [request.method for request in requests[1:]] == (
+        ["GET"] * HTTPAttemptClient.MAX_MODAL_RECOVERY_HOPS
+    )

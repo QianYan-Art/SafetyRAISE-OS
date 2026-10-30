@@ -85,6 +85,16 @@ PYTHONPATH=backend python backend/scripts/backfill_session_resources.py --apply
 4. 观察资源门：宿主可用空间、`memory.current`/容器限额、OOM、临时上传、Nginx/容器日志、其他站点和备份 timer。`BACKEND_MEMORY_LIMIT=1536m` 只是公开 Compose 模板起点，不能覆盖已按负载实测调整的私有配置；发布前核对源、展开编排和实际容器限额一致。
 5. 回滚前先停止当前后端写入，核对账本增量和数据库快照，再恢复旧镜像、编排和入口；不能只切 DNS 或直接启动旧后端。发布包和旧镜像保留到观察期结束且回滚路径完成验证。
 
+### 未知费用请求
+
+报告挂起且事件为 `unknown_cost_ack_required` 时，说明费用账本中仍有未结算的 attempt。该账本按实验共享，不处理会挡住之后所有报告；页面勾选"确认重试"不能解除。处理步骤：
+
+1. 只读查询账本 `money_guard_attempts` 中 `state` 为 `reserved` 或 `unknown` 的记录，核对角色、时间与报价；收费角色先到供应商后台确认是否实际扣费。
+2. 备份发布目录中的 `runtime-manifest.json`，把核对过的 attempt 编号追加到 `acknowledged_unknown_attempts`，不改动其他字段。
+3. 重启后端并确认 healthy，再在页面勾选确认后继续生成。
+
+确认只代表接受该 attempt 费用未知，不会把它改记为零，也不会释放已占用的预算额度。
+
 费用账本的 WAL/SHM 不应直接做在线文件归档；用 SQLite backup API 生成一致性副本。PostgreSQL 用 `pg_dump` 逻辑备份，并用 `pg_restore --list` 检查可读性。备份策略要覆盖应用私有配置、数据库、账本、证书及知识库，不把自动轮转当成独立恢复演练。
 
 ## 专家模型（Modal）

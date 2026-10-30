@@ -33,6 +33,9 @@ class RequestBound:
 class HTTPAttemptClient:
     """每次调用只有一个模型 attempt；无自动重试、通用重定向、代理或端点回退。"""
 
+    # 1800 秒专家超时约对应 12 跳；上限防止异常端点以即时 303 空转。
+    MAX_MODAL_RECOVERY_HOPS = 24
+
     def __init__(self, endpoints: dict[str, str], headers: dict[str, dict] | None = None):
         self._endpoints = deepcopy(endpoints)
         self._headers = deepcopy(headers or {})
@@ -51,6 +54,7 @@ class HTTPAttemptClient:
             raise HarnessError("endpoint_role_unregistered")
         headers = self._headers.get(role, {})
         content = bytearray()
+        deadline = asyncio.get_running_loop().time() + timeout
         async with self._client.stream(
             "POST", self._endpoints[role], json=payload,
             headers=headers, timeout=timeout,
@@ -61,15 +65,23 @@ class HTTPAttemptClient:
                     raise HarnessError("physical_redirect_rejected")
                 response.raise_for_status()
                 content = await self._read_content(response)
-        if recovery_url is not None:
+        # Modal 对仍在执行的同一尝试约每 150 秒再返回一次 303；在原超时内逐跳取回，不重发 POST。
+        hops = 0
+        while recovery_url is not None:
+            hops += 1
+            remaining = deadline - asyncio.get_running_loop().time()
+            if hops > self.MAX_MODAL_RECOVERY_HOPS or remaining <= 0:
+                raise HarnessError("physical_attempt_retrieval_failed")
             async with self._client.stream(
-                "GET", recovery_url, headers=headers, timeout=timeout,
+                "GET", recovery_url, headers=headers, timeout=remaining,
             ) as response:
-                if response.is_redirect:
-                    raise HarnessError("physical_redirect_rejected")
-                if response.is_error:
-                    raise HarnessError("physical_attempt_retrieval_failed")
-                content = await self._read_content(response)
+                recovery_url = self._modal_attempt_result_url(response)
+                if recovery_url is None:
+                    if response.is_redirect:
+                        raise HarnessError("physical_redirect_rejected")
+                    if response.is_error:
+                        raise HarnessError("physical_attempt_retrieval_failed")
+                    content = await self._read_content(response)
 
         def reject_nonfinite(value):
             raise HarnessError("invalid_physical_response")
