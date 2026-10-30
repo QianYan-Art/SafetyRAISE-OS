@@ -213,6 +213,45 @@ def candidate_contract_problems(
     return problems
 
 
+REVIEW_COVERAGE = "review_coverage"
+
+
+def review_coverage_problems(
+    review: ReviewResult, candidate: CandidateReport, obligation_ids: Iterable[object],
+) -> list[tuple[str, tuple, str]]:
+    """审查结果中逐义务 coverage 清单的确定性约定，逐项反馈给审查者补齐。
+
+    只检查清单结构，不判定检查是否通过；发布前终检仍以同一规则拒绝。
+    """
+    required_obligations = _normalize_ids(obligation_ids, "obligation_ids")
+    claim_ids = {claim.claim_id for claim in candidate.claims}
+    problems: list[tuple[str, tuple, str]] = []
+
+    def problem(loc: tuple, message: str) -> None:
+        problems.append((REVIEW_COVERAGE, loc, message))
+
+    seen: set[str] = set()
+    for index, check in enumerate(review.coverage_checks):
+        loc = ("coverage_checks", index)
+        if check.obligation_id in seen:
+            problem(loc, f"coverage 检查重复义务：{check.obligation_id}。")
+        elif check.obligation_id not in required_obligations:
+            problem(loc, f"coverage 检查包含未声明义务：{check.obligation_id}。")
+        seen.add(check.obligation_id)
+        if not check.conclusion.strip():
+            problem(loc, f"义务 {check.obligation_id} 的 coverage 检查缺少结论。")
+        for claim_id in check.claim_ids:
+            if claim_id not in claim_ids:
+                problem(loc, f"coverage 检查引用了不存在的 claim_id：{claim_id}。")
+        if not check.claim_ids and not check.evidence_refs and not check.knowledge_refs:
+            problem(loc, f"义务 {check.obligation_id} 的 coverage 检查缺少具体依据。")
+    missing = required_obligations - seen
+    if missing:
+        problem(("coverage_checks",),
+                f"coverage_checks 须为每个事实义务各给一项检查（含结论与依据），缺少：{sorted(missing)}。")
+    return problems
+
+
 def candidate_round_problems(
     candidate: CandidateReport, *, version: int, open_issue_ids: Iterable[str],
 ) -> list[tuple[str, tuple, str]]:

@@ -12,7 +12,7 @@ from psycopg.rows import dict_row
 
 from app.adapters.input.dict_input_adapter import DictInputAdapter
 from app.report_harness.contracts import (
-    canonical_digest, candidate_contract_problems, candidate_round_problems,
+    canonical_digest, candidate_contract_problems, candidate_round_problems, review_coverage_problems,
     enforce_semantic_severity, enforce_source_authority, validate_publication,
     validate_review_structure,
 )
@@ -610,12 +610,16 @@ class ReportRunService:
         required_evidence = {ref for item in obligations for ref in item["source_refs"]}
         candidate_knowledge = {ref for claim in candidate.claims for ref in claim.knowledge_refs}
 
-        def accept_review(_review):
-            problems = reviewer_access_problems(
-                required_evidence, candidate_knowledge,
-                inline_evidence | tools.accessed_evidence("reviewer"),
-                tools.accessed_knowledge("reviewer"),
-            )
+        def accept_review(draft):
+            # coverage 清单缺项与取证缺口一样交还审查者补齐，避免漏填结构直接终止运行。
+            problems = [
+                *reviewer_access_problems(
+                    required_evidence, candidate_knowledge,
+                    inline_evidence | tools.accessed_evidence("reviewer"),
+                    tools.accessed_knowledge("reviewer"),
+                ),
+                *review_coverage_problems(draft, candidate, obligation_ids),
+            ]
             if problems:
                 raise ResponseRejected(problems)
 

@@ -369,3 +369,38 @@ def test_candidate_contract_is_repaired_before_paying_for_review(fix):
         detail = service.store.get("owner", run["run_id"])["terminal_detail"]
         assert detail["kind"] == "response_rejected"
         assert detail["errors"][0]["type"] == "candidate_contract"
+
+
+class MissingCoverageReviewRoles(SyntheticRoles):
+    """审查结论齐全但漏填逐义务 coverage 清单；fix 时按协议反馈补齐。"""
+
+    def __init__(self, fix):
+        super().__init__()
+        self.fix = fix
+        self.review_feedback = []
+
+    async def review(self, context):
+        self.review_feedback.append(context.get("protocol_feedback"))
+        result = await super().review(context)
+        if not (self.fix and "protocol_feedback" in context):
+            result["coverage_checks"] = []
+        return result
+
+
+@pytest.mark.parametrize("fix", [True, False])
+def test_missing_review_coverage_is_returned_to_reviewer_before_stopping(fix):
+    roles = MissingCoverageReviewRoles(fix)
+    service = ReportRunService(MemoryStore(), dependencies(roles))
+    run = create(service)
+    result = asyncio.run(service.execute("owner", run["run_id"], 0))
+    errors = roles.review_feedback[1]["repairs"][0]["errors"]
+    assert [(item["type"], item["path"]) for item in errors] == [("review_coverage", ["coverage_checks"])]
+    if fix:
+        assert result["state"] == "published", result["terminal_reason"]
+        assert roles.calls == ["prepare", "generate", "review", "review"]
+    else:
+        assert result["state"] == "needs_review"
+        assert result["terminal_reason"] == "invalid_role_response"
+        assert roles.calls == ["prepare", "generate", "review", "review", "review"]
+        detail = service.store.get("owner", run["run_id"])["terminal_detail"]
+        assert detail["errors"][0]["type"] == "review_coverage"

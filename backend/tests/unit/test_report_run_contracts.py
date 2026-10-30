@@ -460,3 +460,30 @@ def test_candidate_problems_are_itemized_for_generator_repair() -> None:
         ("version",), ("issue_responses", 1, "issue_id"), ("issue_responses", 2, "issue_id"),
     ]
     assert candidate_round_problems(make_candidate(), version=1, open_issue_ids=()) == []
+
+
+def test_review_coverage_problems_are_itemized_for_reviewer_repair() -> None:
+    from app.report_harness.contracts import REVIEW_COVERAGE, review_coverage_problems
+
+    candidate = make_candidate()
+    assert review_coverage_problems(make_review(candidate), candidate, {OBLIGATION_ID}) == []
+    # 审查结论文字声称已覆盖但漏填结构化清单：交还审查者补齐，而不是在终检直接终止。
+    empty = make_review(candidate, coverage_checks=[])
+    problems = review_coverage_problems(empty, candidate, {OBLIGATION_ID})
+    assert [(kind, loc) for kind, loc, _ in problems] == [(REVIEW_COVERAGE, ("coverage_checks",))]
+    assert OBLIGATION_ID in problems[0][2]
+    with pytest.raises(ValueError, match="coverage 检查不完整"):
+        publish(candidate, empty)
+
+    broken = make_review(candidate, coverage_checks=[
+        {"obligation_id": OBLIGATION_ID, "passed": True, "claim_ids": ["claim-x"],
+         "conclusion": "已覆盖。"},
+        {"obligation_id": OBLIGATION_ID, "passed": True, "conclusion": "重复且无依据。"},
+        {"obligation_id": "fact:/other", "passed": True, "evidence_refs": [EVIDENCE_ID],
+         "conclusion": "额外义务。"},
+    ])
+    messages = [message for _, _, message in review_coverage_problems(broken, candidate, {OBLIGATION_ID})]
+    assert any("不存在的 claim_id" in item for item in messages)
+    assert any("重复义务" in item for item in messages)
+    assert any("缺少具体依据" in item for item in messages)
+    assert any("未声明义务" in item for item in messages)
