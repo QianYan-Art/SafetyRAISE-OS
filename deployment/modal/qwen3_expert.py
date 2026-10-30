@@ -68,13 +68,13 @@ image = (
 
 @app.function(
     image=image,
-    gpu="L4",
+    # L4 无空闲时退到同为 24 GB 显存的 A10G；不限定区域，避免单区缺卡时请求无限排队。
+    gpu=["L4", "A10G"],
     volumes={MODEL_VOLUME_PATH: model_volume},
     min_containers=0,
     max_containers=1,
     scaledown_window=60,
     timeout=3_600,
-    region="eu",
     routing_region="eu-west",
 )
 @modal.concurrent(max_inputs=1)

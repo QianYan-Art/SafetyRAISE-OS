@@ -107,7 +107,9 @@ modal volume put safetyraise-qwen3-f16 <LOCAL_MODEL_DIR> /models/TS-Qwen3
 modal deploy deployment/modal/qwen3_expert.py
 ```
 
-脚本固定 vLLM `0.21.0`、L4、F16、单容器单并发、60 秒空闲缩容和 1800 秒启动等待，服务名为 `suyuan37/SafetyRAISE-TS-Qwen3`，上下文 `12288`，不设置输出 token 上限。部署完成后，把 Modal 给出的地址（加 `/v1`）写入 `EXPERT_LOCAL_BASE_URL`；在 Modal 控制台创建 Proxy Auth token，只保存到服务器的受限环境文件（如 `.env.server` 的 `MODAL_EXPERT_PROXY_TOKEN`），不写入仓库、镜像、前端或日志。
+脚本固定 vLLM `0.21.0`、F16、单容器单并发、60 秒空闲缩容和 1800 秒启动等待；GPU 优先 L4，无空闲时用同为 24 GB 显存的 A10G，不限定运行区域（公网入口仍为 `eu-west`），服务名为 `suyuan37/SafetyRAISE-TS-Qwen3`，上下文 `12288`，不设置输出 token 上限。部署完成后，把 Modal 给出的地址（加 `/v1`）写入 `EXPERT_LOCAL_BASE_URL`；在 Modal 控制台创建 Proxy Auth token，只保存到服务器的受限环境文件（如 `.env.server` 的 `MODAL_EXPERT_PROXY_TOKEN`），不写入仓库、镜像、前端或日志。
+
+限定单一区域时，若该区没有空闲 GPU，请求会在 Modal 排队直至超时，Modal 日志显示 `waiting to be scheduled`，此时 SafetyRAISE 只能看到持续的 `303`。不限区域意味着专家推理可能在欧洲以外的机房执行，处理有数据驻留要求的材料前应重新限定区域并确认容量。
 
 ## 清理边界
 
