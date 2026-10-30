@@ -4,6 +4,13 @@
 
 ## [未发布]
 
+## [0.3.7] - 2026-10-31
+
+### 新增
+
+- 重新生成报告时关联本档案最近一份报告；事实快照与端点配置不变时沿用其专家指导意见，不再调用专家模型，生成过程标注复用。
+- 报告区恢复“专家指导意见”与“知识库检索片段”预览，数据来自新接口 `GET /api/v1/report-runs/{id}/materials`。
+
 ## [0.3.6] - 2026-10-31
 
 ### 修复
@@ -122,7 +129,8 @@
 - 新增 CI（后端测试、前端测试与构建、提交历史密钥扫描）、贡献指南、安全策略与 issue / PR 模板。
 - 在 README 与 NOTICE 中说明可选视频依赖 Ultralytics YOLO 的 AGPL-3.0 许可。
 
-[未发布]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.6...HEAD
+[未发布]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.7...HEAD
+[0.3.7]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.6...v0.3.7
 [0.3.6]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.5...v0.3.6
 [0.3.5]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.3...v0.3.4
