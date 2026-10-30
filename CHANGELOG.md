@@ -4,6 +4,16 @@
 
 ## [未发布]
 
+## [0.3.4] - 2026-10-31
+
+### 变更
+
+- 报告执行改由服务端后台任务持有：刷新、断网或关闭页面只断开事件流，报告继续生成，重新打开档案即可看到进度；只有“停止生成”或删除会话会取消。此前事件流断开会直接取消运行。服务重启时仍在执行的运行会被取消并记录。
+
+### 新增
+
+- 报告区显示“生成过程”：专家分析、检索、撰写、审查和修订轮次及各步用时，运行中实时更新；当前档案处理记录同步显示报告生成进度。
+
 ## [0.3.3] - 2026-10-30
 
 ### 修复
@@ -99,7 +109,8 @@
 - 新增 CI（后端测试、前端测试与构建、提交历史密钥扫描）、贡献指南、安全策略与 issue / PR 模板。
 - 在 README 与 NOTICE 中说明可选视频依赖 Ultralytics YOLO 的 AGPL-3.0 许可。
 
-[未发布]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.3...HEAD
+[未发布]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.4...HEAD
+[0.3.4]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.0...v0.3.1
