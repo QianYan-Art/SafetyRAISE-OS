@@ -12,3 +12,5 @@ PyJWT>=2.9.0
 psycopg[binary]>=3.2.9
 psycopg-pool>=3.2.2
 jsonpointer>=3.0.0,<4.0.0
+# httpx 使用 certifi 根证书库；2026-10 CA 泄露事件后要求不低于更新后的版本。
+certifi>=2026.10.19
