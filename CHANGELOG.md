@@ -4,6 +4,13 @@
 
 ## [未发布]
 
+## [0.3.5] - 2026-10-31
+
+### 修复
+
+- 审查模型漏填逐义务 coverage 清单时，先把缺项交还审查者补齐（与取证缺口共用最多两次协议修复），不再直接以“义务 coverage 检查不完整”终止运行；发布前终检规则不变。
+- 生成用时超过一小时按“小时 分”显示；当前档案处理记录中的报告生成进度卡置顶。
+
 ## [0.3.4] - 2026-10-31
 
 ### 变更
@@ -109,7 +116,8 @@
 - 新增 CI（后端测试、前端测试与构建、提交历史密钥扫描）、贡献指南、安全策略与 issue / PR 模板。
 - 在 README 与 NOTICE 中说明可选视频依赖 Ultralytics YOLO 的 AGPL-3.0 许可。
 
-[未发布]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.4...HEAD
+[未发布]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.5...HEAD
+[0.3.5]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.1...v0.3.2
