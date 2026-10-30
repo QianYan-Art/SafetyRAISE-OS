@@ -4,6 +4,12 @@
 
 ## [未发布]
 
+## [0.3.11] - 2026-10-31
+
+### 新增
+
+- 报告页“检索片段”改为“参考依据”：列出初始检索、模型检索词与命中数、读取全文的完整记录，并按报告引用、读取全文、模型检索命中、初始检索列出全部知识条目，标明撰写或审查模型使用，原文可展开。`materials` 接口新增 `lookups` 与 `references`。
+
 ## [0.3.10] - 2026-10-31
 
 ### 修复
@@ -153,7 +159,8 @@
 - 新增 CI（后端测试、前端测试与构建、提交历史密钥扫描）、贡献指南、安全策略与 issue / PR 模板。
 - 在 README 与 NOTICE 中说明可选视频依赖 Ultralytics YOLO 的 AGPL-3.0 许可。
 
-[未发布]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.10...HEAD
+[未发布]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.11...HEAD
+[0.3.11]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.10...v0.3.11
 [0.3.10]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.9...v0.3.10
 [0.3.9]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.8...v0.3.9
 [0.3.8]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.7...v0.3.8
