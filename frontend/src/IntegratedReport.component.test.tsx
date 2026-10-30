@@ -29,6 +29,7 @@ const api = vi.hoisted(() => ({
   resumeReportRunStream: vi.fn(),
   saveReportEvidence: vi.fn(),
   saveReportRunFeedback: vi.fn(),
+  fetchReportRunEvents: vi.fn(),
 }));
 
 vi.mock("./api", async () => ({
@@ -185,6 +186,7 @@ beforeEach(() => {
   api.fetchReportRunFeedback.mockImplementation(async (runId: string) => ({ run_id: runId, revision: 0 }));
   api.authorizeReportRun.mockImplementation(async (runId: string) => run({ run_id: runId, state: "generating" }));
   api.executeReportRunStream.mockResolvedValue(undefined);
+  api.fetchReportRunEvents.mockResolvedValue({ events: [], next_seq: 0 });
   api.resumeReportRunStream.mockResolvedValue(undefined);
   api.cancelReportRun.mockResolvedValue(run({ state: "cancelled" }));
   api.downloadReportRunExport.mockResolvedValue({ blob: new Blob(["report"]), fileName: "report.md" });

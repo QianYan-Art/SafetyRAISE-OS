@@ -197,7 +197,7 @@ def test_startup_resource_failure_allows_history_and_cancel_but_no_new_work(monk
         assert stopped.json()["state"] == "cancelled"
 
 
-def test_asgi_stream_disconnect_persists_cancellation():
+def test_asgi_stream_disconnect_keeps_run_active():
     class WaitingRoles(SyntheticRoles):
         async def generate(self, context):
             await asyncio.Event().wait()
@@ -234,7 +234,16 @@ def test_asgi_stream_disconnect_persists_cancellation():
         }
         await asyncio.wait_for(app(scope, receive, send), timeout=3)
 
-    asyncio.run(disconnect())
+    async def scenario():
+        await disconnect()
+        # 断开后执行仍在后台进行；显式取消才会停止。
+        await asyncio.sleep(0.2)
+        assert service.get("owner", run["run_id"])["state"] not in {"cancelled", "failed"}
+        service.cancel("owner", run["run_id"])
+        from app.report_harness import detached_runs
+        await detached_runs.shutdown(timeout=3)
+
+    asyncio.run(scenario())
     assert service.get("owner", run["run_id"])["state"] == "cancelled"
 
 

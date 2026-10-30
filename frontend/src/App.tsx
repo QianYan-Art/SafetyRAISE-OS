@@ -67,6 +67,7 @@ import { UserModelConfigDrawer } from "./UserModelConfigDrawer";
 import { ReportHarnessPanel } from "./ReportHarnessPanel";
 import type { ReportHarnessPanelHandle } from "./ReportHarnessPanel";
 import { IntegratedReport } from "./IntegratedReport";
+import { formatDuration, type ReportProgressStep } from "./reportProgress";
 import type { IntegratedReportHandle } from "./IntegratedReport";
 
 const SidebarIcon = ({ isOpen }: { isOpen?: boolean }) => (
@@ -806,6 +807,7 @@ function WorkspaceApp({
   const [integratedReportActive, setIntegratedReportActive] = useState(false);
   const [integratedReportCancelling, setIntegratedReportCancelling] = useState(false);
   const [integratedReportStatus, setIntegratedReportStatus] = useState("正在生成报告");
+  const [integratedReportProgress, setIntegratedReportProgress] = useState<{ steps: ReportProgressStep[]; active: boolean; status: string } | null>(null);
   const [publicConfigStatus, setPublicConfigStatus] = useState<"loading" | "ready" | "failed">("loading");
   const harnessEnabled = publicConfigStatus === "ready" && publicAppConfig.report_harness?.enabled === true;
   const harnessOnline = harnessEnabled && publicAppConfig.report_harness?.online_enabled === true;
@@ -2916,7 +2918,7 @@ function WorkspaceApp({
                   <button type="button" className="workspace-icon" title="关闭当前档案处理记录" aria-label="关闭当前档案处理记录" onClick={() => setIsActivityOpen(false)}><X size={18} /></button>
                 </div>
                 <div className="panel-body chat-list" ref={chatListRef}>
-                  {activeSession.messages.length === 0 && (
+                  {activeSession.messages.length === 0 && !integratedReportProgress && (
                     <div className="conversation-empty">暂无分析记录</div>
                   )}
                   {activeSession.messages.map((message, messageIndex) => (
@@ -2966,6 +2968,33 @@ function WorkspaceApp({
                       )}
                     </div>
                   ))}
+                  {integratedReportProgress && (
+                    // 报告生成进度随事件实时追加；刷新页面后由报告组件重新读取事件还原。
+                    <div className="chat-bubble assistant progress-bubble">
+                      <div className={`progress-card ${integratedReportProgress.active ? "running" : "success"}`}>
+                        <div className="progress-card-topline">
+                          <span className="progress-badge">报告</span>
+                          <div className="progress-card-status">
+                            {integratedReportProgress.active ? <span className="spinner spinner-dark" />
+                              : <span className="progress-indicator success">✓</span>}
+                          </div>
+                        </div>
+                        <div className="progress-card-main">
+                          <strong className="progress-card-title">报告生成进度</strong>
+                          <p className="progress-card-content">{integratedReportProgress.status}</p>
+                        </div>
+                        <div className="progress-stage-list">
+                          {integratedReportProgress.steps.map((step) => (
+                            <div key={step.key} className={`progress-stage-item ${step.state === "running" ? "running" : "done"}`}>
+                              <span className="progress-stage-dot" />
+                              <span>{step.state === "error" ? `⚠ ${step.label}` : step.label}
+                                {step.endedAt !== null && step.endedAt > step.startedAt ? ` · ${formatDuration(step.endedAt - step.startedAt)}` : ""}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </section>
 
@@ -3076,6 +3105,7 @@ function WorkspaceApp({
                     onActiveChange={setIntegratedReportActive}
                     onCancellingChange={setIntegratedReportCancelling}
                     onStatusChange={setIntegratedReportStatus}
+                    onProgressChange={setIntegratedReportProgress}
                   />}
 
                   {!harnessOnline && !activeSession.reportResult && <div className="stage-empty"><FileText size={40} /><h2>{isGeneratingReport ? "正在生成分析报告" : "尚无分析报告"}</h2>{isGeneratingReport ? <><p>专家意见与报告生成可能需要一些时间，当前档案处理记录会持续更新。</p><button type="button" className="btn-danger" onClick={handleStopReportGeneration}>停止生成</button></> : <button type="button" className="btn-secondary" onClick={() => setWorkspaceStage("facts")}>核对事实</button>}</div>}

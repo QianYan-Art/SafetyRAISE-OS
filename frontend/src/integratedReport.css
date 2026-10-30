@@ -116,6 +116,18 @@
 .integrated-report .markdown-report h1 { font-size: 20px; border-bottom-width: 1px; }
 .integrated-report .markdown-report h2 { font-size: 17px; }
 .integrated-report .markdown-report h3 { font-size: 15px; }
+/* 生成过程：按持久化事件实时列出步骤与用时，沿用左侧色条提示的视觉 */
+.report-progress { margin: -6px 0 20px; font-size: 13px; }
+.report-progress > summary { cursor: pointer; color: var(--workbench-muted, var(--color-text-muted)); padding: 4px 0; }
+.report-progress ol { list-style: none; margin: 8px 0 0; padding: 0 0 0 12px; border-left: 1px solid var(--border-color); display: grid; gap: 6px; }
+.report-progress-step { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; align-items: center; gap: 10px; line-height: 1.6; }
+.report-progress-dot { width: 7px; height: 7px; border-radius: 50%; margin-left: -16px; background: var(--color-success); }
+.report-progress-step.running { font-weight: 500; }
+.report-progress-step.running .report-progress-dot { background: var(--primary-color); box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary-color) 18%, transparent); }
+.report-progress-step.error { color: var(--warning-color); }
+.report-progress-step.error .report-progress-dot { background: var(--warning-color); }
+.report-progress-time { color: var(--workbench-muted, var(--color-text-muted)); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.report-progress-note { margin: 10px 0 0; padding: 8px 12px; border-left: 3px solid var(--primary-color); background: var(--bg-subtle); line-height: 1.6; }
 /* 下载：非正式稿附一条说明，沿用页面已有的浅底色条提示 */
 .report-export { display: grid; gap: 10px; margin: -6px 0 20px; }
 .report-export-notice {

@@ -5,7 +5,6 @@ import json
 import logging
 from uuid import UUID
 
-import anyio
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.encoders import jsonable_encoder
@@ -15,6 +14,7 @@ from fastapi.routing import APIRoute
 from app.api import deps
 from app.api.deps import get_current_user, get_database_service
 from app.api.error_handling import build_error_response
+from app.report_harness import detached_runs
 from app.report_harness.errors import HarnessError
 from app.report_harness.authorization import AuthorizationCatalog, AuthorizationRequest
 from app.report_harness.config import ReportHarnessSettings
@@ -240,8 +240,12 @@ async def resume_run(run_id: UUID, payload: ResumeRunRequest,
 
 
 def _claimed_stream(identifier: str, user, service: ReportRunService, token: int):
+    # 执行在服务端后台独立运行；事件流只负责转发，刷新、断网或关闭页面不会取消报告。
+    task = detached_runs.start(
+        service.execute_claimed(user.id, identifier, token), run_id=identifier,
+    )
+
     async def stream():
-        task = asyncio.create_task(service.execute_claimed(user.id, identifier, token))
         seq = 0
         last_sent = asyncio.get_running_loop().time()
         try:
@@ -273,16 +277,8 @@ def _claimed_stream(identifier: str, user, service: ReportRunService, token: int
             for event in page["events"]:
                 yield "data: " + json.dumps(jsonable_encoder(event), ensure_ascii=False) + "\n\n"
         finally:
-            # 断连的取消域不能再次打断持久取消及 transport 关闭。
-            with anyio.CancelScope(shield=True):
-                try:
-                    if not task.done():
-                        logger.info("报告事件流提前关闭，取消执行。", extra={"run_id": identifier})
-                        service.cancel_claimed(user.id, identifier, token)
-                finally:
-                    if not task.done() and not task.cancelling():
-                        task.cancel()
-                    await asyncio.gather(task, return_exceptions=True)
+            if not task.done():
+                logger.info("报告事件流已关闭，执行在后台继续。", extra={"run_id": identifier})
 
     return StreamingResponse(stream(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache"})

@@ -74,8 +74,8 @@ def waiting_run(fixture):
     return response.json()["run_id"], roles
 
 
-@pytest.mark.parametrize("stop_mode", ["disconnect", "cancel", "delete"])
-def test_real_sse_disconnect_cancel_or_delete_stops_worker(tool_client, stop_mode):
+@pytest.mark.parametrize("stop_mode", ["cancel", "delete"])
+def test_real_sse_cancel_or_delete_stops_worker(tool_client, stop_mode):
     client, store, owner, session = tool_client
     run_id, roles = waiting_run(tool_client)
     with loopback_app() as address:
@@ -116,6 +116,33 @@ def test_real_sse_disconnect_cancel_or_delete_stops_worker(tool_client, stop_mod
     assert len([
         item for item in store.events(owner, run_id)["events"] if item["type"] == "final"
     ]) == 1
+
+
+def test_real_sse_disconnect_keeps_worker_running_until_cancel(tool_client):
+    client, store, owner, session = tool_client
+    run_id, roles = waiting_run(tool_client)
+    with loopback_app() as address:
+        with httpx.Client(base_url=address, headers={
+            "Authorization": client.headers["Authorization"],
+        }, timeout=5, trust_env=False) as network:
+            with network.stream(
+                "POST", f"/api/v1/report-runs/{run_id}/execute/stream",
+                json={"expected_version": 0},
+            ) as response:
+                assert response.status_code == 200
+                assert next(response.iter_lines()).startswith("data:")
+                assert roles.entered.wait(5)
+            # 刷新或关闭页面只断开事件流，执行继续，可重新读取进度。
+            sleep(0.5)
+            assert not roles.closed.is_set()
+            current = network.get(f"/api/v1/report-runs/{run_id}")
+            assert current.status_code == 200
+            assert current.json()["state"] not in {"cancelled", "failed", "needs_review"}
+            stopped = network.post(f"/api/v1/report-runs/{run_id}/cancel")
+            assert stopped.status_code == 200
+            assert stopped.json()["state"] == "cancelled"
+            assert roles.closed.wait(5)
+    assert store.get(owner, run_id)["state"] == "cancelled"
 
 
 def test_idle_sse_keeps_connection_alive_without_cancelling_run(tool_client, monkeypatch):

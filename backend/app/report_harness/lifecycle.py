@@ -69,6 +69,9 @@ async def report_harness_lifespan(app):
     try:
         yield
     finally:
+        from app.report_harness import detached_runs
+
+        await detached_runs.shutdown()
         app.state.report_harness_runtime = None
         app.state.report_harness_blocked_reason = None
         stop.set()

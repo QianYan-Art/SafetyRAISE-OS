@@ -1,11 +1,11 @@
-import { forwardRef, useEffect, useId, useImperativeHandle, useRef, useState } from "react";
+import { forwardRef, useEffect, useId, useImperativeHandle, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Check, Download, FileText, Pencil, Play, RotateCw, Square, Trash2, X } from "lucide-react";
 import {
   authorizeReportRun, cancelReportRun, createReportRun, downloadReportRunExport,
   executeReportRunStream, fetchAuthorizationPreview, fetchReportEvidence,
-  fetchReportRun, fetchReportRunCandidate, formatApiErrorMessage, listReportRuns,
+  fetchReportRun, fetchReportRunCandidate, fetchReportRunEvents, formatApiErrorMessage, listReportRuns,
   resumeReportRunStream, saveReportEvidence,
 } from "./api";
 import {
@@ -14,8 +14,9 @@ import {
 } from "./ReportHarnessPanel";
 import { ReportFeedback } from "./ReportFeedback";
 import { EXPORT_NOTICES } from "./feedbackOptions";
+import { formatDuration, summarizeReportProgress, type ReportProgressStep } from "./reportProgress";
 import type {
-  ReportEvidenceResponse, ReportExportFormat, ReportExportKind, ReportRunCandidate, ReportRunView,
+  ReportEvidenceResponse, ReportExportFormat, ReportExportKind, ReportRunCandidate, ReportRunEvent, ReportRunView,
 } from "./types";
 import "./integratedReport.css";
 
@@ -49,7 +50,8 @@ export const IntegratedReport = forwardRef<IntegratedReportHandle, {
   onActiveChange?: (active: boolean) => void;
   onCancellingChange?: (cancelling: boolean) => void;
   onStatusChange?: (label: string) => void;
-}>(function IntegratedReport({ sessionId, onPersistDraft, onBusyChange, onActiveChange, onCancellingChange, onStatusChange }, ref) {
+  onProgressChange?: (progress: { steps: ReportProgressStep[]; active: boolean; status: string } | null) => void;
+}>(function IntegratedReport({ sessionId, onPersistDraft, onBusyChange, onActiveChange, onCancellingChange, onStatusChange, onProgressChange }, ref) {
   const fieldId = useId();
   const [run, setRun] = useState<ReportRunView | null>(null);
   const [cancelling, setCancelling] = useState(false);
@@ -75,6 +77,11 @@ export const IntegratedReport = forwardRef<IntegratedReportHandle, {
   const versions = useRef(new Map<string, number>());
   const readSequence = useRef(0);
   const stream = useRef<AbortController | null>(null);
+  const [events, setEvents] = useState<ReportRunEvent[]>([]);
+  const eventRun = useRef<string | null>(null);
+  const eventSeq = useRef(0);
+  const eventsLoading = useRef(false);
+  const [now, setNow] = useState(() => Date.now());
   const active = Boolean(run && !RUN_TERMINAL_STATES.has(run.state) && run.state !== "suspended");
   const statusLabel = cancelling ? "正在停止" : labels[run?.state ?? ""] ?? "处理中";
 
@@ -89,6 +96,20 @@ export const IntegratedReport = forwardRef<IntegratedReportHandle, {
   }, [cancelling, onCancellingChange]);
   useEffect(() => { setRetryUnknown(false); }, [run?.run_id, run?.state_version]);
   useEffect(() => { onStatusChange?.(statusLabel); }, [statusLabel, onStatusChange]);
+  const runId = run?.run_id ?? null;
+  const steps = useMemo(
+    () => summarizeReportProgress(runId && eventRun.current === runId ? events : [], active),
+    [events, active, runId],
+  );
+  useEffect(() => {
+    if (!active) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [active]);
+  useEffect(() => {
+    onProgressChange?.(steps.length ? { steps, active, status: statusLabel } : null);
+  }, [steps, active, statusLabel, onProgressChange]);
+  useEffect(() => () => onProgressChange?.(null), [onProgressChange]);
 
   function updateRun(value: ReportRunView) {
     if (!alive.current || (versions.current.get(value.run_id) ?? -1) > value.state_version) return false;
@@ -100,11 +121,37 @@ export const IntegratedReport = forwardRef<IntegratedReportHandle, {
     return true;
   }
 
+  // 进度事件按序号增量读取；切换运行时清空，刷新页面后也能从头还原整个过程。
+  async function loadEvents(id: string) {
+    if (eventsLoading.current) return;
+    eventsLoading.current = true;
+    try {
+      if (eventRun.current !== id) {
+        eventRun.current = id;
+        eventSeq.current = 0;
+        setEvents([]);
+      }
+      for (let page = 0; page < 20; page += 1) {
+        const result = await fetchReportRunEvents(id, { afterSeq: eventSeq.current, limit: 500 });
+        if (!alive.current || eventRun.current !== id) return;
+        if (result.events.length === 0) break;
+        eventSeq.current = result.events[result.events.length - 1].seq;
+        setEvents((rows) => [...rows, ...result.events.filter((item) => item.seq > (rows[rows.length - 1]?.seq ?? 0))]);
+        if (result.events.length < 500) break;
+      }
+    } catch {
+      // 进度只是辅助展示，读取失败不影响报告状态与正文，下次轮询再补读。
+    } finally {
+      eventsLoading.current = false;
+    }
+  }
+
   async function loadRun(id: string) {
     const sequence = ++readSequence.current;
     const value = await fetchReportRun(id);
     if (!alive.current || currentId.current !== id || readSequence.current !== sequence) return;
     if (!updateRun(value)) return;
+    await loadEvents(id);
     if (value.candidate_version > 0) {
       const content = await fetchReportRunCandidate(id);
       if (alive.current && currentId.current === id && readSequence.current === sequence) setCandidate(content);
@@ -291,6 +338,7 @@ export const IntegratedReport = forwardRef<IntegratedReportHandle, {
     finally { if (alive.current) setExporting(false); }
   }
 
+  const totalMs = steps.length ? ((active ? now : steps[steps.length - 1].endedAt ?? now) - steps[0].startedAt) : 0;
   const body = run?.report?.report_markdown ?? candidate?.candidate_report.report_markdown;
   const exportKind = run && !active ? exportKindOf(run) : null;
   const issues = candidate?.review_result?.issues?.filter((item) => item.status !== "resolved") ?? [];
@@ -370,6 +418,20 @@ export const IntegratedReport = forwardRef<IntegratedReportHandle, {
             })}><Play size={15} aria-hidden="true" />继续生成</button>
         </>}
       </div>
+      {steps.length > 0 && <details className="report-progress" open={active}>
+        <summary>生成过程 · {active ? "已用时" : "共用时"} {formatDuration(totalMs)}</summary>
+        <ol aria-live="polite">
+          {steps.map((step) => <li key={step.key} className={`report-progress-step ${step.state}`}>
+            <span className="report-progress-dot" aria-hidden="true" />
+            <span className="report-progress-label">{step.label}</span>
+            <span className="report-progress-time">
+              {step.state === "running" ? `进行中 · ${formatDuration(now - step.startedAt)}`
+                : step.endedAt !== null && step.endedAt > step.startedAt ? formatDuration(step.endedAt - step.startedAt) : ""}
+            </span>
+          </li>)}
+        </ol>
+        {active && <p className="report-progress-note">生成在服务器后台进行，刷新或关闭页面不会中断；重新打开此档案即可继续查看进度。</p>}
+      </details>}
       {exportKind && <div className="report-export" data-kind={exportKind}>
         {EXPORT_NOTICES[exportKind] && <p className="report-export-notice">{EXPORT_NOTICES[exportKind]}</p>}
         <div className="report-export-actions" role="group" aria-label="下载报告">
