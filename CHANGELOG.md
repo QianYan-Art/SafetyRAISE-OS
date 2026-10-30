@@ -4,6 +4,13 @@
 
 ## [未发布]
 
+## [0.3.8] - 2026-10-31
+
+### 变更
+
+- 查看报告页重新划分职责：主区域只保留报告本身（标题与历史报告、单行状态与操作、下载提示，以及报告正文、专家指导意见、检索片段、补充材料四个标签页）；逐步生成过程只在当前档案处理记录顶部显示，与资料、草稿阶段使用同一种进度卡。
+- 问题均已闭合、仅审查结构未完成时，状态改为“未通过独立审查”，不再显示“报告仍有待解决的问题”。
+
 ## [0.3.7] - 2026-10-31
 
 ### 新增
@@ -129,7 +136,8 @@
 - 新增 CI（后端测试、前端测试与构建、提交历史密钥扫描）、贡献指南、安全策略与 issue / PR 模板。
 - 在 README 与 NOTICE 中说明可选视频依赖 Ultralytics YOLO 的 AGPL-3.0 许可。
 
-[未发布]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.7...HEAD
+[未发布]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.8...HEAD
+[0.3.8]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.7...v0.3.8
 [0.3.7]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.6...v0.3.7
 [0.3.6]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.5...v0.3.6
 [0.3.5]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.4...v0.3.5
