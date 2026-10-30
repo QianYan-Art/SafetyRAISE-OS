@@ -92,7 +92,9 @@ export function summarizeReportProgress(events: ReportRunEvent[], active: boolea
 
 export function formatDuration(ms: number): string {
   const seconds = Math.max(0, Math.round(ms / 1000));
-  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
   const rest = seconds % 60;
+  if (hours > 0) return `${hours} 小时 ${minutes} 分`;
   return minutes > 0 ? `${minutes} 分 ${rest} 秒` : `${rest} 秒`;
 }

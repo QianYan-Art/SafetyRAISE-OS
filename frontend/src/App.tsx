@@ -2918,6 +2918,33 @@ function WorkspaceApp({
                   <button type="button" className="workspace-icon" title="关闭当前档案处理记录" aria-label="关闭当前档案处理记录" onClick={() => setIsActivityOpen(false)}><X size={18} /></button>
                 </div>
                 <div className="panel-body chat-list" ref={chatListRef}>
+                  {integratedReportProgress && (
+                    // 报告生成进度置顶并随事件实时更新；刷新页面后由报告组件重新读取事件还原。
+                    <div className="chat-bubble assistant progress-bubble">
+                      <div className={`progress-card ${integratedReportProgress.active ? "running" : "success"}`}>
+                        <div className="progress-card-topline">
+                          <span className="progress-badge">报告</span>
+                          <div className="progress-card-status">
+                            {integratedReportProgress.active ? <span className="spinner spinner-dark" />
+                              : <span className="progress-indicator success">✓</span>}
+                          </div>
+                        </div>
+                        <div className="progress-card-main">
+                          <strong className="progress-card-title">报告生成进度</strong>
+                          <p className="progress-card-content">{integratedReportProgress.status}</p>
+                        </div>
+                        <div className="progress-stage-list">
+                          {integratedReportProgress.steps.map((step) => (
+                            <div key={step.key} className={`progress-stage-item ${step.state === "running" ? "running" : "done"}`}>
+                              <span className="progress-stage-dot" />
+                              <span>{step.state === "error" ? `⚠ ${step.label}` : step.label}
+                                {step.endedAt !== null && step.endedAt > step.startedAt ? ` · ${formatDuration(step.endedAt - step.startedAt)}` : ""}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
                   {activeSession.messages.length === 0 && !integratedReportProgress && (
                     <div className="conversation-empty">暂无分析记录</div>
                   )}
@@ -2968,33 +2995,6 @@ function WorkspaceApp({
                       )}
                     </div>
                   ))}
-                  {integratedReportProgress && (
-                    // 报告生成进度随事件实时追加；刷新页面后由报告组件重新读取事件还原。
-                    <div className="chat-bubble assistant progress-bubble">
-                      <div className={`progress-card ${integratedReportProgress.active ? "running" : "success"}`}>
-                        <div className="progress-card-topline">
-                          <span className="progress-badge">报告</span>
-                          <div className="progress-card-status">
-                            {integratedReportProgress.active ? <span className="spinner spinner-dark" />
-                              : <span className="progress-indicator success">✓</span>}
-                          </div>
-                        </div>
-                        <div className="progress-card-main">
-                          <strong className="progress-card-title">报告生成进度</strong>
-                          <p className="progress-card-content">{integratedReportProgress.status}</p>
-                        </div>
-                        <div className="progress-stage-list">
-                          {integratedReportProgress.steps.map((step) => (
-                            <div key={step.key} className={`progress-stage-item ${step.state === "running" ? "running" : "done"}`}>
-                              <span className="progress-stage-dot" />
-                              <span>{step.state === "error" ? `⚠ ${step.label}` : step.label}
-                                {step.endedAt !== null && step.endedAt > step.startedAt ? ` · ${formatDuration(step.endedAt - step.startedAt)}` : ""}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  )}
                 </div>
               </section>
 

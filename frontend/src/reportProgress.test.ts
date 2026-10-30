@@ -43,5 +43,6 @@ describe("summarizeReportProgress", () => {
   it("formats durations in minutes and seconds", () => {
     expect(formatDuration(58_000)).toBe("58 秒");
     expect(formatDuration(133_000)).toBe("2 分 13 秒");
+    expect(formatDuration(7_120_000)).toBe("1 小时 58 分");
   });
 });
