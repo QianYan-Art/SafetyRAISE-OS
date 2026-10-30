@@ -902,8 +902,9 @@ button {
 }
 
 .chat-bubble.progress-bubble {
-  width: min(100%, 286px);
-  max-width: 100%;
+  width: calc(100% - 2px);
+  max-width: calc(100% - 2px);
+  margin-left: 1px;
   padding: 0;
   background: transparent;
   border: none;

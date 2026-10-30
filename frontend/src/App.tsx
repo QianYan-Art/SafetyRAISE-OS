@@ -857,8 +857,6 @@ function WorkspaceApp({
     setWorkspaceStage(hasReport ? "report" : activeSession?.draftJson ? "facts" : "materials");
   }, [activeSessionId, Boolean(activeSession?.draftJson), Boolean(activeSession?.reportResult)]);
 
-  const showActivityPanel = useCallback(() => setIsActivityOpen(true), []);
-
   const handleIntegratedRunsLoaded = useCallback((hasRuns: boolean) => {
     const id = activeSessionIdRef.current;
     if (!hasRuns || !id) return;
@@ -2903,7 +2901,7 @@ function WorkspaceApp({
             </nav>
           )}
           <div className="page-header-actions">
-            {appView === "workspace" && <button type="button" className="workspace-icon" title="当前档案处理记录" aria-label="当前档案处理记录" aria-pressed={isActivityOpen} onClick={() => setIsActivityOpen(value => !value)}><History size={18} /></button>}
+            {appView === "workspace" && <button type="button" className="workspace-icon" title="当前档案处理记录（含报告生成过程）" aria-label="当前档案处理记录" aria-pressed={isActivityOpen} onClick={() => setIsActivityOpen(value => !value)}><History size={18} /></button>}
             <button type="button" className="workspace-icon" title="模型配置调整" onClick={() => setIsUserModelDrawerOpen(true)}><Settings2 size={18} /></button>
             {renderHeaderAdminToggle()}
             <span className="workspace-username" title={`${currentUser.username} · ${isAdminUser ? "管理员" : "普通用户"}`}>{currentUser.username}</span>
@@ -3097,7 +3095,6 @@ function WorkspaceApp({
                     onStatusChange={setIntegratedReportStatus}
                     onProgressChange={setIntegratedReportProgress}
                     onRunsLoaded={handleIntegratedRunsLoaded}
-                    onShowActivity={showActivityPanel}
                   />}
 
                   {!harnessOnline && !activeSession.reportResult && <div className="stage-empty"><FileText size={40} /><h2>{isGeneratingReport ? "正在生成分析报告" : "尚无分析报告"}</h2>{isGeneratingReport ? <><p>专家意见与报告生成可能需要一些时间，当前档案处理记录会持续更新。</p><button type="button" className="btn-danger" onClick={handleStopReportGeneration}>停止生成</button></> : <button type="button" className="btn-secondary" onClick={() => setWorkspaceStage("facts")}>核对事实</button>}</div>}

@@ -121,11 +121,8 @@
 .report-statusline[data-tone="done"] .report-status { color: var(--success-color); }
 .report-statusline[data-tone="warning"] .report-status { color: var(--warning-color); }
 .report-statusline[data-tone="danger"] .report-status { color: var(--danger-color); }
-.report-status-step, .report-status-time { color: var(--workbench-muted, var(--color-text-muted)); font-variant-numeric: tabular-nums; }
-.report-status-step::before, .report-status-time::before { content: "·"; margin-right: 12px; color: var(--color-text-subtle); }
+.report-status-meta { color: var(--workbench-muted, var(--color-text-muted)); font-variant-numeric: tabular-nums; }
 .report-statusline-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; }
-.integrated-report button.report-link-button { min-height: 36px; padding: 6px 10px; border-color: transparent; background: transparent; color: var(--color-accent-text, var(--primary-color)); }
-.integrated-report button.report-link-button:hover:not(:disabled) { background: var(--bg-subtle); border-color: transparent; }
 /* 内容标签：沿用模型配置页的下划线标签，左缘与正文对齐。 */
 .report-tabs { display: flex; gap: 28px; margin: 4px 0 0; border-bottom: 1px solid var(--border-color); overflow-x: auto; scrollbar-width: none; }
 .report-tabs::-webkit-scrollbar { display: none; }
@@ -259,8 +256,11 @@
   .integrated-report button, .integrated-report select { min-height: 48px; }
   .integrated-report button.report-icon-button { width: 48px; height: 48px; }
   .report-evidence-fields { grid-template-columns: minmax(0, 1fr); }
-  .integrated-report-toolbar select { flex: 1 1 100%; width: 100%; }
-  .integrated-report-toolbar .report-status { flex-basis: 100%; }
+  /* 窄屏：历史报告选择铺满一行；状态与操作同排，步骤与用时另起一行并与状态文字左缘对齐。 */
+  .integrated-report select.report-history-select { flex: 1 1 100%; width: 100%; }
+  .report-statusline-actions { order: 2; }
+  .report-status-meta { order: 3; flex-basis: 100%; padding-left: 20px; }
+  .report-tabs { gap: 20px; }
   .integrated-report .report-checkbox { min-height: 44px; align-items: center; }
   .integrated-report .feedback-verdict-option { min-height: 48px; }
   .integrated-report .feedback-tag { min-height: 44px; }

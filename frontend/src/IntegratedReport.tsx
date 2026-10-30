@@ -1,7 +1,7 @@
 import { forwardRef, useEffect, useId, useImperativeHandle, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Check, Download, FileText, ListChecks, Pencil, Play, RotateCw, Square, Trash2, X } from "lucide-react";
+import { Check, Download, FileText, Pencil, Play, RotateCw, Square, Trash2, X } from "lucide-react";
 import {
   authorizeReportRun, cancelReportRun, createReportRun, downloadReportRunExport,
   executeReportRunStream, fetchAuthorizationPreview, fetchReportEvidence,
@@ -69,8 +69,7 @@ export const IntegratedReport = forwardRef<IntegratedReportHandle, {
   onStatusChange?: (label: string) => void;
   onProgressChange?: (progress: { steps: ReportProgressStep[]; active: boolean; status: string } | null) => void;
   onRunsLoaded?: (hasRuns: boolean) => void;
-  onShowActivity?: () => void;
-}>(function IntegratedReport({ sessionId, onPersistDraft, onBusyChange, onActiveChange, onCancellingChange, onStatusChange, onProgressChange, onRunsLoaded, onShowActivity }, ref) {
+}>(function IntegratedReport({ sessionId, onPersistDraft, onBusyChange, onActiveChange, onCancellingChange, onStatusChange, onProgressChange, onRunsLoaded }, ref) {
   const fieldId = useId();
   const [run, setRun] = useState<ReportRunView | null>(null);
   const [cancelling, setCancelling] = useState(false);
@@ -101,6 +100,8 @@ export const IntegratedReport = forwardRef<IntegratedReportHandle, {
   const eventSeq = useRef(0);
   const eventsLoading = useRef(false);
   const materialsRef = useRef<{ runId: string; value: ReportRunMaterials } | null>(null);
+  const candidateKeyRef = useRef("");
+  const runReads = useRef(0);
   const [now, setNow] = useState(() => Date.now());
   const [tab, setTab] = useState<ReportTab>("report");
   const [materials, setMaterials] = useState<{ runId: string; value: ReportRunMaterials } | null>(null);
@@ -187,16 +188,26 @@ export const IntegratedReport = forwardRef<IntegratedReportHandle, {
   }
 
   async function loadRun(id: string) {
+    runReads.current += 1;
+    try { await readRun(id); } finally { runReads.current -= 1; }
+  }
+
+  async function readRun(id: string) {
     const sequence = ++readSequence.current;
     const value = await fetchReportRun(id);
     if (!alive.current || currentId.current !== id || readSequence.current !== sequence) return;
     if (!updateRun(value)) return;
-    await loadEvents(id);
-    await loadMaterials(id);
-    if (value.candidate_version > 0) {
+    const candidateKey = `${id}:${value.candidate_version}:${value.state}`;
+    const readCandidate = async () => {
+      if (value.candidate_version <= 0 || candidateKeyRef.current === candidateKey) return;
       const content = await fetchReportRunCandidate(id);
-      if (alive.current && currentId.current === id && readSequence.current === sequence) setCandidate(content);
-    }
+      if (alive.current && currentId.current === id && readSequence.current === sequence) {
+        candidateKeyRef.current = candidateKey;
+        setCandidate(content);
+      }
+    };
+    // 详情之外的读取互不依赖，并行进行，首屏不必等整段事件读完才显示正文。
+    await Promise.all([loadEvents(id), loadMaterials(id), readCandidate()]);
   }
 
   useEffect(() => {
@@ -235,7 +246,8 @@ export const IntegratedReport = forwardRef<IntegratedReportHandle, {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
     async function poll() {
-      try { await loadRun(id); }
+      // 上一轮读取尚未结束（如首屏读取较慢）时跳过本次，避免新序号作废进行中的结果。
+      try { if (runReads.current === 0) await loadRun(id); }
       catch (err) {
         if (!cancelled) setError(formatApiErrorMessage(err, "读取进度失败，可重新打开此会话。"));
       }
@@ -386,6 +398,10 @@ export const IntegratedReport = forwardRef<IntegratedReportHandle, {
   const currentMaterials = run && materials?.runId === run.run_id ? materials.value : null;
   const totalMs = steps.length ? ((active ? now : steps[steps.length - 1].endedAt ?? now) - steps[0].startedAt) : 0;
   const runningStep = active ? [...steps].reverse().find((step) => step.state === "running") : undefined;
+  const statusMeta = [
+    runningStep && runningStep.label !== statusLabel ? runningStep.label : "",
+    steps.length ? `${active ? "已用时" : "共用时"} ${formatDuration(totalMs)}` : "",
+  ].filter(Boolean).join(" · ");
   const body = run?.report?.report_markdown ?? candidate?.candidate_report.report_markdown;
   const exportKind = run && !active ? exportKindOf(run) : null;
   const snippets = currentMaterials?.knowledge_snippets ?? [];
@@ -429,12 +445,8 @@ export const IntegratedReport = forwardRef<IntegratedReportHandle, {
     {run && <div className="report-statusline" data-tone={tone}>
       <span className="report-state-dot" aria-hidden="true" />
       <strong className="report-status" role="status">{statusLabel}</strong>
-      {runningStep && runningStep.label !== statusLabel && <span className="report-status-step">{runningStep.label}</span>}
-      {steps.length > 0 && <span className="report-status-time">{active ? "已用时" : "共用时"} {formatDuration(totalMs)}</span>}
+      {statusMeta && <span className="report-status-meta">{statusMeta}</span>}
       <span className="report-statusline-actions">
-        {steps.length > 0 && onShowActivity && <button type="button" className="report-link-button" onClick={onShowActivity}>
-          <ListChecks size={15} aria-hidden="true" />生成过程
-        </button>}
         {active && <button type="button" className="report-danger" disabled={cancelling} aria-busy={cancelling} onClick={() => void cancel()}><Square size={14} aria-hidden="true" />{cancelling ? "正在停止" : "停止生成"}</button>}
         {canResume && run && <button type="button" className="report-primary" disabled={busy || (!run.can_resume_protocol && unknownRequests > 0 && !retryUnknown)}
           onClick={() => void action(async () => {
