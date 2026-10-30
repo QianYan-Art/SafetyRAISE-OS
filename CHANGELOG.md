@@ -4,6 +4,17 @@
 
 ## [未发布]
 
+## [0.3.9] - 2026-10-31
+
+### 变更
+
+- 去掉状态行的“生成过程”按钮，生成过程统一从页头处理记录进入；处理记录中的进度卡与其他记录同宽对齐。
+- 窄屏下历史报告选择铺满一行，标签页间距收紧以完整显示，步骤与用时合并为一行说明，不再出现行首分隔点。
+
+### 修复
+
+- 报告详情、事件、中间产物与候选稿改为并行读取，首屏不再等事件读完才显示正文；候选稿只在版本或状态变化时重读；轮询遇到仍在进行的读取时跳过，不再作废刚取回的结果。
+
 ## [0.3.8] - 2026-10-31
 
 ### 变更
@@ -136,7 +147,8 @@
 - 新增 CI（后端测试、前端测试与构建、提交历史密钥扫描）、贡献指南、安全策略与 issue / PR 模板。
 - 在 README 与 NOTICE 中说明可选视频依赖 Ultralytics YOLO 的 AGPL-3.0 许可。
 
-[未发布]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.8...HEAD
+[未发布]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.9...HEAD
+[0.3.9]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.8...v0.3.9
 [0.3.8]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.7...v0.3.8
 [0.3.7]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.6...v0.3.7
 [0.3.6]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.5...v0.3.6
