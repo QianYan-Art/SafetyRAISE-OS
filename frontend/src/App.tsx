@@ -849,9 +849,22 @@ function WorkspaceApp({
   const uploadDropzoneHintLines = buildUploadDropzoneHintLines(publicAppConfig.upload_limits);
   const shouldShowUploadWorkbench = Boolean(activeSession && !activeSession.draftJson && !activeSession.reportResult);
 
+  // Harness 报告保存在服务端运行记录而非会话字段；记下已有报告的档案，打开时直接进入查看报告。
+  const sessionsWithRunsRef = useRef(new Set<string>());
   useEffect(() => {
-    setWorkspaceStage(activeSession?.reportResult ? "report" : activeSession?.draftJson ? "facts" : "materials");
+    const hasReport = Boolean(activeSession?.reportResult)
+      || Boolean(activeSessionId && sessionsWithRunsRef.current.has(activeSessionId));
+    setWorkspaceStage(hasReport ? "report" : activeSession?.draftJson ? "facts" : "materials");
   }, [activeSessionId, Boolean(activeSession?.draftJson), Boolean(activeSession?.reportResult)]);
+
+  const handleIntegratedRunsLoaded = useCallback((hasRuns: boolean) => {
+    const id = activeSessionIdRef.current;
+    if (!hasRuns || !id) return;
+    const known = sessionsWithRunsRef.current.has(id);
+    sessionsWithRunsRef.current.add(id);
+    // 只在首次得知该档案有报告时从默认的核对事实切过去，不覆盖用户之后的手动切换。
+    if (!known) setWorkspaceStage((stage) => stage === "facts" ? "report" : stage);
+  }, []);
 
   useEffect(() => {
     if (!harnessEnabled) setWorkspaceMode("legacy");
@@ -3106,6 +3119,7 @@ function WorkspaceApp({
                     onCancellingChange={setIntegratedReportCancelling}
                     onStatusChange={setIntegratedReportStatus}
                     onProgressChange={setIntegratedReportProgress}
+                    onRunsLoaded={handleIntegratedRunsLoaded}
                   />}
 
                   {!harnessOnline && !activeSession.reportResult && <div className="stage-empty"><FileText size={40} /><h2>{isGeneratingReport ? "正在生成分析报告" : "尚无分析报告"}</h2>{isGeneratingReport ? <><p>专家意见与报告生成可能需要一些时间，当前档案处理记录会持续更新。</p><button type="button" className="btn-danger" onClick={handleStopReportGeneration}>停止生成</button></> : <button type="button" className="btn-secondary" onClick={() => setWorkspaceStage("facts")}>核对事实</button>}</div>}

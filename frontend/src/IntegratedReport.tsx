@@ -51,7 +51,8 @@ export const IntegratedReport = forwardRef<IntegratedReportHandle, {
   onCancellingChange?: (cancelling: boolean) => void;
   onStatusChange?: (label: string) => void;
   onProgressChange?: (progress: { steps: ReportProgressStep[]; active: boolean; status: string } | null) => void;
-}>(function IntegratedReport({ sessionId, onPersistDraft, onBusyChange, onActiveChange, onCancellingChange, onStatusChange, onProgressChange }, ref) {
+  onRunsLoaded?: (hasRuns: boolean) => void;
+}>(function IntegratedReport({ sessionId, onPersistDraft, onBusyChange, onActiveChange, onCancellingChange, onStatusChange, onProgressChange, onRunsLoaded }, ref) {
   const fieldId = useId();
   const [run, setRun] = useState<ReportRunView | null>(null);
   const [cancelling, setCancelling] = useState(false);
@@ -168,6 +169,7 @@ export const IntegratedReport = forwardRef<IntegratedReportHandle, {
       .then(async ([rows, materials]) => {
         if (!valid) return;
         setHistory(rows.runs);
+        onRunsLoaded?.(rows.runs.length > 0);
         setEvidence(materials);
         if (rows.runs[0]) {
           updateRun(rows.runs[0]);

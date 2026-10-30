@@ -518,6 +518,14 @@ describe("IntegratedReport 真实组件交互", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
+  it("读取运行记录后告知工作台该档案是否已有报告", async () => {
+    const loaded = vi.fn();
+    api.listReportRuns.mockResolvedValue({ runs: [run()], next_cursor: null });
+    api.fetchReportRun.mockResolvedValue(run());
+    render(<IntegratedReport sessionId="session-1" onPersistDraft={vi.fn()} onBusyChange={vi.fn()} onRunsLoaded={loaded} />);
+    await waitFor(() => expect(loaded).toHaveBeenCalledWith(true));
+  });
+
   it("报告记录读取失败不阻止离开档案", async () => {
     const ref = createRef<IntegratedReportHandle>();
     api.listReportRuns.mockRejectedValueOnce(new Error("暂时无法读取记录"));
