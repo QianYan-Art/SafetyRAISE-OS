@@ -528,20 +528,33 @@ describe("IntegratedReport 真实组件交互", () => {
     await waitFor(() => expect(loaded).toHaveBeenCalledWith(true));
   });
 
-  it("展示专家指导意见与知识库检索片段", async () => {
+  it("展示专家指导意见与参考依据", async () => {
     const user = userEvent.setup();
     api.listReportRuns.mockResolvedValue({ runs: [run()], next_cursor: null });
     api.fetchReportRunMaterials.mockResolvedValue({
       guidance: { 元信息: { 事故标题: "合成事故" }, 指导意见清单: { 责任判定提示: "需核实证据" } },
       knowledge_snippets: [{ id: "law#0001", text: "合成法条原文" }],
+      lookups: [
+        { kind: "initial", role: "generator", query: "初始查询", result_ids: ["law#0001"] },
+        { kind: "search", role: "generator", query: "模型查询", result_ids: ["law#0002"] },
+        { kind: "read", role: "reviewer", query: null, result_ids: ["law#0002"] },
+      ],
+      references: [
+        { id: "law#0001", text: "标题：合成初始法条\n正文", sources: ["initial"], roles: ["generator"] },
+        { id: "law#0002", text: "标题：合成引用法条\n第一条 合成原文", sources: ["search", "read", "cited"], roles: ["generator", "reviewer"] },
+      ],
     });
     render(<IntegratedReport sessionId="session-1" onPersistDraft={vi.fn()} onBusyChange={vi.fn()} />);
-    await waitFor(() => expect(screen.getByRole("tab", { name: "检索片段 1" })).not.toBeNull());
+    await waitFor(() => expect(screen.getByRole("tab", { name: "参考依据 2" })).not.toBeNull());
     await user.click(screen.getByRole("tab", { name: "专家指导意见" }));
     expect(screen.getByText("责任判定提示")).not.toBeNull();
     expect(screen.getByText("需核实证据")).not.toBeNull();
-    await user.click(screen.getByRole("tab", { name: "检索片段 1" }));
-    expect(screen.getByText("合成法条原文")).not.toBeNull();
+    await user.click(screen.getByRole("tab", { name: "参考依据 2" }));
+    const titles = screen.getAllByText(/^合成.*法条$/).map((node) => node.textContent);
+    expect(titles).toEqual(["合成引用法条", "合成初始法条"]);
+    expect(screen.getByText("“模型查询”")).not.toBeNull();
+    expect(screen.getByText(/报告引用 1 条/)).not.toBeNull();
+    expect(screen.getByText("law#0002 · 撰写模型、审查模型")).not.toBeNull();
   });
 
   it("重新生成时关联本档案最近一份报告以复用专家指导", async () => {

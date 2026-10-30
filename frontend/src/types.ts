@@ -534,9 +534,27 @@ export interface ReportAuthorizationPreview {
   knowledge_collections: ReportKnowledgeCollection[];
 }
 
+export type ReportReferenceSource = "initial" | "search" | "read" | "cited";
+
+export interface ReportReference {
+  id: string;
+  text: string;
+  sources: ReportReferenceSource[];
+  roles: string[];
+}
+
+export interface ReportLookup {
+  kind: "initial" | "search" | "read";
+  role: string | null;
+  query: string | null;
+  result_ids: string[];
+}
+
 export interface ReportRunMaterials {
   guidance: Record<string, unknown> | null;
   knowledge_snippets: Array<{ id: string | null; text: string }>;
+  lookups?: ReportLookup[];
+  references?: ReportReference[];
 }
 
 export interface ReportRunCandidate {

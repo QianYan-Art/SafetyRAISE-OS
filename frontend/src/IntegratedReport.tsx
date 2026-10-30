@@ -13,6 +13,7 @@ import {
   parseAccidentData, RUN_TERMINAL_STATES,
 } from "./ReportHarnessPanel";
 import { ReportFeedback } from "./ReportFeedback";
+import { ReportReferences } from "./ReportReferences";
 import { EXPORT_NOTICES } from "./feedbackOptions";
 import { formatDuration, summarizeReportProgress, type ReportProgressStep } from "./reportProgress";
 import type {
@@ -58,7 +59,7 @@ export interface IntegratedReportHandle {
   isTransitionBlocked: () => boolean;
 }
 
-type ReportTab = "report" | "guidance" | "snippets" | "evidence";
+type ReportTab = "report" | "guidance" | "references" | "evidence";
 
 const labels: Record<string, string> = {
   queued: "等待生成", preparing: "分析事故并检索依据", generating: "撰写报告",
@@ -411,12 +412,12 @@ export const IntegratedReport = forwardRef<IntegratedReportHandle, {
   ].filter(Boolean).join(" · ");
   const body = run?.report?.report_markdown ?? candidate?.candidate_report.report_markdown;
   const exportKind = run && !active ? exportKindOf(run) : null;
-  const snippets = currentMaterials?.knowledge_snippets ?? [];
+  const referenceCount = currentMaterials?.references?.length ?? 0;
   const evidenceCount = evidence?.records.length ?? 0;
   const tabs: ReadonlyArray<{ id: ReportTab; label: string }> = [
     { id: "report", label: "报告正文" },
     { id: "guidance", label: "专家指导意见" },
-    { id: "snippets", label: snippets.length ? `检索片段 ${snippets.length}` : "检索片段" },
+    { id: "references", label: referenceCount ? `参考依据 ${referenceCount}` : "参考依据" },
     { id: "evidence", label: evidenceCount ? `补充材料 ${evidenceCount}` : "补充材料" },
   ];
   const tone = !run ? "idle" : active ? "running"
@@ -501,12 +502,7 @@ export const IntegratedReport = forwardRef<IntegratedReportHandle, {
       {tab === "guidance" && (currentMaterials?.guidance
         ? <div className="report-guidance"><GuidanceTree value={currentMaterials.guidance} /></div>
         : <p className="report-empty">{active ? "专家分析完成后显示在这里。" : "这份报告没有专家指导意见。"}</p>)}
-      {tab === "snippets" && (snippets.length
-        ? snippets.map((item, index) => <article key={item.id ?? index} className="report-snippet">
-          {item.id && <strong>{item.id}</strong>}
-          <p>{item.text}</p>
-        </article>)
-        : <p className="report-empty">{active ? "知识库检索完成后显示在这里。" : "这份报告没有初始检索片段。"}</p>)}
+      {tab === "references" && <ReportReferences materials={currentMaterials} active={active} />}
       {tab === "evidence" && <div className="report-evidence-section">
         <p className="report-tab-hint">补充材料随事故信息提交给下一份报告，已生成的报告不受影响。</p>
         {evidence?.records.map((item) => <article key={item.evidence_id} className="report-evidence-item">

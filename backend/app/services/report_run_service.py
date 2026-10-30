@@ -57,6 +57,66 @@ def _failure_detail(exc: BaseException | None) -> dict | None:
     return None
 
 
+
+def reference_trail(record: dict) -> tuple[list[dict], list[dict]]:
+    """由已持久化的工具历史整理检索记录与参考依据，只读不改运行记录。
+
+    来源标记：initial 为生成前的初始检索，search 为模型主动检索命中，read 为模型读取全文，
+    cited 为当前候选稿断言实际引用；同一条知识按首次出现排序并合并标记与角色。
+    """
+    initial_ids = [item.get("id") for item in record.get("initial_knowledge_snippets") or []
+                   if isinstance(item, dict) and item.get("id")]
+    cited = {ref for claim in (record.get("candidate") or {}).get("claims") or []
+             for ref in claim.get("knowledge_refs") or []}
+    lookups: list[dict] = []
+    references: dict[str, dict] = {}
+
+    def remember(item: dict, source: str, role: str | None) -> None:
+        chunk_id = item.get("id")
+        if not isinstance(chunk_id, str) or not chunk_id:
+            return
+        entry = references.setdefault(chunk_id, {
+            "id": chunk_id, "text": item.get("text") or "", "sources": [], "roles": [],
+        })
+        if not entry["text"] and item.get("text"):
+            entry["text"] = item["text"]
+        if source not in entry["sources"]:
+            entry["sources"].append(source)
+        if role and role not in entry["roles"]:
+            entry["roles"].append(role)
+
+    initial_seen = False
+    for entry in record.get("tool_history") or []:
+        if not isinstance(entry, dict) or entry.get("status") != "completed":
+            continue
+        name, role = entry.get("name"), entry.get("role")
+        private = entry.get("private") if isinstance(entry.get("private"), dict) else {}
+        arguments = private.get("arguments") if isinstance(private.get("arguments"), dict) else {}
+        result = private.get("result") if isinstance(private.get("result"), dict) else {}
+        items = [item for item in result.get("items") or [] if isinstance(item, dict)]
+        result_ids = [item.get("id") for item in items if item.get("id")]
+        if name == "search_knowledge":
+            # 第一次与初始片段完全一致的检索是生成前的系统检索，不算模型主动检索。
+            is_initial = not initial_seen and bool(initial_ids) and result_ids == initial_ids
+            initial_seen = initial_seen or is_initial
+            source = "initial" if is_initial else "search"
+            lookups.append({"kind": source, "role": role, "query": arguments.get("query"),
+                            "result_ids": result_ids})
+        elif name == "read_knowledge":
+            source = "read"
+            lookups.append({"kind": "read", "role": role, "query": None, "result_ids": result_ids})
+        else:
+            continue
+        for item in items:
+            remember(item, source, role)
+    for item in record.get("initial_knowledge_snippets") or []:
+        if isinstance(item, dict):
+            remember(item, "initial", None)
+    for chunk_id in cited:
+        if chunk_id in references:
+            references[chunk_id]["sources"].append("cited")
+    return lookups, list(references.values())
+
 class ReportRunService:
     def __init__(self, store: RunStore, dependencies: ReportExecutionDependencies):
         self.store = store
@@ -185,14 +245,16 @@ class ReportRunService:
         return deepcopy(prepared)
 
     def materials(self, owner: str, run_id: str) -> dict:
-        """所有者可见的中间产物：专家指导意见与初始检索片段；尚未准备完成时返回空值。"""
+        """所有者可见的中间产物：专家指导意见、初始检索片段与参考依据；尚未准备完成时返回空值。"""
         record = self.store.get(owner, run_id)
         prepared = record.get("prepared") or {}
         snippets = [
             {"id": item.get("id"), "text": item.get("text", "")}
             for item in record.get("initial_knowledge_snippets") or [] if isinstance(item, dict)
         ]
-        return {"guidance": prepared.get("guidance"), "knowledge_snippets": snippets}
+        lookups, references = reference_trail(record)
+        return {"guidance": prepared.get("guidance"), "knowledge_snippets": snippets,
+                "lookups": lookups, "references": references}
 
     def candidate(self, owner: str, run_id: str) -> dict:
         record = self.store.get(owner, run_id)

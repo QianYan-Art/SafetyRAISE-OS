@@ -434,3 +434,36 @@ def test_child_run_reuses_parent_guidance_only_for_identical_snapshot():
     ))
     assert asyncio.run(service.execute("owner", changed["run_id"], 0))["state"] == "published"
     assert roles.calls.count("prepare") == 2
+
+
+def test_reference_trail_marks_initial_search_read_and_cited_sources():
+    from app.services.report_run_service import reference_trail
+
+    def tool(name, role, items, query=None):
+        arguments = {"query": query} if query else {"chunk_ids": [item["id"] for item in items]}
+        return {"name": name, "role": role, "status": "completed",
+                "private": {"arguments": arguments, "result": {"items": items}}}
+
+    a, b, c = ({"id": key, "text": f"合成片段{key}"} for key in ("law#1", "law#2", "law#3"))
+    record = {
+        "initial_knowledge_snippets": [a],
+        "tool_history": [
+            tool("search_knowledge", "generator", [a], "初始查询"),
+            tool("search_knowledge", "generator", [a, b], "模型查询"),
+            tool("read_knowledge", "reviewer", [c]),
+            {"name": "search_knowledge", "role": "generator", "status": "denied"},
+        ],
+        "candidate": {"claims": [{"knowledge_refs": ["law#3"]}]},
+    }
+    lookups, references = reference_trail(record)
+    assert [(item["kind"], item["query"], item["result_ids"]) for item in lookups] == [
+        ("initial", "初始查询", ["law#1"]),
+        ("search", "模型查询", ["law#1", "law#2"]),
+        ("read", None, ["law#3"]),
+    ]
+    by_id = {item["id"]: item for item in references}
+    assert by_id["law#1"]["sources"] == ["initial", "search"]
+    assert by_id["law#2"]["sources"] == ["search"]
+    assert by_id["law#3"]["sources"] == ["read", "cited"]
+    assert by_id["law#3"]["roles"] == ["reviewer"]
+    assert by_id["law#3"]["text"] == "合成片段law#3"

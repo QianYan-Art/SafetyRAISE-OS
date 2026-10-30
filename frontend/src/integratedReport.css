@@ -142,9 +142,28 @@
 .report-guidance dl dl { margin-top: 6px; padding-left: 14px; border-left: 1px solid var(--border-color); }
 .report-guidance dt { font-weight: 600; }
 .report-guidance dd { margin: 2px 0 0; overflow-wrap: anywhere; }
-.report-snippet { margin: 0 0 12px; padding: 10px 12px; border-left: 3px solid var(--border-color); background: var(--bg-subtle); font-size: 13px; line-height: 1.7; }
-.report-snippet strong { font-variant-numeric: tabular-nums; }
-.report-snippet p { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* 参考依据：过程记录在上、条目在下；标签只区分来源，“报告引用”用强调色。 */
+.report-references h4 { margin: 20px 0 10px; font-size: 14px; font-weight: 600; }
+.report-references > .report-tab-hint { margin-bottom: 0; }
+.report-lookups ol { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.report-lookups li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; font-size: 13px; line-height: 1.6; }
+.report-lookup-role { color: var(--workbench-muted, var(--color-text-muted)); }
+.report-lookup-text { flex: 1 1 240px; min-width: 0; overflow-wrap: anywhere; }
+.report-lookup-count { color: var(--workbench-muted, var(--color-text-muted)); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.report-ref-tags { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.report-ref-tag {
+  display: inline-flex; align-items: center; min-height: 22px; padding: 0 8px; border-radius: 999px;
+  background: var(--bg-subtle); color: var(--workbench-muted, var(--color-text-muted)); font-size: 12px; white-space: nowrap;
+}
+.report-ref-tag[data-source="cited"] { background: color-mix(in srgb, var(--primary-color) 12%, transparent); color: var(--color-accent-text, var(--primary-color)); }
+.report-ref-tag[data-source="read"] { color: var(--color-text); }
+.report-reference { padding: 12px 0; border-bottom: 1px solid var(--border-color); }
+.report-reference:first-of-type { border-top: 1px solid var(--border-color); }
+.report-reference header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; font-size: 14px; }
+.report-reference small { display: block; margin-top: 4px; color: var(--workbench-muted, var(--color-text-muted)); font-size: 12px; overflow-wrap: anywhere; }
+.integrated-report .report-reference-text { margin: 6px 0 0; }
+.integrated-report .report-reference-text > summary { min-height: 32px; padding: 4px 0; font-size: 13px; font-weight: 500; color: var(--color-accent-text, var(--primary-color)); }
+.report-reference-text p { margin: 6px 0 0; padding: 10px 12px; background: var(--bg-subtle); font-size: 13px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
 .integrated-report .report-retry-confirmation { flex-basis: 100%; padding: 12px; background: var(--bg-subtle); border-left: 3px solid var(--warning-color); }
 .integrated-report .form-error { color: var(--danger-color); font-size: 13px; }
 .report-limit-notice { font-size: 13px; color: var(--warning-color); padding: 12px 0; border-top: 1px solid var(--border-color); }
