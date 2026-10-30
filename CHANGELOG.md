@@ -4,6 +4,20 @@
 
 ## [未发布]
 
+## [0.3.2] - 2026-10-30
+
+### 修复
+
+- Modal 专家端点的长请求会每约 150 秒返回一次 `303`；transport 此前只跟随一跳，专家调用超过约 300 秒就被记为结果未知，报告挂起。现在在原超时内逐跳取回同一尝试的结果，每跳都校验同源、同路径和唯一 `__modal_attempt_token`，最多 24 跳，不重发 `POST`。
+
+### 安全
+
+- 后端运行依赖新增 `certifi>=2026.10.19`，与 2026-10 CA 泄露事件后更新的根证书库保持一致；部署镜像同时更新系统 `ca-certificates`。
+
+### 已知限制
+
+- 页面上的"确认重试"只放行本次运行请求账本中的未知请求，不能解除共享费用账本中的未结算 attempt；须由操作者按[部署说明](docs/deployment.md#未知费用请求)确认。
+
 ## [0.3.1] - 2026-10-07
 
 ### 安全
@@ -79,7 +93,8 @@
 - 新增 CI（后端测试、前端测试与构建、提交历史密钥扫描）、贡献指南、安全策略与 issue / PR 模板。
 - 在 README 与 NOTICE 中说明可选视频依赖 Ultralytics YOLO 的 AGPL-3.0 许可。
 
-[未发布]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.1...HEAD
+[未发布]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.2.0...v0.2.1
