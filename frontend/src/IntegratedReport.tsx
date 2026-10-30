@@ -45,6 +45,13 @@ function GuidanceTree({ value }: { value: unknown }) {
   return <>{String(value)}</>;
 }
 
+/** 历史列表没有逐份读取审查问题，按终止原因给出与状态行一致的称呼。 */
+function historyLabel(item: ReportRunView): string {
+  if (item.terminal_reason === "budget_exhausted") return labels.budget_exhausted;
+  if (item.state === "needs_review" && item.terminal_reason === "invalid_review_or_candidate") return "未通过独立审查";
+  return labels[item.state] ?? item.state;
+}
+
 export interface IntegratedReportHandle {
   generate: (json: string) => Promise<void>;
   cancel: () => Promise<void>;
@@ -437,7 +444,7 @@ export const IntegratedReport = forwardRef<IntegratedReportHandle, {
           void loadRun(id).catch((err) => setError(formatApiErrorMessage(err, "读取历史报告失败。")));
         }}>
         {history.map((item, index) => <option key={item.run_id} value={item.run_id}>
-          报告 {history.length - index} · {labels[item.state] ?? item.state}
+          报告 {history.length - index} · {item.run_id === run.run_id ? statusLabel : historyLabel(item)}
         </option>)}
       </select>}
     </header>
