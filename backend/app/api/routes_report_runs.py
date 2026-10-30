@@ -191,6 +191,12 @@ def get_candidate(run_id: UUID, user: AuthenticatedUser = Depends(get_current_us
     return service.candidate(user.id, str(run_id))
 
 
+@router.get("/{run_id}/materials")
+def get_materials(run_id: UUID, user: AuthenticatedUser = Depends(get_current_user),
+                  service: ReportRunService = Depends(get_report_run_service)):
+    return service.materials(user.id, str(run_id))
+
+
 @router.get("/{run_id}/authorization-preview")
 def authorization_preview(run_id: UUID, user: AuthenticatedUser = Depends(get_current_user),
                           service: ReportRunService = Depends(get_report_run_service)):

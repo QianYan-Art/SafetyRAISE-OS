@@ -128,6 +128,14 @@
 .report-progress-step.error .report-progress-dot { background: var(--warning-color); }
 .report-progress-time { color: var(--workbench-muted, var(--color-text-muted)); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .report-progress-note { margin: 10px 0 0; padding: 8px 12px; border-left: 3px solid var(--primary-color); background: var(--bg-subtle); line-height: 1.6; }
+/* 中间产物：专家指导意见与初始检索片段，默认收起，沿用生成过程的摘要样式 */
+.report-materials { margin: -6px 0 20px; font-size: 13px; line-height: 1.7; }
+.report-materials > summary { cursor: pointer; color: var(--workbench-muted, var(--color-text-muted)); padding: 4px 0; }
+.report-guidance dl { margin: 6px 0 0; padding-left: 12px; border-left: 1px solid var(--border-color); display: grid; gap: 6px; }
+.report-guidance dt { font-weight: 500; }
+.report-guidance dd { margin: 2px 0 0; overflow-wrap: anywhere; }
+.report-snippet { margin: 10px 0 0; padding: 8px 12px; border-left: 3px solid var(--border-color); background: var(--bg-subtle); }
+.report-snippet p { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 16em; overflow-y: auto; }
 /* 下载：非正式稿附一条说明，沿用页面已有的浅底色条提示 */
 .report-export { display: grid; gap: 10px; margin: -6px 0 20px; }
 .report-export-notice {

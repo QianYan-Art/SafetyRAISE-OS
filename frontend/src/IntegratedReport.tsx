@@ -5,7 +5,7 @@ import { Check, Download, FileText, Pencil, Play, RotateCw, Square, Trash2, X } 
 import {
   authorizeReportRun, cancelReportRun, createReportRun, downloadReportRunExport,
   executeReportRunStream, fetchAuthorizationPreview, fetchReportEvidence,
-  fetchReportRun, fetchReportRunCandidate, fetchReportRunEvents, formatApiErrorMessage, listReportRuns,
+  fetchReportRun, fetchReportRunCandidate, fetchReportRunEvents, fetchReportRunMaterials, formatApiErrorMessage, listReportRuns,
   resumeReportRunStream, saveReportEvidence,
 } from "./api";
 import {
@@ -16,7 +16,7 @@ import { ReportFeedback } from "./ReportFeedback";
 import { EXPORT_NOTICES } from "./feedbackOptions";
 import { formatDuration, summarizeReportProgress, type ReportProgressStep } from "./reportProgress";
 import type {
-  ReportEvidenceResponse, ReportExportFormat, ReportExportKind, ReportRunCandidate, ReportRunEvent, ReportRunView,
+  ReportEvidenceResponse, ReportExportFormat, ReportExportKind, ReportRunCandidate, ReportRunEvent, ReportRunMaterials, ReportRunView,
 } from "./types";
 import "./integratedReport.css";
 
@@ -28,6 +28,21 @@ const EXPORT_FORMATS: ReadonlyArray<{ format: ReportExportFormat; label: string 
 function exportKindOf(run: ReportRunView): ReportExportKind | null {
   if (run.export_kind !== undefined) return run.export_kind;
   return run.state === "published" && run.formal_export_eligible ? "formal" : null;
+}
+
+/** 专家指导为嵌套对象，逐层展开为标题与条目，不改写模型原文。 */
+function GuidanceTree({ value }: { value: unknown }) {
+  if (value === null || value === undefined || value === "") return null;
+  if (Array.isArray(value)) {
+    return <ul>{value.map((item, index) => <li key={index}><GuidanceTree value={item} /></li>)}</ul>;
+  }
+  if (typeof value === "object") {
+    return <dl>{Object.entries(value as Record<string, unknown>).map(([key, item]) => <div key={key} className="report-guidance-entry">
+      <dt>{key}</dt>
+      <dd><GuidanceTree value={item} /></dd>
+    </div>)}</dl>;
+  }
+  return <>{String(value)}</>;
 }
 
 export interface IntegratedReportHandle {
@@ -82,7 +97,9 @@ export const IntegratedReport = forwardRef<IntegratedReportHandle, {
   const eventRun = useRef<string | null>(null);
   const eventSeq = useRef(0);
   const eventsLoading = useRef(false);
+  const materialsRef = useRef<{ runId: string; value: ReportRunMaterials } | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  const [materials, setMaterials] = useState<{ runId: string; value: ReportRunMaterials } | null>(null);
   const active = Boolean(run && !RUN_TERMINAL_STATES.has(run.state) && run.state !== "suspended");
   const statusLabel = cancelling ? "正在停止" : labels[run?.state ?? ""] ?? "处理中";
 
@@ -147,12 +164,26 @@ export const IntegratedReport = forwardRef<IntegratedReportHandle, {
     }
   }
 
+  // 专家指导与初始检索片段在准备阶段后不再变化，取到指导意见后不再重复读取。
+  async function loadMaterials(id: string) {
+    if (materialsRef.current?.runId === id && materialsRef.current.value.guidance) return;
+    try {
+      const value = await fetchReportRunMaterials(id);
+      if (!alive.current || currentId.current !== id) return;
+      materialsRef.current = { runId: id, value };
+      setMaterials(materialsRef.current);
+    } catch {
+      // 中间产物只是辅助展示，读取失败不影响报告状态与正文。
+    }
+  }
+
   async function loadRun(id: string) {
     const sequence = ++readSequence.current;
     const value = await fetchReportRun(id);
     if (!alive.current || currentId.current !== id || readSequence.current !== sequence) return;
     if (!updateRun(value)) return;
     await loadEvents(id);
+    await loadMaterials(id);
     if (value.candidate_version > 0) {
       const content = await fetchReportRunCandidate(id);
       if (alive.current && currentId.current === id && readSequence.current === sequence) setCandidate(content);
@@ -270,9 +301,12 @@ export const IntegratedReport = forwardRef<IntegratedReportHandle, {
       const materials = await fetchReportEvidence(sessionId);
       if (!alive.current) return;
       setEvidence(materials);
+      // 关联本档案最近一份报告；事实快照不变时后端沿用其专家指导意见。
+      const parent = history[0]?.run_id;
       let value = await createReportRun({
         request_id: createEvidenceId(), session_id: sessionId,
         accident_data: data, evidence_revision: materials.revision,
+        ...(parent ? { parent_run_id: parent } : {}),
       });
       if (!alive.current) return;
       updateRun(value);
@@ -340,6 +374,7 @@ export const IntegratedReport = forwardRef<IntegratedReportHandle, {
     finally { if (alive.current) setExporting(false); }
   }
 
+  const currentMaterials = run && materials?.runId === run.run_id ? materials.value : null;
   const totalMs = steps.length ? ((active ? now : steps[steps.length - 1].endedAt ?? now) - steps[0].startedAt) : 0;
   const body = run?.report?.report_markdown ?? candidate?.candidate_report.report_markdown;
   const exportKind = run && !active ? exportKindOf(run) : null;
@@ -433,6 +468,17 @@ export const IntegratedReport = forwardRef<IntegratedReportHandle, {
           </li>)}
         </ol>
         {active && <p className="report-progress-note">生成在服务器后台进行，刷新或关闭页面不会中断；重新打开此档案即可继续查看进度。</p>}
+      </details>}
+      {currentMaterials?.guidance && <details className="report-materials report-guidance">
+        <summary>专家指导意见</summary>
+        <GuidanceTree value={currentMaterials.guidance} />
+      </details>}
+      {currentMaterials && currentMaterials.knowledge_snippets.length > 0 && <details className="report-materials">
+        <summary>知识库检索片段（{currentMaterials.knowledge_snippets.length}）</summary>
+        {currentMaterials.knowledge_snippets.map((item, index) => <article key={item.id ?? index} className="report-snippet">
+          {item.id && <strong>{item.id}</strong>}
+          <p>{item.text}</p>
+        </article>)}
       </details>}
       {exportKind && <div className="report-export" data-kind={exportKind}>
         {EXPORT_NOTICES[exportKind] && <p className="report-export-notice">{EXPORT_NOTICES[exportKind]}</p>}

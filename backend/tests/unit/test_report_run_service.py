@@ -404,3 +404,33 @@ def test_missing_review_coverage_is_returned_to_reviewer_before_stopping(fix):
         assert roles.calls == ["prepare", "generate", "review", "review", "review"]
         detail = service.store.get("owner", run["run_id"])["terminal_detail"]
         assert detail["errors"][0]["type"] == "review_coverage"
+
+
+def test_child_run_reuses_parent_guidance_only_for_identical_snapshot():
+    roles = SyntheticRoles()
+    service = ReportRunService(MemoryStore(), dependencies(roles))
+    parent = create(service)
+    assert asyncio.run(service.execute("owner", parent["run_id"], 0))["state"] == "published"
+    assert roles.calls.count("prepare") == 1
+
+    child = service.create("owner", CreateRunRequest(
+        request_id=uuid4(), session_id="synthetic-session",
+        accident_data={"天气": "合成晴天"}, evidence_revision=0, parent_run_id=parent["run_id"],
+    ))
+    assert asyncio.run(service.execute("owner", child["run_id"], 0))["state"] == "published"
+    # 快照一致：沿用父运行的专家指导，不再调用 prepare，并留下可审计事件。
+    assert roles.calls.count("prepare") == 1
+    record = service.store.get("owner", child["run_id"])
+    assert record["prepared"] == service.store.get("owner", parent["run_id"])["prepared"]
+    reused = [item for item in service.store.events("owner", child["run_id"])["events"]
+              if item["data"].get("step") == "prepared_reused"]
+    assert [item["data"]["parent_run_id"] for item in reused] == [parent["run_id"]]
+    materials = service.materials("owner", child["run_id"])
+    assert materials["guidance"] == record["prepared"]["guidance"]
+
+    changed = service.create("owner", CreateRunRequest(
+        request_id=uuid4(), session_id="synthetic-session",
+        accident_data={"天气": "合成阴天"}, evidence_revision=0, parent_run_id=parent["run_id"],
+    ))
+    assert asyncio.run(service.execute("owner", changed["run_id"], 0))["state"] == "published"
+    assert roles.calls.count("prepare") == 2

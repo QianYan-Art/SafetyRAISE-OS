@@ -280,6 +280,9 @@ Windows 会话锁使用大小写等价键；屏障同时阻断大小写别名，
 
 未知请求默认返回409，只有显式接受重复计费风险且预算充足才允许重试；
 旧未知预留继续占用，新请求另行预留，不重置同run预算。
+创建 run 可带同档案的 `parent_run_id`：当父运行已完成准备阶段，且事实快照摘要与端点配置摘要都与本次一致时，
+本次直接沿用父运行的专家指导，不再调用专家端点，并记录 `prepared_reused` 检查点；任一摘要不同即照常调用。
+`GET /report-runs/{id}/materials` 向所有者返回专家指导与初始检索片段，准备阶段完成前为空。
 页面上的重试确认只放行本 run 请求账本中的未知请求；SQLite 费用账本按实验共享，
 其中处于 `reserved`/`unknown` 的 attempt 仍须由操作者核对后写入 runtime manifest 的
 `acknowledged_unknown_attempts` 并重启后端，见[部署说明](deployment.md#未知费用请求)。

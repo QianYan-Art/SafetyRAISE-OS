@@ -27,6 +27,7 @@ import type {
   ReportFeedback,
   ReportFeedbackDraft,
   ReportRunCandidate,
+  ReportRunMaterials,
   ReportRunEvent,
   ReportRunEventsPage,
   ReportRunPage,
@@ -518,6 +519,14 @@ export async function fetchReportRun(runId: string): Promise<ReportRunView> {
     method: "GET",
   });
   return parseJsonResponse<ReportRunView>(response);
+}
+
+export async function fetchReportRunMaterials(runId: string): Promise<ReportRunMaterials> {
+  const response = await authFetch(
+    `${API_BASE}/api/v1/report-runs/${encodeURIComponent(runId)}/materials`,
+    { method: "GET" },
+  );
+  return parseJsonResponse<ReportRunMaterials>(response);
 }
 
 export async function fetchReportRunCandidate(runId: string): Promise<ReportRunCandidate> {

@@ -534,6 +534,11 @@ export interface ReportAuthorizationPreview {
   knowledge_collections: ReportKnowledgeCollection[];
 }
 
+export interface ReportRunMaterials {
+  guidance: Record<string, unknown> | null;
+  knowledge_snippets: Array<{ id: string | null; text: string }>;
+}
+
 export interface ReportRunCandidate {
   candidate_version: number;
   snapshot_digest: string;

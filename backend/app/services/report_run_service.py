@@ -167,6 +167,33 @@ class ReportRunService:
         )
         return result
 
+    def _reusable_prepared(self, owner: str, record: dict) -> dict | None:
+        parent_id = record.get("parent_run_id")
+        if not parent_id:
+            return None
+        try:
+            parent = self.store.get(owner, parent_id)
+        except HarnessError:
+            return None
+        prepared = parent.get("prepared")
+        if (parent.get("session_id") != record.get("session_id")
+                or parent.get("snapshot_digest") != record.get("snapshot_digest")
+                or parent.get("endpoint_profile_digest") != record.get("endpoint_profile_digest")
+                or not isinstance(prepared, dict) or set(prepared) != {"guidance", "knowledge"}
+                or prepared["knowledge"]):
+            return None
+        return deepcopy(prepared)
+
+    def materials(self, owner: str, run_id: str) -> dict:
+        """所有者可见的中间产物：专家指导意见与初始检索片段；尚未准备完成时返回空值。"""
+        record = self.store.get(owner, run_id)
+        prepared = record.get("prepared") or {}
+        snippets = [
+            {"id": item.get("id"), "text": item.get("text", "")}
+            for item in record.get("initial_knowledge_snippets") or [] if isinstance(item, dict)
+        ]
+        return {"guidance": prepared.get("guidance"), "knowledge_snippets": snippets}
+
     def candidate(self, owner: str, run_id: str) -> dict:
         record = self.store.get(owner, run_id)
         if not record.get("candidate"):
@@ -437,7 +464,15 @@ class ReportRunService:
                     journal=journal, replay_model=getattr(roles, "replay", None),
                 )
                 self.store.assert_active(owner, run_id, token)
-                if journal is None:
+                reused = self._reusable_prepared(owner, record)
+                if reused is not None:
+                    # 同一档案、同一事实快照与端点配置下，专家输入完全相同，直接沿用上一份的指导意见。
+                    prepared = reused
+                    current = self.store.get(owner, run_id)
+                    self.store.transition(owner, run_id, token, current["state"], {},
+                                          "checkpoint", {"step": "prepared_reused",
+                                                         "parent_run_id": record["parent_run_id"]})
+                elif journal is None:
                     prepared = await roles.prepare(deepcopy(snapshot))
                 else:
                     replay_prepare = getattr(roles, "replay_prepare", None)

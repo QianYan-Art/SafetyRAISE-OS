@@ -60,6 +60,10 @@ export function summarizeReportProgress(events: ReportRunEvent[], active: boolea
   for (const event of events) {
     const data = event.data ?? {};
     if (event.type === "stage" && typeof data.revision_round === "number") round = data.revision_round;
+    if (event.type === "checkpoint" && data.step === "prepared_reused") {
+      push(event, "复用上一份报告的专家指导意见", "done", true);
+      continue;
+    }
     if (event.type === "checkpoint" && data.step === "candidate") {
       candidates += 1;
       push(event, `完成第 ${candidates} 版报告`, "done", true);

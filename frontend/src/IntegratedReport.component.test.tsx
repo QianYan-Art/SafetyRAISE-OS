@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { createRef, useRef, useState } from "react";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -30,6 +30,7 @@ const api = vi.hoisted(() => ({
   saveReportEvidence: vi.fn(),
   saveReportRunFeedback: vi.fn(),
   fetchReportRunEvents: vi.fn(),
+  fetchReportRunMaterials: vi.fn(),
 }));
 
 vi.mock("./api", async () => ({
@@ -187,6 +188,7 @@ beforeEach(() => {
   api.authorizeReportRun.mockImplementation(async (runId: string) => run({ run_id: runId, state: "generating" }));
   api.executeReportRunStream.mockResolvedValue(undefined);
   api.fetchReportRunEvents.mockResolvedValue({ events: [], next_seq: 0 });
+  api.fetchReportRunMaterials.mockResolvedValue({ guidance: null, knowledge_snippets: [] });
   api.resumeReportRunStream.mockResolvedValue(undefined);
   api.cancelReportRun.mockResolvedValue(run({ state: "cancelled" }));
   api.downloadReportRunExport.mockResolvedValue({ blob: new Blob(["report"]), fileName: "report.md" });
@@ -524,6 +526,31 @@ describe("IntegratedReport 真实组件交互", () => {
     api.fetchReportRun.mockResolvedValue(run());
     render(<IntegratedReport sessionId="session-1" onPersistDraft={vi.fn()} onBusyChange={vi.fn()} onRunsLoaded={loaded} />);
     await waitFor(() => expect(loaded).toHaveBeenCalledWith(true));
+  });
+
+  it("展示专家指导意见与知识库检索片段", async () => {
+    const user = userEvent.setup();
+    api.listReportRuns.mockResolvedValue({ runs: [run()], next_cursor: null });
+    api.fetchReportRunMaterials.mockResolvedValue({
+      guidance: { 元信息: { 事故标题: "合成事故" }, 指导意见清单: { 责任判定提示: "需核实证据" } },
+      knowledge_snippets: [{ id: "law#0001", text: "合成法条原文" }],
+    });
+    render(<IntegratedReport sessionId="session-1" onPersistDraft={vi.fn()} onBusyChange={vi.fn()} />);
+    await user.click(await screen.findByText("专家指导意见"));
+    expect(screen.getByText("责任判定提示")).not.toBeNull();
+    expect(screen.getByText("需核实证据")).not.toBeNull();
+    await user.click(screen.getByText("知识库检索片段（1）"));
+    expect(screen.getByText("合成法条原文")).not.toBeNull();
+  });
+
+  it("重新生成时关联本档案最近一份报告以复用专家指导", async () => {
+    const ref = createRef<IntegratedReportHandle>();
+    api.listReportRuns.mockResolvedValue({ runs: [run({ run_id: "previous-run" })], next_cursor: null });
+    api.createReportRun.mockImplementation(async () => run({ run_id: "new-run", state: "queued", state_version: 0 }));
+    render(<IntegratedReport ref={ref} sessionId="session-1" onPersistDraft={vi.fn().mockResolvedValue(undefined)} onBusyChange={vi.fn()} />);
+    await waitFor(() => expect(screen.getByRole("status").textContent).toBe("报告已完成"));
+    await act(async () => { await ref.current?.generate('{"事故类型":"追尾"}'); });
+    expect(api.createReportRun).toHaveBeenCalledWith(expect.objectContaining({ parent_run_id: "previous-run" }));
   });
 
   it("报告记录读取失败不阻止离开档案", async () => {
