@@ -93,11 +93,11 @@ def test_modal_expert_deployment_contract(monkeypatch):
     assert module.image.packages == ("vllm==0.21.0",)
 
     function_options = module.serve._modal_function_kwargs
-    assert function_options["gpu"] == "L4"
+    assert function_options["gpu"] == ["L4", "A10G"]
     assert function_options["min_containers"] == 0
     assert function_options["max_containers"] == 1
     assert function_options["scaledown_window"] == 60
-    assert function_options["region"] == "eu"
+    assert "region" not in function_options
     assert function_options["routing_region"] == "eu-west"
     assert module.serve._modal_concurrent_kwargs == {"max_inputs": 1}
     assert module.serve._modal_web_server_kwargs == {
