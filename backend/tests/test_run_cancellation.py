@@ -170,6 +170,10 @@ def test_idle_sse_keeps_connection_alive_without_cancelling_run(tool_client, mon
                 else:
                     pytest.fail("等待中的报告流未发送空闲心跳")
                 assert store.get(owner, run_id)["state"] != "cancelled"
+            # 断开事件流不再取消运行，需显式取消收尾。
+            assert not roles.closed.is_set()
+            stopped = network.post(f"/api/v1/report-runs/{run_id}/cancel")
+            assert stopped.status_code == 200
             assert roles.closed.wait(5)
     assert store.get(owner, run_id)["state"] == "cancelled"
 
