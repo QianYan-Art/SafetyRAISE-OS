@@ -4,6 +4,12 @@
 
 ## [未发布]
 
+## [0.3.6] - 2026-10-31
+
+### 修复
+
+- 刷新或重新打开已有 Harness 报告的档案时停在“核对事实”。此前工作台只按旧报告字段判断步骤，服务端报告运行记录不计入；现在读取到运行记录后进入“查看报告”。
+
 ## [0.3.5] - 2026-10-31
 
 ### 修复
@@ -116,7 +122,8 @@
 - 新增 CI（后端测试、前端测试与构建、提交历史密钥扫描）、贡献指南、安全策略与 issue / PR 模板。
 - 在 README 与 NOTICE 中说明可选视频依赖 Ultralytics YOLO 的 AGPL-3.0 许可。
 
-[未发布]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.5...HEAD
+[未发布]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.6...HEAD
+[0.3.6]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.5...v0.3.6
 [0.3.5]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.2...v0.3.3
