@@ -42,11 +42,8 @@ export async function verifyIntegratedReport({ page, bootstrap, api, output, res
   }
 
   async function openEvidenceSection() {
-    const section = panel.locator(".report-evidence-section");
-    await section.waitFor({ state: "visible" });
-    if (!(await section.evaluate((node) => node.open))) {
-      await section.locator("summary").click();
-    }
+    await panel.getByRole("tab", { name: /^补充材料/ }).click();
+    await panel.locator(".report-evidence-section").waitFor({ state: "visible" });
   }
 
   async function assertStageLayout(selector, label) {
@@ -212,9 +209,9 @@ export async function verifyIntegratedReport({ page, bootstrap, api, output, res
     await page.setViewportSize(viewport);
     await selectStage("核对事实");
     await assertStableLayout(viewport, `integrated-${viewport.width}.png`);
-    await panel.locator(".report-evidence-section summary").click();
+    await panel.getByRole("tab", { name: /^补充材料/ }).click();
     await assertStageLayout(".report-stage-host", "查看报告补证展开");
-    await panel.locator(".report-evidence-section summary").click();
+    await panel.getByRole("tab", { name: "报告正文" }).click();
   }
 
   async function startReportRun(value) {

@@ -267,7 +267,7 @@ describe("IntegratedReport 真实组件交互", () => {
     );
 
     await waitForInitialLoad();
-    await user.click(screen.getByText("补充材料（1）", { selector: "summary" }));
+    await user.click(screen.getByRole("tab", { name: "补充材料 1" }));
     const saveButton = screen.getByRole("button", { name: "保存补充材料" });
     expect((saveButton as HTMLButtonElement).disabled).toBe(true);
 
@@ -330,7 +330,7 @@ describe("IntegratedReport 真实组件交互", () => {
     );
 
     await waitFor(() => expect(screen.getByRole("status").textContent).toContain("撰写报告"));
-    await user.click(screen.getByText("补充材料（1）", { selector: "summary" }));
+    await user.click(screen.getByRole("tab", { name: "补充材料 1" }));
     expect((screen.getByLabelText("材料来源") as HTMLInputElement).disabled).toBe(true);
     expect((screen.getByLabelText("页码或位置") as HTMLInputElement).disabled).toBe(true);
     expect((screen.getByLabelText("补充内容") as HTMLTextAreaElement).disabled).toBe(true);
@@ -536,10 +536,11 @@ describe("IntegratedReport 真实组件交互", () => {
       knowledge_snippets: [{ id: "law#0001", text: "合成法条原文" }],
     });
     render(<IntegratedReport sessionId="session-1" onPersistDraft={vi.fn()} onBusyChange={vi.fn()} />);
-    await user.click(await screen.findByText("专家指导意见"));
+    await waitFor(() => expect(screen.getByRole("tab", { name: "检索片段 1" })).not.toBeNull());
+    await user.click(screen.getByRole("tab", { name: "专家指导意见" }));
     expect(screen.getByText("责任判定提示")).not.toBeNull();
     expect(screen.getByText("需核实证据")).not.toBeNull();
-    await user.click(screen.getByText("知识库检索片段（1）"));
+    await user.click(screen.getByRole("tab", { name: "检索片段 1" }));
     expect(screen.getByText("合成法条原文")).not.toBeNull();
   });
 

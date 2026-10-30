@@ -4,7 +4,6 @@
   color: var(--workbench-text, var(--color-text));
   overflow-wrap: anywhere;
 }
-.integrated-report details { margin: 0 0 20px; }
 .integrated-report summary {
   min-height: 48px;
   padding: 14px 0;
@@ -103,11 +102,52 @@
 .report-section-heading h3 { margin: 0; font-size: 15px; font-weight: 600; }
 .report-section-heading svg { color: var(--workbench-muted, var(--color-text-muted)); }
 .report-empty { margin: 16px 0 24px; color: var(--workbench-muted, var(--color-text-muted)); font-size: 13px; }
-.integrated-report-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 14px 0 20px; }
-.integrated-report-toolbar .report-status { flex: 1 1 160px; font-size: 13px; font-weight: 500; }
-.integrated-report[data-state="published"] .report-status { color: var(--success-color); }
-.integrated-report:is([data-state="needs_review"], [data-state="suspended"]) .report-status { color: var(--warning-color); }
-.integrated-report[data-state="failed"] .report-status { color: var(--danger-color); }
+/* 头部：标题与历史报告选择同一行，选择框靠右对齐页面边线。 */
+.report-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.report-head .report-section-heading { padding-top: 0; }
+.integrated-report select.report-history-select { width: auto; min-width: 180px; }
+/* 状态行：圆点颜色表达运行结论，文字只写当前状态、当前步骤与用时，操作统一靠右。 */
+.report-statusline {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px;
+  margin: 14px 0 16px; padding: 10px 0; border-block: 1px solid var(--border-color);
+  font-size: 13px;
+}
+.report-state-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--color-text-subtle); }
+.report-statusline[data-tone="running"] .report-state-dot { background: var(--primary-color); box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary-color) 18%, transparent); }
+.report-statusline[data-tone="done"] .report-state-dot { background: var(--success-color); }
+.report-statusline[data-tone="warning"] .report-state-dot { background: var(--warning-color); }
+.report-statusline[data-tone="danger"] .report-state-dot { background: var(--danger-color); }
+.report-statusline .report-status { font-size: 13px; font-weight: 600; }
+.report-statusline[data-tone="done"] .report-status { color: var(--success-color); }
+.report-statusline[data-tone="warning"] .report-status { color: var(--warning-color); }
+.report-statusline[data-tone="danger"] .report-status { color: var(--danger-color); }
+.report-status-step, .report-status-time { color: var(--workbench-muted, var(--color-text-muted)); font-variant-numeric: tabular-nums; }
+.report-status-step::before, .report-status-time::before { content: "·"; margin-right: 12px; color: var(--color-text-subtle); }
+.report-statusline-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; }
+.integrated-report button.report-link-button { min-height: 36px; padding: 6px 10px; border-color: transparent; background: transparent; color: var(--color-accent-text, var(--primary-color)); }
+.integrated-report button.report-link-button:hover:not(:disabled) { background: var(--bg-subtle); border-color: transparent; }
+/* 内容标签：沿用模型配置页的下划线标签，左缘与正文对齐。 */
+.report-tabs { display: flex; gap: 28px; margin: 4px 0 0; border-bottom: 1px solid var(--border-color); overflow-x: auto; scrollbar-width: none; }
+.report-tabs::-webkit-scrollbar { display: none; }
+.integrated-report button.report-tab {
+  min-height: 44px; padding: 0; border: 0; border-bottom: 2px solid transparent; border-radius: 0;
+  background: transparent; color: var(--color-text-subtle); font-size: 14px; font-weight: 500; white-space: nowrap;
+}
+.integrated-report button.report-tab:hover:not(:disabled) { background: transparent; border-color: transparent; color: var(--color-accent-text, var(--primary-color)); }
+.integrated-report button.report-tab[aria-selected="true"] { color: var(--color-accent-text, var(--primary-color)); border-bottom-color: var(--primary-color); }
+.report-tab-panel { padding-top: 20px; min-width: 0; }
+.report-tab-hint { margin: 0 0 8px; color: var(--workbench-muted, var(--color-text-muted)); font-size: 13px; }
+.report-issues { margin: 0 0 20px; padding: 10px 12px; border-left: 3px solid var(--warning-color); background: var(--bg-subtle); font-size: 13px; line-height: 1.7; }
+.report-issues p { margin: 6px 0 0; }
+/* 专家指导与检索片段：只读参考材料，层级用缩进和细线表达。 */
+.report-guidance { font-size: 14px; line-height: 1.75; }
+.report-guidance dl { margin: 0; display: grid; gap: 10px; }
+.report-guidance dl dl { margin-top: 6px; padding-left: 14px; border-left: 1px solid var(--border-color); }
+.report-guidance dt { font-weight: 600; }
+.report-guidance dd { margin: 2px 0 0; overflow-wrap: anywhere; }
+.report-snippet { margin: 0 0 12px; padding: 10px 12px; border-left: 3px solid var(--border-color); background: var(--bg-subtle); font-size: 13px; line-height: 1.7; }
+.report-snippet strong { font-variant-numeric: tabular-nums; }
+.report-snippet p { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .integrated-report .report-retry-confirmation { flex-basis: 100%; padding: 12px; background: var(--bg-subtle); border-left: 3px solid var(--warning-color); }
 .integrated-report .form-error { color: var(--danger-color); font-size: 13px; }
 .report-limit-notice { font-size: 13px; color: var(--warning-color); padding: 12px 0; border-top: 1px solid var(--border-color); }
@@ -116,26 +156,6 @@
 .integrated-report .markdown-report h1 { font-size: 20px; border-bottom-width: 1px; }
 .integrated-report .markdown-report h2 { font-size: 17px; }
 .integrated-report .markdown-report h3 { font-size: 15px; }
-/* 生成过程：按持久化事件实时列出步骤与用时，沿用左侧色条提示的视觉 */
-.report-progress { margin: -6px 0 20px; font-size: 13px; }
-.report-progress > summary { cursor: pointer; color: var(--workbench-muted, var(--color-text-muted)); padding: 4px 0; }
-.report-progress ol { list-style: none; margin: 8px 0 0; padding: 0 0 0 12px; border-left: 1px solid var(--border-color); display: grid; gap: 6px; }
-.report-progress-step { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; align-items: center; gap: 10px; line-height: 1.6; }
-.report-progress-dot { width: 7px; height: 7px; border-radius: 50%; margin-left: -16px; background: var(--color-success); }
-.report-progress-step.running { font-weight: 500; }
-.report-progress-step.running .report-progress-dot { background: var(--primary-color); box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary-color) 18%, transparent); }
-.report-progress-step.error { color: var(--warning-color); }
-.report-progress-step.error .report-progress-dot { background: var(--warning-color); }
-.report-progress-time { color: var(--workbench-muted, var(--color-text-muted)); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.report-progress-note { margin: 10px 0 0; padding: 8px 12px; border-left: 3px solid var(--primary-color); background: var(--bg-subtle); line-height: 1.6; }
-/* 中间产物：专家指导意见与初始检索片段，默认收起，沿用生成过程的摘要样式 */
-.report-materials { margin: -6px 0 20px; font-size: 13px; line-height: 1.7; }
-.report-materials > summary { cursor: pointer; color: var(--workbench-muted, var(--color-text-muted)); padding: 4px 0; }
-.report-guidance dl { margin: 6px 0 0; padding-left: 12px; border-left: 1px solid var(--border-color); display: grid; gap: 6px; }
-.report-guidance dt { font-weight: 500; }
-.report-guidance dd { margin: 2px 0 0; overflow-wrap: anywhere; }
-.report-snippet { margin: 10px 0 0; padding: 8px 12px; border-left: 3px solid var(--border-color); background: var(--bg-subtle); }
-.report-snippet p { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 16em; overflow-y: auto; }
 /* 下载：非正式稿附一条说明，沿用页面已有的浅底色条提示 */
 .report-export { display: grid; gap: 10px; margin: -6px 0 20px; }
 .report-export-notice {

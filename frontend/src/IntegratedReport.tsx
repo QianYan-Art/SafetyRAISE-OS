@@ -1,7 +1,7 @@
 import { forwardRef, useEffect, useId, useImperativeHandle, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Check, Download, FileText, Pencil, Play, RotateCw, Square, Trash2, X } from "lucide-react";
+import { Check, Download, FileText, ListChecks, Pencil, Play, RotateCw, Square, Trash2, X } from "lucide-react";
 import {
   authorizeReportRun, cancelReportRun, createReportRun, downloadReportRunExport,
   executeReportRunStream, fetchAuthorizationPreview, fetchReportEvidence,
@@ -51,6 +51,8 @@ export interface IntegratedReportHandle {
   isTransitionBlocked: () => boolean;
 }
 
+type ReportTab = "report" | "guidance" | "snippets" | "evidence";
+
 const labels: Record<string, string> = {
   queued: "等待生成", preparing: "分析事故并检索依据", generating: "撰写报告",
   checking: "核查事实与法律依据", revising: "修改并复查报告", published: "报告已完成",
@@ -67,7 +69,8 @@ export const IntegratedReport = forwardRef<IntegratedReportHandle, {
   onStatusChange?: (label: string) => void;
   onProgressChange?: (progress: { steps: ReportProgressStep[]; active: boolean; status: string } | null) => void;
   onRunsLoaded?: (hasRuns: boolean) => void;
-}>(function IntegratedReport({ sessionId, onPersistDraft, onBusyChange, onActiveChange, onCancellingChange, onStatusChange, onProgressChange, onRunsLoaded }, ref) {
+  onShowActivity?: () => void;
+}>(function IntegratedReport({ sessionId, onPersistDraft, onBusyChange, onActiveChange, onCancellingChange, onStatusChange, onProgressChange, onRunsLoaded, onShowActivity }, ref) {
   const fieldId = useId();
   const [run, setRun] = useState<ReportRunView | null>(null);
   const [cancelling, setCancelling] = useState(false);
@@ -99,9 +102,15 @@ export const IntegratedReport = forwardRef<IntegratedReportHandle, {
   const eventsLoading = useRef(false);
   const materialsRef = useRef<{ runId: string; value: ReportRunMaterials } | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  const [tab, setTab] = useState<ReportTab>("report");
   const [materials, setMaterials] = useState<{ runId: string; value: ReportRunMaterials } | null>(null);
   const active = Boolean(run && !RUN_TERMINAL_STATES.has(run.state) && run.state !== "suspended");
-  const statusLabel = cancelling ? "正在停止" : labels[run?.state ?? ""] ?? "处理中";
+  const openIssues = candidate?.review_result?.issues?.filter((item) => item.status !== "resolved") ?? [];
+  const statusLabel = cancelling ? "正在停止"
+    : run?.terminal_reason === "budget_exhausted" ? labels.budget_exhausted
+    // 问题均已闭合、只因审查结构未完成而停止时，不再称“仍有待解决的问题”。
+    : run?.state === "needs_review" && openIssues.length === 0 ? "未通过独立审查"
+    : labels[run?.state ?? ""] ?? "处理中";
 
   useEffect(() => { onBusyChange(loading || loadFailed || busy || active); }, [loading, loadFailed, busy, active, onBusyChange]);
   useEffect(() => {
@@ -376,128 +385,142 @@ export const IntegratedReport = forwardRef<IntegratedReportHandle, {
 
   const currentMaterials = run && materials?.runId === run.run_id ? materials.value : null;
   const totalMs = steps.length ? ((active ? now : steps[steps.length - 1].endedAt ?? now) - steps[0].startedAt) : 0;
+  const runningStep = active ? [...steps].reverse().find((step) => step.state === "running") : undefined;
   const body = run?.report?.report_markdown ?? candidate?.candidate_report.report_markdown;
   const exportKind = run && !active ? exportKindOf(run) : null;
-  const issues = candidate?.review_result?.issues?.filter((item) => item.status !== "resolved") ?? [];
+  const snippets = currentMaterials?.knowledge_snippets ?? [];
+  const evidenceCount = evidence?.records.length ?? 0;
+  const tabs: ReadonlyArray<{ id: ReportTab; label: string }> = [
+    { id: "report", label: "报告正文" },
+    { id: "guidance", label: "专家指导意见" },
+    { id: "snippets", label: snippets.length ? `检索片段 ${snippets.length}` : "检索片段" },
+    { id: "evidence", label: evidenceCount ? `补充材料 ${evidenceCount}` : "补充材料" },
+  ];
+  const tone = !run ? "idle" : active ? "running"
+    : run.state === "published" ? "done" : run.state === "failed" ? "danger" : "warning";
+  const canResume = Boolean(run && (run.state === "suspended" || run.state === "queued" || run.can_resume_protocol === true)
+    && !busy && !cancelling);
+  const unknownRequests = Number(run?.budget.unknown_requests ?? 0);
   return <section className="integrated-report" aria-label="事故分析报告" data-state={run?.state ?? "empty"}>
     {error && <p role="alert" className="form-error">{error}</p>}
     {loadFailed && <button type="button" disabled={loading || busy}
       onClick={() => setReloadVersion((value) => value + 1)}><RotateCw size={16} aria-hidden="true" />重新读取报告记录</button>}
-    <details className="report-evidence-section">
-      <summary>补充材料（{evidence?.records.length ?? 0}）</summary>
-      {evidence?.records.map((item) => <article key={item.evidence_id} className="report-evidence-item">
-        <div className="report-evidence-heading"><strong>{item.source_label}</strong>
-          <span className={`evidence-verification ${item.verification_status}`}>
-            {item.verification_status === "human_confirmed" ? "已人工核实"
-              : item.verification_status === "disputed" ? "存在争议" : "未核实"}
-          </span>
-        </div>
-        <small className="evidence-locator">{item.source_locator}</small>
-        <p>{item.text}</p>
-        <div className="report-evidence-actions">
-        <button type="button" className="report-icon-button" aria-label="编辑" title="编辑材料" disabled={busy || active} onClick={() => {
-          setEditingId(item.evidence_id); setSource(item.source_label); setLocator(item.source_locator); setText(item.text);
-          setConfirmed(item.verification_status === "human_confirmed");
-        }}><Pencil size={16} aria-hidden="true" /></button>
-        <button type="button" className="report-icon-button report-danger" aria-label="删除" title="删除材料" disabled={busy || active} onClick={() => void removeEvidence(item.evidence_id)}><Trash2 size={16} aria-hidden="true" /></button>
-        </div>
-      </article>)}
-      <div className="report-evidence-editor">
-      <div className="report-evidence-fields">
-      <label>材料来源<input value={source} onChange={(event) => setSource(event.target.value)} disabled={busy || active} /></label>
-      <label>页码或位置<input value={locator} onChange={(event) => setLocator(event.target.value)} disabled={busy || active} /></label>
-      </div>
-      <label htmlFor={`${fieldId}-text`}>补充内容</label>
-      <textarea id={`${fieldId}-text`} value={text} onChange={(event) => setText(event.target.value)} disabled={busy || active} rows={3} />
-      <label className="report-checkbox"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} disabled={busy || active} />已人工核实</label>
-      <div className="report-evidence-actions">
-      <button type="button" onClick={() => void addEvidence()} disabled={loading || !evidence || busy || active || !source.trim() || !locator.trim() || !text.trim()}><Check size={16} aria-hidden="true" />保存补充材料</button>
-      {editingId && <button type="button" disabled={busy} onClick={resetEvidenceEditor}><X size={16} aria-hidden="true" />取消编辑</button>}
-      </div>
-      </div>
-    </details>
-    <div className="report-section-heading"><FileText size={18} aria-hidden="true" /><h3>事故分析报告</h3></div>
+    {/* 头部只回答：这是哪份报告、现在到哪一步、能做什么；逐步过程集中在档案处理记录。 */}
+    <header className="report-head">
+      <div className="report-section-heading"><FileText size={18} aria-hidden="true" /><h3>事故分析报告</h3></div>
+      {run && history.length > 1 && <select className="report-history-select" aria-label="历史报告" value={run.run_id} disabled={busy || active}
+        onChange={(event) => {
+          const id = event.target.value;
+          const selected = history.find((item) => item.run_id === id);
+          if (!selected) return;
+          setRun(selected);
+          currentId.current = id;
+          setRetryUnknown(false);
+          setCandidate(null);
+          setError("");
+          void loadRun(id).catch((err) => setError(formatApiErrorMessage(err, "读取历史报告失败。")));
+        }}>
+        {history.map((item, index) => <option key={item.run_id} value={item.run_id}>
+          报告 {history.length - index} · {labels[item.state] ?? item.state}
+        </option>)}
+      </select>}
+    </header>
     {!run && !loadFailed && <p className="report-empty" role="status">{loading ? "正在读取报告" : "尚未生成报告"}</p>}
-    {run && <>
-      <div className="integrated-report-toolbar">
-        <strong className="report-status" role="status">{statusLabel}</strong>
-        {history.length > 1 && <select aria-label="历史报告" value={run.run_id} disabled={busy || active}
-          onChange={(event) => {
-            const id = event.target.value;
-            const selected = history.find((item) => item.run_id === id);
-            if (!selected) return;
-            setRun(selected);
-            currentId.current = id;
-            setRetryUnknown(false);
-            setCandidate(null);
-            setError("");
-            void loadRun(id).catch((err) => setError(formatApiErrorMessage(err, "读取历史报告失败。")));
-          }}>
-          {history.map((item, index) => <option key={item.run_id} value={item.run_id}>
-            报告 {history.length - index} · {labels[item.state] ?? item.state}
-          </option>)}
-        </select>}
+    {run && <div className="report-statusline" data-tone={tone}>
+      <span className="report-state-dot" aria-hidden="true" />
+      <strong className="report-status" role="status">{statusLabel}</strong>
+      {runningStep && runningStep.label !== statusLabel && <span className="report-status-step">{runningStep.label}</span>}
+      {steps.length > 0 && <span className="report-status-time">{active ? "已用时" : "共用时"} {formatDuration(totalMs)}</span>}
+      <span className="report-statusline-actions">
+        {steps.length > 0 && onShowActivity && <button type="button" className="report-link-button" onClick={onShowActivity}>
+          <ListChecks size={15} aria-hidden="true" />生成过程
+        </button>}
         {active && <button type="button" className="report-danger" disabled={cancelling} aria-busy={cancelling} onClick={() => void cancel()}><Square size={14} aria-hidden="true" />{cancelling ? "正在停止" : "停止生成"}</button>}
-        {(run.state === "suspended" || run.state === "queued" || run.can_resume_protocol === true) && !busy && !cancelling && <>
-          {!run.can_resume_protocol && Number(run.budget.unknown_requests ?? 0) > 0 && <label className="report-checkbox report-retry-confirmation">
-            <input type="checkbox" checked={retryUnknown} onChange={(event) => setRetryUnknown(event.target.checked)} />
-            确认重试未收到结果的请求，可能重复计费
-          </label>}
-          <button type="button" className="report-primary" disabled={busy || (Number(run.budget.unknown_requests ?? 0) > 0 && !retryUnknown)}
-            onClick={() => void action(async () => {
-              const preview = await fetchAuthorizationPreview(run.run_id);
-              if (!alive.current) return;
-              if (!preview.available) throw new Error("当前配置无法继续此报告，请重新生成。");
-              const value = await authorizeReportRun(run.run_id, buildAuthorizationPayload(preview));
-              if (!alive.current) return;
-              updateRun(value);
-              await execute(value, value.state === "suspended" || value.can_resume_protocol === true);
-            })}><Play size={15} aria-hidden="true" />继续生成</button>
-        </>}
+        {canResume && run && <button type="button" className="report-primary" disabled={busy || (!run.can_resume_protocol && unknownRequests > 0 && !retryUnknown)}
+          onClick={() => void action(async () => {
+            const preview = await fetchAuthorizationPreview(run.run_id);
+            if (!alive.current) return;
+            if (!preview.available) throw new Error("当前配置无法继续此报告，请重新生成。");
+            const value = await authorizeReportRun(run.run_id, buildAuthorizationPayload(preview));
+            if (!alive.current) return;
+            updateRun(value);
+            await execute(value, value.state === "suspended" || value.can_resume_protocol === true);
+          })}><Play size={15} aria-hidden="true" />继续生成</button>}
+      </span>
+    </div>}
+    {canResume && run && !run.can_resume_protocol && unknownRequests > 0 && <label className="report-checkbox report-retry-confirmation">
+      <input type="checkbox" checked={retryUnknown} onChange={(event) => setRetryUnknown(event.target.checked)} />
+      确认重试未收到结果的请求，可能重复计费
+    </label>}
+    {run?.terminal_reason === "budget_exhausted" && (
+      <p className="report-limit-notice">本次运行达到预算或时长上限，报告未发布。</p>
+    )}
+    {run && exportKind && <div className="report-export" data-kind={exportKind}>
+      {EXPORT_NOTICES[exportKind] && <p className="report-export-notice">{EXPORT_NOTICES[exportKind]}</p>}
+      <div className="report-export-actions" role="group" aria-label="下载报告">
+        {EXPORT_FORMATS.map(({ format, label }) =>
+          <button key={format} type="button" aria-label={`下载${label}`} disabled={exporting} onClick={() => void download(format)}>
+            <Download size={16} aria-hidden="true" />{label}
+          </button>)}
       </div>
-      {steps.length > 0 && <details className="report-progress" open={active}>
-        <summary>生成过程 · {active ? "已用时" : "共用时"} {formatDuration(totalMs)}</summary>
-        <ol aria-live="polite">
-          {steps.map((step) => <li key={step.key} className={`report-progress-step ${step.state}`}>
-            <span className="report-progress-dot" aria-hidden="true" />
-            <span className="report-progress-label">{step.label}</span>
-            <span className="report-progress-time">
-              {step.state === "running" ? `进行中 · ${formatDuration(now - step.startedAt)}`
-                : step.endedAt !== null && step.endedAt > step.startedAt ? formatDuration(step.endedAt - step.startedAt) : ""}
-            </span>
-          </li>)}
-        </ol>
-        {active && <p className="report-progress-note">生成在服务器后台进行，刷新或关闭页面不会中断；重新打开此档案即可继续查看进度。</p>}
-      </details>}
-      {currentMaterials?.guidance && <details className="report-materials report-guidance">
-        <summary>专家指导意见</summary>
-        <GuidanceTree value={currentMaterials.guidance} />
-      </details>}
-      {currentMaterials && currentMaterials.knowledge_snippets.length > 0 && <details className="report-materials">
-        <summary>知识库检索片段（{currentMaterials.knowledge_snippets.length}）</summary>
-        {currentMaterials.knowledge_snippets.map((item, index) => <article key={item.id ?? index} className="report-snippet">
+    </div>}
+    <nav className="report-tabs" role="tablist" aria-label="报告内容">
+      {tabs.map((item) => <button key={item.id} type="button" role="tab" id={`${fieldId}-tab-${item.id}`}
+        aria-controls={`${fieldId}-panel`} aria-selected={tab === item.id} className="report-tab"
+        onClick={() => setTab(item.id)}>{item.label}</button>)}
+    </nav>
+    <div className="report-tab-panel" role="tabpanel" id={`${fieldId}-panel`} aria-labelledby={`${fieldId}-tab-${tab}`}>
+      {tab === "report" && <>
+        {openIssues.length > 0 && <div className="report-issues">
+          <strong>待解决问题 {openIssues.length}</strong>
+          {openIssues.map((issue) => <p key={issue.issue_id}>{issue.explanation}</p>)}
+        </div>}
+        {body ? <div className="markdown-report"><ReactMarkdown remarkPlugins={[remarkGfm]}>{body}</ReactMarkdown></div>
+          : !loadFailed && <p className="report-empty">{active ? "报告撰写完成后显示在这里。" : run ? "这次运行没有生成报告正文。" : "在“核对事实”确认事故信息后，报告会显示在这里。"}</p>}
+        {run && exportKind && <ReportFeedback runId={run.run_id} />}
+      </>}
+      {tab === "guidance" && (currentMaterials?.guidance
+        ? <div className="report-guidance"><GuidanceTree value={currentMaterials.guidance} /></div>
+        : <p className="report-empty">{active ? "专家分析完成后显示在这里。" : "这份报告没有专家指导意见。"}</p>)}
+      {tab === "snippets" && (snippets.length
+        ? snippets.map((item, index) => <article key={item.id ?? index} className="report-snippet">
           {item.id && <strong>{item.id}</strong>}
           <p>{item.text}</p>
+        </article>)
+        : <p className="report-empty">{active ? "知识库检索完成后显示在这里。" : "这份报告没有初始检索片段。"}</p>)}
+      {tab === "evidence" && <div className="report-evidence-section">
+        <p className="report-tab-hint">补充材料随事故信息提交给下一份报告，已生成的报告不受影响。</p>
+        {evidence?.records.map((item) => <article key={item.evidence_id} className="report-evidence-item">
+          <div className="report-evidence-heading"><strong>{item.source_label}</strong>
+            <span className={`evidence-verification ${item.verification_status}`}>
+              {item.verification_status === "human_confirmed" ? "已人工核实"
+                : item.verification_status === "disputed" ? "存在争议" : "未核实"}
+            </span>
+          </div>
+          <small className="evidence-locator">{item.source_locator}</small>
+          <p>{item.text}</p>
+          <div className="report-evidence-actions">
+          <button type="button" className="report-icon-button" aria-label="编辑" title="编辑材料" disabled={busy || active} onClick={() => {
+            setEditingId(item.evidence_id); setSource(item.source_label); setLocator(item.source_locator); setText(item.text);
+            setConfirmed(item.verification_status === "human_confirmed");
+          }}><Pencil size={16} aria-hidden="true" /></button>
+          <button type="button" className="report-icon-button report-danger" aria-label="删除" title="删除材料" disabled={busy || active} onClick={() => void removeEvidence(item.evidence_id)}><Trash2 size={16} aria-hidden="true" /></button>
+          </div>
         </article>)}
-      </details>}
-      {exportKind && <div className="report-export" data-kind={exportKind}>
-        {EXPORT_NOTICES[exportKind] && <p className="report-export-notice">{EXPORT_NOTICES[exportKind]}</p>}
-        <div className="report-export-actions" role="group" aria-label="下载报告">
-          {EXPORT_FORMATS.map(({ format, label }) =>
-            <button key={format} type="button" aria-label={`下载${label}`} disabled={exporting} onClick={() => void download(format)}>
-              <Download size={16} aria-hidden="true" />{label}
-            </button>)}
+        <div className="report-evidence-editor">
+        <div className="report-evidence-fields">
+        <label>材料来源<input value={source} onChange={(event) => setSource(event.target.value)} disabled={busy || active} /></label>
+        <label>页码或位置<input value={locator} onChange={(event) => setLocator(event.target.value)} disabled={busy || active} /></label>
+        </div>
+        <label htmlFor={`${fieldId}-text`}>补充内容</label>
+        <textarea id={`${fieldId}-text`} value={text} onChange={(event) => setText(event.target.value)} disabled={busy || active} rows={3} />
+        <label className="report-checkbox"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} disabled={busy || active} />已人工核实</label>
+        <div className="report-evidence-actions">
+        <button type="button" onClick={() => void addEvidence()} disabled={loading || !evidence || busy || active || !source.trim() || !locator.trim() || !text.trim()}><Check size={16} aria-hidden="true" />保存补充材料</button>
+        {editingId && <button type="button" disabled={busy} onClick={resetEvidenceEditor}><X size={16} aria-hidden="true" />取消编辑</button>}
+        </div>
         </div>
       </div>}
-      {run.terminal_reason === "budget_exhausted" && (
-        <p className="report-limit-notice">本次运行达到预算或时长上限，报告未发布。</p>
-      )}
-      {issues.length > 0 && <details open={run.state === "needs_review"}>
-        <summary>待解决问题（{issues.length}）</summary>
-        {issues.map((issue) => <p key={issue.issue_id}>{issue.explanation}</p>)}
-      </details>}
-      {body && <div className="markdown-report"><ReactMarkdown remarkPlugins={[remarkGfm]}>{body}</ReactMarkdown></div>}
-      {exportKind && <ReportFeedback runId={run.run_id} />}
-    </>}
+    </div>
   </section>;
 });
