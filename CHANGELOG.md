@@ -4,6 +4,12 @@
 
 ## [未发布]
 
+## [0.3.3] - 2026-10-30
+
+### 修复
+
+- Modal 专家部署脚本不再限定 `region="eu"`，GPU 改为 L4 优先、A10G 备选。此前欧洲区 L4 无空闲时请求一直排队，报告停在专家步骤直至超时。公网入口 `eu-west` 不变；专家推理可能在欧洲以外执行，见部署说明。
+
 ## [0.3.2] - 2026-10-30
 
 ### 修复
@@ -93,7 +99,8 @@
 - 新增 CI（后端测试、前端测试与构建、提交历史密钥扫描）、贡献指南、安全策略与 issue / PR 模板。
 - 在 README 与 NOTICE 中说明可选视频依赖 Ultralytics YOLO 的 AGPL-3.0 许可。
 
-[未发布]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.2...HEAD
+[未发布]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.3...HEAD
+[0.3.3]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.2.1...v0.3.0
