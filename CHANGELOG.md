@@ -4,6 +4,12 @@
 
 ## [未发布]
 
+## [0.3.10] - 2026-10-31
+
+### 修复
+
+- 历史报告下拉中的状态与状态行一致：因审查或候选稿终检停止的报告显示“未通过独立审查”，当前报告直接沿用状态行文字。
+
 ## [0.3.9] - 2026-10-31
 
 ### 变更
@@ -147,7 +153,8 @@
 - 新增 CI（后端测试、前端测试与构建、提交历史密钥扫描）、贡献指南、安全策略与 issue / PR 模板。
 - 在 README 与 NOTICE 中说明可选视频依赖 Ultralytics YOLO 的 AGPL-3.0 许可。
 
-[未发布]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.9...HEAD
+[未发布]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.10...HEAD
+[0.3.10]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.9...v0.3.10
 [0.3.9]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.8...v0.3.9
 [0.3.8]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.7...v0.3.8
 [0.3.7]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.6...v0.3.7
