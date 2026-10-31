@@ -4,6 +4,12 @@
 
 ## [未发布]
 
+## [0.3.12] - 2026-10-31
+
+### 安全
+
+- 前端开发与测试依赖升级：`vite` 8.3.0→8.3.5、`vitest` 与 `@vitest/mocker` 5.0.1→5.0.5、`undici` 8.10.2→8.12.3（经 `jsdom`），连带更新 `rolldown` 等构建子依赖，关闭 13 条 Dependabot 告警；均为开发依赖，运行时依赖不变，`npm audit` 为 0。
+
 ## [0.3.11] - 2026-10-31
 
 ### 新增
@@ -159,7 +165,8 @@
 - 新增 CI（后端测试、前端测试与构建、提交历史密钥扫描）、贡献指南、安全策略与 issue / PR 模板。
 - 在 README 与 NOTICE 中说明可选视频依赖 Ultralytics YOLO 的 AGPL-3.0 许可。
 
-[未发布]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.11...HEAD
+[未发布]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.12...HEAD
+[0.3.12]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.11...v0.3.12
 [0.3.11]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.10...v0.3.11
 [0.3.10]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.9...v0.3.10
 [0.3.9]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.8...v0.3.9
