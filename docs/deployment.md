@@ -38,6 +38,14 @@
 
 在仓库中运行相关后端测试、前端测试与构建；核对镜像内源码、依赖和已批准清单的一致性。迁移已有部署时，先保存可恢复的 PostgreSQL 逻辑备份与 SQLite backup API 一致性副本，并验证可读性。切换前停止旧后端写入，迁移最终账本；不可让两台后端同时写各自账本。
 
+### 构建与核对前端镜像
+
+`frontend.Dockerfile` 和 `frontend.runtime.Dockerfile` 默认使用按摘要锁定的官方 `nginx:1.30.7-alpine`。该稳定版包含 CVE-2026-123007 和 CVE-2026-123633 的修复。升级基线时按 [Nginx 安全公告](https://nginx.org/en/security_advisories.html) 选取已修复的版本，并同步更新两个 Dockerfile 中的版本与摘要。
+
+- 完整构建使用 `deployment/docker/frontend.Dockerfile`。已有前端构建产物时，用 `frontend.runtime.Dockerfile` 将 `dist/` 和 `nginx.frontend.conf` 打包。离线构建允许通过 `RUNTIME_BASE_IMAGE` 显式传入本地官方基础镜像标签，先核对它的镜像 ID 和 Nginx 版本。之前部署的应用镜像只用于提取前端产物，不作为下一版的 Nginx 基础镜像。
+- 使用 `docker-compose.harness.yml` 的离线覆盖层时，`FRONTEND_RUNTIME_BASE_IMAGE` 会覆盖 Dockerfile 默认值。沿用旧环境文件前，先核对此值指向本机已导入并验证过的官方基础镜像 ID，再使用 `--pull=false` 构建。
+- 生成同机编排前，用 `docker image inspect --format '{{.Id}}' "$frontend_image"` 取得成品镜像 ID，用 `docker run --rm --network none --entrypoint nginx "$frontend_image" -v` 核对实际 Nginx 版本。将核验过的 ID 传给 `--frontend-image`。检查生产编排和回滚编排里的 `services.frontend.image`，确保都指向包含修复的应用镜像。切换后执行 `docker compose exec -T frontend nginx -v` 与 `docker compose exec -T frontend nginx -t`，并检查代理与 HTTPS 入口。
+
 从经检查的私有源编排生成同机编排示例（路径和镜像 ID 按目标主机实际值填写）：
 
 ```sh
@@ -83,7 +91,7 @@ PYTHONPATH=backend python backend/scripts/backfill_session_resources.py --apply
 2. 从宿主指定域名/SNI 检查 TLS、首页、`/api/v1/health` 和 `/api/v1/ready`；再以真实 HTTP 验证登录、会话隔离、事故信息保存和导出。`/ready` 只证明配置与依赖就绪，不证明法律引用或模型质量。
 3. 受控报告验证需分别记录视觉、专家、检索、生成、审查和导出结果；付费请求与真实事故证据必须单独获得授权。前端合成路径可用 `frontend/tests/production-workspace-smoke.mjs`，它不调用模型、不能替代完整报告验收。
 4. 观察资源门：宿主可用空间、`memory.current`/容器限额、OOM、临时上传、Nginx/容器日志、其他站点和备份 timer。`BACKEND_MEMORY_LIMIT=1536m` 只是公开 Compose 模板起点，不能覆盖已按负载实测调整的私有配置；发布前核对源、展开编排和实际容器限额一致。
-5. 回滚前先停止当前后端写入，核对账本增量和数据库快照，再恢复旧镜像、编排和入口；不能只切 DNS 或直接启动旧后端。发布包和旧镜像保留到观察期结束且回滚路径完成验证。
+5. 回滚应用版本时先停止当前后端写入，核对账本增量和数据库快照，再恢复对应的应用镜像、编排和入口。旧版前端需以带安全修复的 Nginx 基础镜像重新打包，并核对静态文件、代理配置和运行版本。观察期结束并验证可用回滚编排后，按引用清单清理旧镜像。
 
 ### 未知费用请求
 
