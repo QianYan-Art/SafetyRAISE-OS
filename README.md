@@ -133,6 +133,14 @@ npm test
 npm run build
 ```
 
+Rust 原生加速库验证（改动 `backend/native/query_token_accel/` 时）：
+
+```sh
+cd backend/native/query_token_accel
+cargo clippy --all-targets -- -D warnings
+cargo test --locked
+```
+
 空知识库模板只验证解析与失败边界；真实报告质量必须在私有知识资产、已批准的模型与独立验收条件下验证，不能由这些测试推断。
 
 ## 许可
