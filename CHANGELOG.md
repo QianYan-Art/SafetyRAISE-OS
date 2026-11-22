@@ -4,6 +4,8 @@
 
 ## [未发布]
 
+## [0.3.13] - 2026-11-22
+
 ### 安全
 
 - **SSRF 与系统密钥防外泄**：新增统一出站 URL 安全校验（`backend/app/core/outbound_url.py`），在用户模型配置保存与运行时出站前阻断回环、私网、链路本地、云元数据、非白名单 HTTP 及 `userinfo`/查询参数注入；覆写嵌入端点 URL 时不再沿用系统 `OPENROUTER_API_KEY`；停止将系统密钥明文播种进管理员 `user_capability_configs` 行，用户自定义 API Key 改用 PostgreSQL `pgcrypto` AES-256 加密落库（兼容历史明文读取）。
@@ -190,7 +192,8 @@
 - 新增 CI（后端测试、前端测试与构建、提交历史密钥扫描）、贡献指南、安全策略与 issue / PR 模板。
 - 在 README 与 NOTICE 中说明可选视频依赖 Ultralytics YOLO 的 AGPL-3.0 许可。
 
-[未发布]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.12...HEAD
+[未发布]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.13...HEAD
+[0.3.13]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.12...v0.3.13
 [0.3.12]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.11...v0.3.12
 [0.3.11]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.10...v0.3.11
 [0.3.10]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.9...v0.3.10
