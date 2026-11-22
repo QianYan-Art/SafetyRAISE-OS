@@ -114,7 +114,7 @@ def _resolve_cors_origins() -> list[str]:
     return list(_DEFAULT_DEV_CORS_ORIGINS)
 
 
-app = FastAPI(title="交通事故分析报告后端", version="0.3.13",
+app = FastAPI(title="交通事故分析报告后端", version="0.3.14",
               lifespan=report_harness_lifespan)
 app.add_middleware(JsonRequestBodyLimit)
 app.add_middleware(ReportRunBodyLimit)

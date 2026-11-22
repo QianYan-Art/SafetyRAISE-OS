@@ -4,6 +4,12 @@
 
 ## [未发布]
 
+## [0.3.14] - 2026-11-22
+
+### 修复
+
+- 修复 `secret_box.py` 的 PostgreSQL `pgcrypto` 加密/解密 SQL 表达式在 `psycopg` 服务端参数类型推导下触发 `IndeterminateDatatype` 的问题，为全部参数补充显式 `::text` 类型标注，并新增真实 PostgreSQL 集成回归测试。
+
 ## [0.3.13] - 2026-11-22
 
 ### 安全
@@ -192,7 +198,8 @@
 - 新增 CI（后端测试、前端测试与构建、提交历史密钥扫描）、贡献指南、安全策略与 issue / PR 模板。
 - 在 README 与 NOTICE 中说明可选视频依赖 Ultralytics YOLO 的 AGPL-3.0 许可。
 
-[未发布]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.13...HEAD
+[未发布]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.14...HEAD
+[0.3.14]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.13...v0.3.14
 [0.3.13]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.12...v0.3.13
 [0.3.12]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.11...v0.3.12
 [0.3.11]: https://github.com/QianYan-Art/SafetyRAISE-OS/compare/v0.3.10...v0.3.11
