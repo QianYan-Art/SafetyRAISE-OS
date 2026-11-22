@@ -85,6 +85,8 @@ def _get_session_lock(session_id: str) -> RLock:
 
 
 class ChatSessionService:
+    _allow_admin_scope: bool = False
+
     def __init__(
         self,
         settings: Settings,

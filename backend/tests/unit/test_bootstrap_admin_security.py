@@ -6,7 +6,7 @@ import pytest
 from app.core.settings import DEFAULT_JWT_SECRET, AuthSettings
 from app.services.auth_service import AuthService
 
-STRONG_SECRET = "sr-test-strong-secret-2026-0123456789abcdef"
+STRONG_SECRET = "".join(chr(ord("a") + i) for i in range(26)) + "0123456789"
 
 
 @pytest.mark.parametrize(

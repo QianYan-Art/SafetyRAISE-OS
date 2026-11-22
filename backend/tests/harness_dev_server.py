@@ -95,6 +95,7 @@ def prepare_tables(dsn: str):
             ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name text;
             ALTER TABLE users ADD COLUMN IF NOT EXISTS role text DEFAULT 'user';
             ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active boolean DEFAULT true;
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version integer NOT NULL DEFAULT 1;
             ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now();
             ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
             CREATE TABLE IF NOT EXISTS chat_sessions (

@@ -1,0 +1,4 @@
+# 单元测试中的合成占位 JWT 密钥（无真实凭据），已在后续提交改为动态构造。
+697b2bb4d0aa6050b3c67a96eb2cdd6429712474:backend/tests/unit/test_bootstrap_admin_security.py:generic-api-key:9
+697b2bb4d0aa6050b3c67a96eb2cdd6429712474:backend/tests/unit/test_audit_security_regressions.py:generic-api-key:162
+697b2bb4d0aa6050b3c67a96eb2cdd6429712474:backend/tests/unit/test_audit_security_regressions.py:generic-api-key:207

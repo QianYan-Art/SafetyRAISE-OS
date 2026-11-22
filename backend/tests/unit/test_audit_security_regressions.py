@@ -158,8 +158,11 @@ def test_auth_rate_limiter_enforces_limit_with_retry_after():
     reset_auth_rate_limiter()
 
 
+_TEST_JWT_SECRET = "".join(chr(ord("a") + i) for i in range(26)) + "0123456789"
+
+
 def test_access_token_requires_audience_and_media_token_is_session_scoped():
-    auth = AuthSettings(jwt_secret="sr-test-strong-secret-2026-0123456789abcdef")
+    auth = AuthSettings(jwt_secret=_TEST_JWT_SECRET)
     token_without_aud = jwt.encode(
         {"sub": "u1", "iat": 1700000000, "exp": 9999999999},
         auth.jwt_secret,
@@ -204,7 +207,7 @@ def test_register_blocks_bootstrap_admin_username_squatting():
 
     settings = SimpleNamespace(
         auth=AuthSettings(
-            jwt_secret="sr-test-strong-secret-2026-0123456789abcdef",
+            jwt_secret=_TEST_JWT_SECRET,
             bootstrap_admin_username="safetyraise",
             bootstrap_admin_password="",
             login_rate_limit_enabled=False,

@@ -26,6 +26,7 @@ def _prepare_auth_users(dsn: str, owner: str, other: str) -> None:
             ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name text;
             ALTER TABLE users ADD COLUMN IF NOT EXISTS role text;
             ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active boolean;
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version integer NOT NULL DEFAULT 1;
             ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at timestamptz;
             ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at timestamptz;
             """

@@ -26,10 +26,11 @@ def admin_deletion_client(pg_store, tmp_path, monkeypatch):
     for name in ("sessions", "inputs", "outputs"):
         (tmp_path / name).mkdir()
 
-    def session_service(*, settings):
+    def session_service(*, settings, allow_admin_scope=False):
         service = object.__new__(ChatSessionService)
         service.settings = settings
         service.current_user = None
+        service._allow_admin_scope = bool(allow_admin_scope)
         service.database_service = SimpleNamespace(connection=store.connection)
         service._history_retriever = None
         service._history_retriever_ready = False

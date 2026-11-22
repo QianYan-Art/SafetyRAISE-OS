@@ -32,8 +32,10 @@ def pg_store():
         conn.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 id uuid PRIMARY KEY,
-                username text NOT NULL UNIQUE
+                username text NOT NULL UNIQUE,
+                token_version integer NOT NULL DEFAULT 1
             );
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version integer NOT NULL DEFAULT 1;
             CREATE TABLE IF NOT EXISTS chat_sessions (
                 id text PRIMARY KEY,
                 title text NOT NULL DEFAULT '',
