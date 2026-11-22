@@ -540,13 +540,14 @@ def _run_report_generation(
         # 管理员：全部留空时返回 None，使用系统默认端点。
         capability_overrides = capability_config_service.resolve_overrides(current_user)
 
+    allow_shared_persist = bool(current_user and current_user.is_admin)
     return service.generate(
         session_id=request.session_id,
         input_path=input_path,
         accident_data=request.accident_data,
         video_path=video_path,
-        persist_generated_input=request.persist_generated_input,
-        persist_accident_data=request.persist_accident_data,
+        persist_generated_input=request.persist_generated_input if allow_shared_persist else False,
+        persist_accident_data=request.persist_accident_data if allow_shared_persist else False,
         capability_overrides=capability_overrides,
         progress_callback=progress_callback,
         cancel_event=cancel_event,

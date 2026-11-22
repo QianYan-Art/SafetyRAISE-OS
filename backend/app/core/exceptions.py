@@ -131,3 +131,15 @@ class PermissionDeniedError(WorkflowError):
     default_code = "PERMISSION_DENIED"
     default_status_code = 403
     default_retryable = False
+
+
+class RateLimitExceededError(WorkflowError):
+    """请求触发速率限制。"""
+
+    default_code = "RATE_LIMIT_EXCEEDED"
+    default_status_code = 429
+    default_retryable = True
+
+    def __init__(self, message: str, *, retry_after: int = 60, **kwargs: Any) -> None:
+        super().__init__(message, **kwargs)
+        self.retry_after = max(1, int(retry_after))

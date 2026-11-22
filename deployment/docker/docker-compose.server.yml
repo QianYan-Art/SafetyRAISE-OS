@@ -8,6 +8,13 @@ services:
     image: safetyraise-backend:latest
     restart: unless-stopped
     init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=128m
     mem_limit: ${BACKEND_MEMORY_LIMIT:-1536m}
     cpus: ${BACKEND_CPU_LIMIT:-2}
     pids_limit: ${BACKEND_PIDS_LIMIT:-256}
@@ -47,6 +54,15 @@ services:
         VITE_API_BASE: ${VITE_API_BASE:-}
     image: safetyraise-frontend:latest
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+      - CHOWN
+      - SETUID
+      - SETGID
     mem_limit: ${FRONTEND_MEMORY_LIMIT:-128m}
     cpus: ${FRONTEND_CPU_LIMIT:-0.5}
     pids_limit: ${FRONTEND_PIDS_LIMIT:-64}

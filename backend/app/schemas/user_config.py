@@ -2,9 +2,33 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 
+from urllib.parse import urlsplit
+
 from pydantic import Field, field_validator
 
 from app.schemas.base import StrictModel
+
+
+def _validate_base_url_syntax(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if len(normalized) > 255:
+        raise ValueError("模型地址不能超过 255 个字符。")
+    if any(ch.isspace() or ord(ch) < 32 for ch in normalized):
+        raise ValueError("模型地址包含非法空白或控制字符。")
+    parsed = urlsplit(normalized)
+    if (parsed.scheme or "").lower() not in {"http", "https"}:
+        raise ValueError("模型地址必须以 http:// 或 https:// 开头。")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("模型地址不能包含用户名或密码。")
+    if parsed.query or parsed.fragment:
+        raise ValueError("模型地址不能包含查询参数或锚点片段。")
+    if not parsed.hostname:
+        raise ValueError("模型地址缺少有效主机名。")
+    return normalized
 
 
 ReportModelLabel = Literal["max", "pro", "lite"]
@@ -116,14 +140,7 @@ class UpdateCapabilityConfigItem(StrictModel):
     @field_validator("base_url")
     @classmethod
     def _validate_base_url(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        normalized = value.strip()
-        if normalized and not (normalized.startswith("http://") or normalized.startswith("https://")):
-            raise ValueError("模型地址必须以 http:// 或 https:// 开头。")
-        if len(normalized) > 255:
-            raise ValueError("模型地址不能超过 255 个字符。")
-        return normalized or None
+        return _validate_base_url_syntax(value)
 
     @field_validator("model_name")
     @classmethod

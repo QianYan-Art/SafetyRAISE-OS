@@ -207,8 +207,13 @@ export function UserModelConfigDrawer(props: UserModelConfigDrawerProps) {
   function validateDraft() {
     for (const capability of [activeCapability]) {
       const value = draft[capability].baseUrl.trim();
-      if (value && !/^https?:\/\//i.test(value)) {
-        return `${CAPABILITY_META[capability].title}接口地址必须以 http:// 或 https:// 开头。`;
+      if (value) {
+        if (!isAdmin && !/^https:\/\//i.test(value)) {
+          return `${CAPABILITY_META[capability].title}接口地址必须以 https:// 开头。`;
+        }
+        if (isAdmin && !/^https?:\/\//i.test(value)) {
+          return `${CAPABILITY_META[capability].title}接口地址必须以 https:// 或白名单 http:// 开头。`;
+        }
       }
     }
 

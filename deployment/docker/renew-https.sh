@@ -1,8 +1,8 @@
 #!/usr/bin/env sh
 set -eu
 
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-PROJECT_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+PROJECT_ROOT=$(CDPATH='' cd -- "$SCRIPT_DIR/../.." && pwd)
 # 发布目录部署时脚本单独安装在发布目录之外（如 /srv/safetyraise/bin），没有 .env.server，
 # 各字段取下方默认值；仓库检出部署仍读取项目根目录的 .env.server。
 ENV_FILE="${SAFETYRAISE_ENV_FILE:-$PROJECT_ROOT/.env.server}"

@@ -4,6 +4,12 @@ from typing import Any
 
 import httpx
 
+from app.core.outbound_url import (
+    DEFAULT_MAX_RESPONSE_BYTES,
+    create_safe_http_client,
+    request_json_bounded,
+)
+
 
 class RerankerClient:
     def __init__(
@@ -13,11 +19,13 @@ class RerankerClient:
         model: str,
         api_key: str | None = None,
         timeout_seconds: int = 30,
+        max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
     ) -> None:
         self.base_url = base_url.strip()
         self.model = model.strip()
         self.api_key = (api_key or "").strip()
         self.timeout_seconds = timeout_seconds
+        self.max_response_bytes = max_response_bytes
 
     def rerank(
         self,
@@ -29,21 +37,22 @@ class RerankerClient:
         if not candidates:
             return []
 
-        response = httpx.post(
-            self._build_rerank_url(self.base_url),
-            headers=self._build_headers(),
-            json={
-                "model": self.model,
-                "query": query,
-                "texts": [self._build_text(candidate) for candidate in candidates],
-                "top_n": min(top_n, len(candidates)),
-                "truncate": True,
-                "return_text": False,
-            },
-            timeout=self.timeout_seconds,
-        )
-        response.raise_for_status()
-        payload = response.json()
+        with create_safe_http_client(timeout=self.timeout_seconds) as client:
+            payload = request_json_bounded(
+                client,
+                "POST",
+                self._build_rerank_url(self.base_url),
+                headers=self._build_headers(),
+                json_body={
+                    "model": self.model,
+                    "query": query,
+                    "texts": [self._build_text(candidate) for candidate in candidates],
+                    "top_n": min(top_n, len(candidates)),
+                    "truncate": True,
+                    "return_text": False,
+                },
+                max_bytes=self.max_response_bytes,
+            )
         raw_results = payload.get("results") if isinstance(payload, dict) else payload
         if not isinstance(raw_results, list):
             raise ValueError("重排服务返回结构缺少 results。")

@@ -29,6 +29,25 @@ from app.report_harness.session_deletion import guarded_session_file_write
 
 router = APIRouter(prefix="/api/v1/inputs", tags=["inputs"])
 UPLOAD_CHUNK_SIZE = 1024 * 1024
+ALLOWED_IMAGE_SUFFIXES = frozenset({".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"})
+ALLOWED_VIDEO_SUFFIXES = frozenset({".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm", ".3gp"})
+_IMAGE_MIME_TO_SUFFIX = {
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+    "image/bmp": ".bmp",
+}
+_VIDEO_MIME_TO_SUFFIX = {
+    "video/mp4": ".mp4",
+    "video/quicktime": ".mov",
+    "video/x-m4v": ".m4v",
+    "video/x-msvideo": ".avi",
+    "video/x-matroska": ".mkv",
+    "video/webm": ".webm",
+    "video/3gpp": ".3gp",
+}
 
 
 @router.post("/generate-from-video", response_model=GenerateInputFromVideoResponse)
@@ -111,12 +130,12 @@ async def generate_input_from_upload(
         for index, upload in enumerate(upload_files, start=1):
             manifest_item = parsed_manifest["items"][index - 1]
             original_name = Path(upload.filename or "upload.bin").name
-            suffix = Path(original_name).suffix or _guess_suffix(upload.content_type)
-            stored_name = f"source_{index:03d}{suffix}"
-            media_type = _detect_media_type(upload.content_type, stored_name)
+            media_type = _detect_media_type(upload.content_type, original_name)
             declared_media_type = str(manifest_item.get("media_type") or "").strip()
             if declared_media_type and declared_media_type != media_type:
                 raise InputValidationError(f"上传清单中的文件类型与实际文件不一致：{original_name}")
+            suffix = _resolve_safe_upload_suffix(original_name, upload.content_type, media_type)
+            stored_name = f"source_{index:03d}{suffix}"
             max_file_bytes = (
                 upload_settings.max_video_bytes
                 if media_type == "video"
@@ -201,20 +220,70 @@ async def generate_input_from_upload(
     )
 
 
-def _detect_media_type(content_type: str | None, stored_path: str | Path) -> str:
-    normalized = (content_type or "").lower()
-    if normalized.startswith("video/"):
+def _detect_media_type(content_type: str | None, original_name: str | Path) -> str:
+    raw_suffix = Path(original_name).suffix.lower()
+    if raw_suffix in ALLOWED_VIDEO_SUFFIXES:
         return "video"
-    if normalized.startswith("image/"):
+    if raw_suffix in ALLOWED_IMAGE_SUFFIXES:
         return "image"
+    # 明确存在非白名单后缀（例如 .html/.svg/.php）时，即使伪造 Content-Type 也直接拒绝。
+    if raw_suffix:
+        raise UnsupportedMediaError(f"不支持的文件扩展名：{raw_suffix}，仅支持常见图片或视频格式。")
 
-    guessed_type, _ = mimetypes.guess_type(Path(stored_path).name)
-    if guessed_type:
-        if guessed_type.startswith("video/"):
-            return "video"
-        if guessed_type.startswith("image/"):
-            return "image"
+    normalized = (content_type or "").split(";", 1)[0].strip().lower()
+    if normalized in _VIDEO_MIME_TO_SUFFIX:
+        return "video"
+    if normalized in _IMAGE_MIME_TO_SUFFIX:
+        return "image"
     raise UnsupportedMediaError("无法识别上传文件类型，请上传图片或视频。")
+
+
+def _resolve_safe_upload_suffix(original_name: str, content_type: str | None, media_type: str) -> str:
+    raw_suffix = Path(original_name).suffix.lower()
+    allowed = ALLOWED_VIDEO_SUFFIXES if media_type == "video" else ALLOWED_IMAGE_SUFFIXES
+    if raw_suffix:
+        if raw_suffix not in allowed:
+            raise UnsupportedMediaError(f"不支持的文件扩展名：{raw_suffix}，仅支持常见图片或视频格式。")
+        return raw_suffix
+    normalized_mime = (content_type or "").split(";", 1)[0].strip().lower()
+    mapping = _VIDEO_MIME_TO_SUFFIX if media_type == "video" else _IMAGE_MIME_TO_SUFFIX
+    suffix = mapping.get(normalized_mime)
+    if not suffix:
+        raise UnsupportedMediaError("无法确定安全的媒体扩展名，请上传常见图片或视频格式。")
+    return suffix
+
+
+def _detect_magic_media_type(header: bytes) -> str | None:
+    """根据文件魔数判断真实媒体类别，防止伪造 MIME 或扩展名绕过校验。"""
+    if len(header) >= 3 and header.startswith(b"\xff\xd8\xff"):
+        return "image"
+    if len(header) >= 8 and header.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image"
+    if len(header) >= 6 and (header.startswith(b"GIF87a") or header.startswith(b"GIF89a")):
+        return "image"
+    if len(header) >= 12 and header.startswith(b"RIFF") and header[8:12] == b"WEBP":
+        return "image"
+    if len(header) >= 2 and header.startswith(b"BM"):
+        return "image"
+    if len(header) >= 12 and header[4:8] == b"ftyp":
+        return "video"
+    if len(header) >= 12 and header.startswith(b"RIFF") and header[8:12] == b"AVI ":
+        return "video"
+    if len(header) >= 4 and header.startswith(b"\x1a\x45\xdf\xa3"):
+        return "video"
+    return None
+
+
+def _parse_positive_int(raw_value: object, *, default: int, field_name: str) -> int:
+    if raw_value is None or raw_value == "":
+        return default
+    if isinstance(raw_value, bool):
+        raise InputValidationError(f"upload_manifest.{field_name} 必须为整数。")
+    try:
+        parsed = int(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise InputValidationError(f"upload_manifest.{field_name} 必须为有效整数。") from exc
+    return parsed if parsed > 0 else default
 
 
 def _guess_suffix(content_type: str | None) -> str:
@@ -254,7 +323,7 @@ def _parse_upload_manifest(raw_payload: str | None, *, expected_count: int) -> d
             "category_id": category_id,
             "category_label": category_label,
             "category_subtitle": str(raw_group.get("category_subtitle") or "").strip(),
-            "sequence": int(raw_group.get("sequence", index) or index),
+            "sequence": _parse_positive_int(raw_group.get("sequence"), default=index, field_name="groups.sequence"),
         }
 
     items: list[dict] = []
@@ -277,8 +346,10 @@ def _parse_upload_manifest(raw_payload: str | None, *, expected_count: int) -> d
                 "category_label": group["category_label"],
                 "category_subtitle": group["category_subtitle"],
                 "category_sequence": group["sequence"],
-                "sequence": int(raw_item.get("sequence", index) or index),
-                "group_sequence": int(raw_item.get("group_sequence", index) or index),
+                "sequence": _parse_positive_int(raw_item.get("sequence"), default=index, field_name="items.sequence"),
+                "group_sequence": _parse_positive_int(
+                    raw_item.get("group_sequence"), default=index, field_name="items.group_sequence"
+                ),
                 "media_type": media_type,
                 "original_name": original_name,
             }
@@ -336,12 +407,23 @@ async def _write_upload_to_path(
     media_type: str,
 ) -> int:
     file_bytes = 0
+    header_probe = bytearray()
+    magic_verified = False
     media_label = "视频" if media_type == "video" else "图片"
     with stored_path.open("wb") as handle:
         while True:
             chunk = await upload.read(UPLOAD_CHUNK_SIZE)
             if not chunk:
                 break
+            if not magic_verified:
+                header_probe.extend(chunk[: 32 - len(header_probe)])
+                if len(header_probe) >= 12:
+                    detected = _detect_magic_media_type(bytes(header_probe))
+                    if detected != media_type:
+                        raise UnsupportedMediaError(
+                            f"文件 {original_name} 的实际内容与声明的{media_label}类型不符。"
+                        )
+                    magic_verified = True
             total_bytes += len(chunk)
             file_bytes += len(chunk)
             if total_bytes > max_total_bytes:
@@ -353,6 +435,12 @@ async def _write_upload_to_path(
                     f"{media_label}文件 {original_name} 大小不能超过 {max_file_bytes // (1024 * 1024)} MB。",
                 )
             handle.write(chunk)
+    if not magic_verified:
+        detected = _detect_magic_media_type(bytes(header_probe))
+        if detected != media_type:
+            raise UnsupportedMediaError(
+                f"文件 {original_name} 的实际内容与声明的{media_label}类型不符。"
+            )
     return total_bytes
 
 

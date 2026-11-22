@@ -17,6 +17,7 @@ def build_retriever(
     *,
     lmstudio_residency_manager: LMStudioResidencyManager | None = None,
     embedding_residency_companions: list[LMStudioResidencySpec] | None = None,
+    embedding_enforce_ssrf: bool = False,
 ) -> BaseRetriever:
     provider = settings.retrieval.provider.strip().lower()
     if provider == "mock":
@@ -55,6 +56,7 @@ def build_retriever(
                 document_max_length=embedding_cfg.document_max_length,
                 cache_size=embedding_cfg.cache_size,
                 cache_ttl_seconds=embedding_cfg.cache_ttl_seconds,
+                enforce_ssrf=embedding_enforce_ssrf,
             )
         except Exception as exc:  # noqa: BLE001
             dependency_errors.append(f"embedding 服务初始化失败: {exc}")

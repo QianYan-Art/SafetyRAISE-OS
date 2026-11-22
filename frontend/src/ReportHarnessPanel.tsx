@@ -1,6 +1,7 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { safeMarkdownComponents, safeMarkdownUrlTransform } from "./markdownSafety";
 
 import {
   ApiError,
@@ -1345,7 +1346,7 @@ export const ReportHarnessPanel = forwardRef<ReportHarnessPanelHandle, ReportHar
           <div className="harness-candidate-block">
             <div className="harness-subsection-heading"><div><strong>{selectedRun.state === "published" ? "已发布" : "候选稿"}</strong><span>{selectedRun.state === "published" ? "当前已发布版本" : "当前候选版本"}</span></div></div>
             <div className="harness-markdown markdown-report">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{normalizeMarkdownForDisplay(candidateMarkdown)}</ReactMarkdown>
+              <ReactMarkdown remarkPlugins={[remarkGfm]} urlTransform={safeMarkdownUrlTransform} components={safeMarkdownComponents}>{normalizeMarkdownForDisplay(candidateMarkdown)}</ReactMarkdown>
             </div>
           </div>
         )}

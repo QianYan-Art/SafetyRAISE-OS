@@ -176,4 +176,18 @@ describe("UserModelConfigDrawer", () => {
     expect(screen.getByDisplayValue("https://vision.example/v1")).not.toBeNull();
     expect(onSave).toHaveBeenCalledTimes(1);
   });
+
+  it("普通用户填写明文 http:// 接口地址时直接拦截并提示改用 https://", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    renderDrawer({ onSave });
+
+    const baseUrlInput = screen.getByPlaceholderText("例如 https://api.openai.com/v1");
+    await user.clear(baseUrlInput);
+    await user.type(baseUrlInput, "http://insecure.example/v1");
+    await user.click(screen.getByRole("button", { name: "保存配置" }));
+
+    expect(screen.getByRole("alert").textContent).toContain("必须以 https:// 开头");
+    expect(onSave).not.toHaveBeenCalled();
+  });
 });

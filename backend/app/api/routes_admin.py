@@ -36,10 +36,10 @@ def create_user(
 def update_user(
     user_id: str,
     request: AdminUpdateUserRequest,
-    _current_user: AuthenticatedUser = Depends(require_admin_user),
+    current_user: AuthenticatedUser = Depends(require_admin_user),
     service: AdminService = Depends(get_admin_service),
 ):
-    return service.update_user(user_id, request)
+    return service.update_user(user_id, request, current_user=current_user)
 
 
 @router.delete("/users/{user_id}")

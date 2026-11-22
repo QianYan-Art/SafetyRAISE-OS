@@ -27,6 +27,22 @@ from app.services.chat_session_service import ChatSessionService
 router = APIRouter(prefix="/api/v1/chat-sessions", tags=["chat-sessions"])
 
 
+_SAFE_INLINE_MEDIA_TYPES = frozenset(
+    {
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+        "image/gif",
+        "image/bmp",
+        "video/mp4",
+        "video/webm",
+        "video/quicktime",
+        "video/x-msvideo",
+        "video/x-matroska",
+    }
+)
+
+
 def get_media_chat_session_service(
     session_id: str,
     request: Request,
@@ -38,7 +54,9 @@ def get_media_chat_session_service(
         token = request.cookies.get(MEDIA_COOKIE)
         if not token:
             raise AuthenticationError("请先登录后再打开媒体预览。")
-        user = auth_service.get_user_by_id(decode_media_token(settings.auth, token))
+        user = auth_service.get_user_by_id(
+            decode_media_token(settings.auth, token, expected_session_id=session_id)
+        )
     return ChatSessionService(settings=settings, current_user=user)
 
 
@@ -59,7 +77,7 @@ def grant_media_access(
     service.get_session(session_id, include_linked_files=False, include_linked_artifacts=False)
     response.set_cookie(
         MEDIA_COOKIE,
-        issue_media_token(service.settings.auth, service.current_user.id),
+        issue_media_token(service.settings.auth, service.current_user.id, session_id=session_id),
         max_age=MEDIA_TTL_SECONDS,
         httponly=True,
         secure=request.url.scheme == "https" or service.settings.app.env == "prod",
@@ -147,10 +165,23 @@ def get_chat_session_linked_artifact_asset(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     asset_path = Path(asset.path).resolve()
+    normalized_mime = str(asset.mime_type or "").split(";", 1)[0].strip().lower()
+    if normalized_mime in _SAFE_INLINE_MEDIA_TYPES:
+        served_mime = normalized_mime
+        disposition = "inline"
+    else:
+        # 拒绝同源内联渲染 HTML/SVG/脚本等主动内容，强制下载并禁用 MIME 嗅探。
+        served_mime = "application/octet-stream"
+        disposition = "attachment"
     return FileResponse(
         path=str(asset_path),
-        media_type=asset.mime_type or "application/octet-stream",
+        media_type=served_mime,
         filename=asset.file_name,
-        content_disposition_type="inline",
-        headers={"Cache-Control": "private, no-store", "Vary": "Cookie, Authorization"},
+        content_disposition_type=disposition,
+        headers={
+            "Cache-Control": "private, no-store",
+            "Vary": "Cookie, Authorization",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'; sandbox",
+        },
     )

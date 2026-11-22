@@ -1,6 +1,7 @@
 import { forwardRef, useEffect, useId, useImperativeHandle, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { safeMarkdownComponents, safeMarkdownUrlTransform } from "./markdownSafety";
 import { Check, Download, FileText, Pencil, Play, RotateCw, Square, Trash2, X } from "lucide-react";
 import {
   authorizeReportRun, cancelReportRun, createReportRun, downloadReportRunExport,
@@ -495,7 +496,7 @@ export const IntegratedReport = forwardRef<IntegratedReportHandle, {
           <strong>待解决问题 {openIssues.length}</strong>
           {openIssues.map((issue) => <p key={issue.issue_id}>{issue.explanation}</p>)}
         </div>}
-        {body ? <div className="markdown-report"><ReactMarkdown remarkPlugins={[remarkGfm]}>{body}</ReactMarkdown></div>
+        {body ? <div className="markdown-report"><ReactMarkdown remarkPlugins={[remarkGfm]} urlTransform={safeMarkdownUrlTransform} components={safeMarkdownComponents}>{body}</ReactMarkdown></div>
           : !loadFailed && <p className="report-empty">{active ? "报告撰写完成后显示在这里。" : run ? "这次运行没有生成报告正文。" : "在“核对事实”确认事故信息后，报告会显示在这里。"}</p>}
         {run && exportKind && <ReportFeedback runId={run.run_id} />}
       </>}

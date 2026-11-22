@@ -64,9 +64,12 @@ class DatabaseService:
                         display_name text,
                         role text not null check (role in ('admin', 'user')),
                         is_active boolean not null default true,
+                        token_version integer not null default 1,
                         created_at timestamptz not null default now(),
                         updated_at timestamptz not null default now()
                     );
+
+                    alter table users add column if not exists token_version integer not null default 1;
 
                     create table if not exists user_capability_configs (
                         user_id uuid not null references users(id) on delete cascade,

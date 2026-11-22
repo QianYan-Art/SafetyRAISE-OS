@@ -22,8 +22,13 @@ const STOP_WORDS: &[&str] = &[
     "知识库",
 ];
 
+const MAX_BALANCED_JSON_STARTS: usize = 256;
+
+/// # Safety
+/// `input` 必须为空指针，或指向以 NUL 结尾的有效 UTF-8 C 字符串。
+/// 返回的非空指针须由调用方通过 `accel_free_string` 释放。
 #[no_mangle]
-pub extern "C" fn accel_tokenize_text(input: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn accel_tokenize_text(input: *const c_char) -> *mut c_char {
     with_c_input(input, |text| {
         Some(
             tokenize_text(text)
@@ -34,8 +39,11 @@ pub extern "C" fn accel_tokenize_text(input: *const c_char) -> *mut c_char {
     })
 }
 
+/// # Safety
+/// `input` 必须为空指针，或指向以 NUL 结尾的有效 UTF-8 JSON 字符串数组。
+/// 返回的非空指针须由调用方通过 `accel_free_string` 释放。
 #[no_mangle]
-pub extern "C" fn accel_tokenize_batch(input: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn accel_tokenize_batch(input: *const c_char) -> *mut c_char {
     with_c_input(input, |raw| {
         let texts: Vec<String> = serde_json::from_str(raw).ok()?;
         serde_json::to_string(
@@ -48,11 +56,14 @@ pub extern "C" fn accel_tokenize_batch(input: *const c_char) -> *mut c_char {
     })
 }
 
+/// # Safety
+/// `input` 必须为空指针，或指向以 NUL 结尾的有效 UTF-8 JSON 负载。
+/// 返回的非空指针须由调用方通过 `accel_free_string` 释放。
 #[no_mangle]
-pub extern "C" fn accel_score_records(input: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn accel_score_records(input: *const c_char) -> *mut c_char {
     with_c_input(input, |raw| {
         let payload: ScorePayload = serde_json::from_str(raw).ok()?;
-        let token_count = payload.query_tokens.len().min(8).max(1) as f32;
+        let token_count = payload.query_tokens.len().clamp(1, 8) as f32;
         let mut ranked: Vec<ScoredResult> = payload
             .candidates
             .iter()
@@ -92,19 +103,22 @@ pub extern "C" fn accel_score_records(input: *const c_char) -> *mut c_char {
     })
 }
 
+/// # Safety
+/// `input` 必须为空指针，或指向以 NUL 结尾的有效 UTF-8 C 字符串。
+/// 返回的非空指针须由调用方通过 `accel_free_string` 释放。
 #[no_mangle]
-pub extern "C" fn accel_extract_json_candidates(input: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn accel_extract_json_candidates(input: *const c_char) -> *mut c_char {
     with_c_input(input, |raw| serde_json::to_string(&extract_json_candidates(raw)).ok())
 }
 
+/// # Safety
+/// `ptr` 必须为空指针，或为本库 C ABI 函数返回且尚未释放的指针；不可重复释放。
 #[no_mangle]
-pub extern "C" fn accel_free_string(ptr: *mut c_char) {
+pub unsafe extern "C" fn accel_free_string(ptr: *mut c_char) {
     if ptr.is_null() {
         return;
     }
-    unsafe {
-        let _ = CString::from_raw(ptr);
-    }
+    let _ = CString::from_raw(ptr);
 }
 
 fn tokenize_text(text: &str) -> BTreeSet<String> {
@@ -151,19 +165,21 @@ fn tokenize_text(text: &str) -> BTreeSet<String> {
 }
 
 fn extract_json_candidates(content: &str) -> Vec<String> {
+    // 仅提取原始 JSON 候选，与 Python `_extract_candidates` 保持 1:1 语义一致；
+    // 规范化与缺失闭合符修复由 Python `_load_json` 单次执行，避免双重修复把畸形片段误转为 `{}`。
     let mut candidates: Vec<String> = Vec::new();
     let trimmed = content.trim();
 
     for fenced in extract_fenced_candidates(trimmed) {
-        push_json_variants(&mut candidates, &fenced);
+        push_unique_string(&mut candidates, fenced);
     }
 
     if trimmed.starts_with('{') && trimmed.ends_with('}') {
-        push_json_variants(&mut candidates, trimmed);
+        push_unique_string(&mut candidates, trimmed.to_string());
     }
 
     for candidate in extract_balanced_candidates(trimmed) {
-        push_json_variants(&mut candidates, &candidate);
+        push_unique_string(&mut candidates, candidate);
     }
 
     candidates
@@ -248,7 +264,7 @@ fn score_record(candidate: &ScoreCandidate, query_tokens: &[String]) -> f32 {
         return 0.0;
     }
 
-    let coverage = hits as f32 / query_tokens.len().min(8).max(1) as f32;
+    let coverage = hits as f32 / query_tokens.len().clamp(1, 8) as f32;
     let mut score = coverage * 0.55;
     score += title_hits.min(2) as f32 * 0.08;
     if !candidate.category.is_empty() || !candidate.rule_type.is_empty() {
@@ -303,9 +319,14 @@ fn extract_fenced_candidates(content: &str) -> Vec<String> {
 
 fn extract_balanced_candidates(content: &str) -> Vec<String> {
     let mut candidates = Vec::new();
+    let mut start_count = 0usize;
     for (index, ch) in content.char_indices() {
         if ch != '{' {
             continue;
+        }
+        start_count += 1;
+        if start_count > MAX_BALANCED_JSON_STARTS {
+            break;
         }
         if let Some(end) = find_balanced_json_end(content, index) {
             push_unique_string(&mut candidates, content[index..=end].to_string());
@@ -313,7 +334,7 @@ fn extract_balanced_candidates(content: &str) -> Vec<String> {
             push_unique_string(&mut candidates, content[index..].to_string());
         }
     }
-    candidates.sort_by(|left, right| right.len().cmp(&left.len()));
+    candidates.sort_by_key(|item| std::cmp::Reverse(item.len()));
     candidates
 }
 
@@ -357,152 +378,6 @@ fn find_balanced_json_end(content: &str, start: usize) -> Option<usize> {
     }
 
     None
-}
-
-fn push_json_variants(target: &mut Vec<String>, candidate: &str) {
-    let normalized = normalize_json_like_text(candidate);
-    if normalized.is_empty() {
-        return;
-    }
-
-    push_unique_string(target, normalized.clone());
-    let repaired = remove_trailing_commas(&normalized);
-    if repaired != normalized {
-        push_unique_string(target, repaired.clone());
-    }
-
-    let balanced = append_missing_closers(&repaired);
-    if balanced != repaired {
-        push_unique_string(target, balanced);
-    }
-
-    let normalized_balanced = append_missing_closers(&normalized);
-    if normalized_balanced != normalized {
-        push_unique_string(target, normalized_balanced);
-    }
-}
-
-fn normalize_json_like_text(candidate: &str) -> String {
-    let mut normalized = candidate.trim().trim_start_matches('\u{feff}').trim().to_string();
-    if normalized
-        .get(..4)
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("json"))
-    {
-        normalized = normalized
-            .get(4..)
-            .unwrap_or_default()
-            .trim_start()
-            .to_string();
-    }
-
-    normalized
-        .replace('“', "\"")
-        .replace('”', "\"")
-        .replace('‘', "'")
-        .replace('’', "'")
-        .replace('：', ":")
-        .replace('，', ",")
-        .replace('（', "(")
-        .replace('）', ")")
-}
-
-fn remove_trailing_commas(candidate: &str) -> String {
-    let chars: Vec<char> = candidate.chars().collect();
-    let mut output = String::with_capacity(candidate.len());
-    let mut index = 0usize;
-    let mut in_string = false;
-    let mut escaped = false;
-    let mut quote_char = '"';
-
-    while index < chars.len() {
-        let ch = chars[index];
-        if in_string {
-            output.push(ch);
-            if escaped {
-                escaped = false;
-            } else if ch == '\\' {
-                escaped = true;
-            } else if ch == quote_char {
-                in_string = false;
-            }
-            index += 1;
-            continue;
-        }
-
-        if ch == '"' || ch == '\'' {
-            in_string = true;
-            quote_char = ch;
-            output.push(ch);
-            index += 1;
-            continue;
-        }
-
-        if ch == ',' {
-            let mut lookahead = index + 1;
-            while lookahead < chars.len() && chars[lookahead].is_whitespace() {
-                lookahead += 1;
-            }
-            if lookahead < chars.len() && (chars[lookahead] == '}' || chars[lookahead] == ']') {
-                index += 1;
-                continue;
-            }
-        }
-
-        output.push(ch);
-        index += 1;
-    }
-
-    output
-}
-
-fn append_missing_closers(candidate: &str) -> String {
-    let mut open_braces = 0usize;
-    let mut close_braces = 0usize;
-    let mut open_brackets = 0usize;
-    let mut close_brackets = 0usize;
-    let mut in_string = false;
-    let mut escaped = false;
-    let mut quote_char = '"';
-
-    for ch in candidate.chars() {
-        if in_string {
-            if escaped {
-                escaped = false;
-                continue;
-            }
-            if ch == '\\' {
-                escaped = true;
-                continue;
-            }
-            if ch == quote_char {
-                in_string = false;
-            }
-            continue;
-        }
-
-        if ch == '"' || ch == '\'' {
-            in_string = true;
-            quote_char = ch;
-            continue;
-        }
-
-        match ch {
-            '{' => open_braces += 1,
-            '}' => close_braces += 1,
-            '[' => open_brackets += 1,
-            ']' => close_brackets += 1,
-            _ => {}
-        }
-    }
-
-    let mut repaired = candidate.to_string();
-    if open_brackets > close_brackets {
-        repaired.push_str(&"]".repeat(open_brackets - close_brackets));
-    }
-    if open_braces > close_braces {
-        repaired.push_str(&"}".repeat(open_braces - close_braces));
-    }
-    repaired
 }
 
 fn push_unique_string(target: &mut Vec<String>, value: String) {
@@ -587,4 +462,48 @@ struct OutputScore {
     id: String,
     record_type: String,
     score: f32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tokenize_text_extracts_cjk_ngrams_and_ascii() {
+        let tokens = tokenize_text("交通事故责任认定 GB-2026 12345");
+        assert!(tokens.contains("交通事故"));
+        assert!(tokens.contains("责任认定"));
+        assert!(tokens.contains("gb-2026"));
+        assert!(!tokens.contains("12345"));
+    }
+
+    #[test]
+    fn extract_json_candidates_does_not_mutate_malformed_fragment_into_empty_object() {
+        let malformed = "prefix {\"a\": 1} tail {,'";
+        let candidates = extract_json_candidates(malformed);
+        assert!(candidates.iter().any(|item| item == "{\"a\": 1}"));
+        assert!(!candidates.iter().any(|item| item == "{}"));
+    }
+
+    #[test]
+    fn extract_json_candidates_bounds_balanced_starts() {
+        let repeated = "{".repeat(MAX_BALANCED_JSON_STARTS + 50);
+        let candidates = extract_json_candidates(&repeated);
+        assert!(candidates.len() <= MAX_BALANCED_JSON_STARTS);
+    }
+
+    #[test]
+    fn ffi_handles_null_and_valid_roundtrip() {
+        unsafe {
+            assert!(accel_tokenize_text(std::ptr::null()).is_null());
+            accel_free_string(std::ptr::null_mut());
+
+            let input = CString::new("追尾事故").expect("valid cstr");
+            let out_ptr = accel_tokenize_text(input.as_ptr());
+            assert!(!out_ptr.is_null());
+            let out_str = CStr::from_ptr(out_ptr).to_str().expect("utf8").to_string();
+            accel_free_string(out_ptr);
+            assert!(out_str.contains("追尾事故"));
+        }
+    }
 }

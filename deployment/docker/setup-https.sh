@@ -1,8 +1,8 @@
 #!/usr/bin/env sh
 set -eu
 
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-PROJECT_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+PROJECT_ROOT=$(CDPATH='' cd -- "$SCRIPT_DIR/../.." && pwd)
 ENV_FILE="$PROJECT_ROOT/.env.server"
 COMPOSE_SCRIPT="$SCRIPT_DIR/server-compose.sh"
 HTTP_CONF_SRC="$SCRIPT_DIR/nginx.frontend.http.conf"
@@ -35,6 +35,21 @@ LOGROTATE_FILE=/etc/logrotate.d/safetyraise-cert-renew
 FRONTEND_WAIT_ATTEMPTS=$(read_env_value "FRONTEND_WAIT_ATTEMPTS" "30")
 FRONTEND_WAIT_SECONDS=$(read_env_value "FRONTEND_WAIT_SECONDS" "1")
 DOMAINS_SPACE=$(printf '%s' "$DOMAINS_CSV" | tr ',' ' ' | xargs)
+
+validate_domain_label() {
+  candidate="$1"
+  case "$candidate" in
+    *[!A-Za-z0-9.-]*|""|-*|*-|*..*|.*)
+      echo "非法域名配置：$candidate" >&2
+      exit 1
+      ;;
+  esac
+}
+
+validate_domain_label "$PRIMARY_DOMAIN"
+for domain_item in $DOMAINS_SPACE; do
+  validate_domain_label "$domain_item"
+done
 
 get_frontend_container_id() {
   docker ps \

@@ -9,6 +9,11 @@ import httpx
 
 from app.core.exceptions import ModelTimeoutError, ProviderError
 from app.core.model_requests import omit_explicit_token_limits
+from app.core.outbound_url import (
+    DEFAULT_MAX_RESPONSE_BYTES,
+    create_safe_http_client,
+    request_json_bounded,
+)
 from app.core.settings import ReportModelSettings
 from app.providers.llm.lmstudio_compat import (
     build_lmstudio_models_urls,
@@ -26,11 +31,15 @@ class OpenAIVisionProvider:
         config: ReportModelSettings,
         endpoint_api_keys: dict[str, str],
         lmstudio_host_allowlist: list[str] | None = None,
+        max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
+        enforce_ssrf: bool = False,
     ):
         self.config = config
         self.endpoint_api_keys = endpoint_api_keys
+        self._max_response_bytes = max_response_bytes
+        self._enforce_ssrf = enforce_ssrf
         self._clients = {
-            endpoint.name: httpx.Client(timeout=endpoint.timeout_seconds)
+            endpoint.name: create_safe_http_client(timeout=endpoint.timeout_seconds)
             for endpoint in config.endpoints
         }
         self._lmstudio_host_allowlist = lmstudio_host_allowlist or []
@@ -88,9 +97,16 @@ class OpenAIVisionProvider:
 
             for attempt in range(1, self.config.retry.max_attempts_per_endpoint + 1):
                 try:
-                    response = client.post(endpoint.url, headers=headers, json=payload)
-                    response.raise_for_status()
-                    data = response.json()
+                    data = request_json_bounded(
+                        client,
+                        "POST",
+                        endpoint.url,
+                        headers=headers,
+                        json_body=payload,
+                        max_bytes=self._max_response_bytes,
+                        enforce_ssrf=self._enforce_ssrf,
+                        host_allowlist=self._lmstudio_host_allowlist,
+                    )
                     choices = data.get("choices") or []
                     if not choices:
                         raise ProviderError("视觉模型返回为空。")

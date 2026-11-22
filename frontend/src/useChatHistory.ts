@@ -58,6 +58,26 @@ const AGENTIC_MESSAGE_PREFIX = "### Agentic RAG 新增片段（节选）";
 const SESSION_STORAGE_KEY_PREFIX = "traffic_accident_chat_sessions";
 const SYNC_DEBOUNCE_MS = 300;
 
+export function clearStoredSessions(): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    const keysToRemove: string[] = [];
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+      const key = window.localStorage.key(index);
+      if (key && key.startsWith(SESSION_STORAGE_KEY_PREFIX)) {
+        keysToRemove.push(key);
+      }
+    }
+    for (const key of keysToRemove) {
+      window.localStorage.removeItem(key);
+    }
+  } catch {
+    // 忽略本地存储不可用场景。
+  }
+}
+
 function sortSessions(sessions: ChatSession[]): ChatSession[] {
   return [...sessions].sort((left, right) => {
     const leftHasManualOrder = Number.isFinite(left.sortOrder);

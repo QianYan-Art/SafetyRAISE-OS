@@ -108,12 +108,13 @@ base_url: "${RETRIEVAL_EMBEDDING_BASE_URL:-http://127.0.0.1:1234/v1}"
 | 变量 | 作用 |
 | --- | --- |
 | `DATABASE_DSN` | PostgreSQL 连接串；同机部署用 Docker 网络内的服务名，分机部署用数据库主机地址 |
-| `AUTH_JWT_SECRET` | 登录令牌签名密钥，使用高熵随机值（如 `openssl rand -hex 32`） |
-| `BOOTSTRAP_ADMIN_USERNAME` | 首次启动自动创建的管理员用户名，默认 `safetyraise` |
-| `BOOTSTRAP_ADMIN_PASSWORD` | 该管理员的初始口令，至少 8 位，没有默认值 |
+| `AUTH_JWT_SECRET` | 登录令牌签名密钥，生产要求至少 32 字节且具备字符多样性（如 `openssl rand -hex 32`） |
+| `USER_CONFIG_ENCRYPTION_KEY` | 可选，用于 PostgreSQL `pgcrypto` AES-256 加密存储用户自定义模型 API Key；留空时由 `AUTH_JWT_SECRET` 域分离派生 |
+| `BOOTSTRAP_ADMIN_USERNAME` | 首次启动自动创建的管理员用户名，默认 `safetyraise`（禁止普通注册抢占） |
+| `BOOTSTRAP_ADMIN_PASSWORD` | 该管理员的初始口令，长度 8–128 位，没有默认值 |
 | `BOOTSTRAP_ADMIN_DISPLAY_NAME` | 管理员显示名称 |
 
-`workflow.server.yaml` 设置了 `auth.require_strong_secret: true`：`AUTH_JWT_SECRET` 为空或为公开默认串、`BOOTSTRAP_ADMIN_PASSWORD` 为空、少于 8 位或等于曾公开的默认口令时，后端拒绝启动。本地开发配置不做该检查；未设置管理员口令时只跳过创建管理员并记录警告，可先注册普通用户使用。管理员只在数据库中不存在同名用户时创建，之后修改口令请在管理控制台中进行。
+`workflow.server.yaml` 设置了 `auth.require_strong_secret: true`：`AUTH_JWT_SECRET` 为空、不足 32 字节、熵过低或为公开默认串、`BOOTSTRAP_ADMIN_PASSWORD` 为空、少于 8 位或等于曾公开的默认口令时，后端拒绝启动。本地开发配置不做该检查；未设置管理员口令时只跳过创建管理员并记录警告，可先注册普通用户使用。管理员只在数据库中不存在同名用户时创建，之后修改口令请在管理控制台中进行；普通用户可通过 `POST /api/v1/auth/change-password` 自助改密，`POST /api/v1/auth/logout`、改密及管理员重置密码会递增 `users.token_version` 立即吊销旧令牌。`auth` 下另支持 `allow_self_registration`、`registration_invite_code`、`login_rate_limit_enabled` 及 IP/账号限流阈值；`app.cors_allow_origins` 默认收紧，生产空列表表示同源访问。普通用户自定义模型端点必须使用 `https://` 且禁止指向回环、私网、链路本地与云元数据地址（仅 `app.lmstudio_host_allowlist` 显式放行的主机例外）。
 
 ### 2. 专家模型
 

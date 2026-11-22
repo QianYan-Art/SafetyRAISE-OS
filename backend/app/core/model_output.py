@@ -6,8 +6,16 @@ _REASONING_TAG_PATTERN = re.compile(
     r"<(?P<tag>think|reasoning|analysis)\b[^>]*>.*?</(?P=tag)>\s*",
     re.DOTALL | re.IGNORECASE,
 )
+_UNCLOSED_REASONING_TAG_PATTERN = re.compile(
+    r"<(?:think|reasoning|analysis)\b[^>]*>.*$",
+    re.DOTALL | re.IGNORECASE,
+)
 _REASONING_FENCE_PATTERN = re.compile(
     r"```(?:thinking|reasoning|analysis|thoughts?)\b[^\n]*\n?(.*?)```",
+    re.DOTALL | re.IGNORECASE,
+)
+_UNCLOSED_REASONING_FENCE_PATTERN = re.compile(
+    r"```(?:thinking|reasoning|analysis|thoughts?)\b[^\n]*\n?.*$",
     re.DOTALL | re.IGNORECASE,
 )
 _MARKDOWN_FENCE_PATTERN = re.compile(
@@ -37,7 +45,9 @@ def sanitize_model_text(text: str) -> str:
         return ""
 
     content = _REASONING_TAG_PATTERN.sub("", content)
+    content = _UNCLOSED_REASONING_TAG_PATTERN.sub("", content)
     content = _REASONING_FENCE_PATTERN.sub("", content)
+    content = _UNCLOSED_REASONING_FENCE_PATTERN.sub("", content)
     return content.strip()
 
 

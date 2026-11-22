@@ -13,7 +13,14 @@ from uuid import uuid4
 from pydantic import ValidationError
 from psycopg.types.json import Jsonb
 
-from app.core.exceptions import AuthenticationError, SessionNotFoundError, SessionVersionConflictError, WorkflowError
+from app.core.exceptions import (
+    AuthenticationError,
+    InputValidationError,
+    PermissionDeniedError,
+    SessionNotFoundError,
+    SessionVersionConflictError,
+    WorkflowError,
+)
 from app.core.settings import Settings
 from app.report_harness.session_deletion import (
     assert_session_identity_available,
@@ -78,9 +85,18 @@ def _get_session_lock(session_id: str) -> RLock:
 
 
 class ChatSessionService:
-    def __init__(self, settings: Settings, current_user: AuthenticatedUser | None = None):
+    def __init__(
+        self,
+        settings: Settings,
+        current_user: AuthenticatedUser | None = None,
+        *,
+        allow_admin_scope: bool = False,
+    ):
+        if current_user is None and not allow_admin_scope:
+            raise AuthenticationError("访问会话服务必须提供已认证用户上下文。")
         self.settings = settings
         self.current_user = current_user
+        self._allow_admin_scope = allow_admin_scope
         self.database_service = DatabaseService(settings)
         self._history_retriever = None
         self._history_retriever_ready = False
@@ -183,7 +199,7 @@ class ChatSessionService:
             record = self._sync_draft_artifacts(record)
             record = self._refresh_linked_views(record)
             record = self._apply_session_state(record)
-            self._write_session(record)
+            self._write_session(record, create_only=True)
             return record
 
     def update_session(self, session_id: str, request: UpdateChatSessionRequest) -> ChatSessionRecord:
@@ -459,8 +475,10 @@ class ChatSessionService:
         )
 
     def _can_access_session(self, record: ChatSessionRecord) -> bool:
-        if self.current_user is None:
+        if self._allow_admin_scope:
             return True
+        if self.current_user is None:
+            return False
         owner_user_id = str(record.owner_user_id or "").strip()
         owner_username = str(record.owner_username or "").strip()
         if owner_user_id:
@@ -1371,12 +1389,43 @@ class ChatSessionService:
             return int(category_meta[category_id].get("sequence", 999) or 999)
         return 999
 
-    def _write_session(self, record: ChatSessionRecord, *, expected_updated_at: int | None = None) -> None:
+    def _write_session(
+        self,
+        record: ChatSessionRecord,
+        *,
+        expected_updated_at: int | None = None,
+        create_only: bool = False,
+    ) -> None:
         payload = record.model_dump()
         with self.database_service.connection() as conn, conn.transaction():
             lock_session_identity(conn, record.id)
             assert_session_not_deleted(conn, record.id)
             assert_session_identity_available(conn, record.id)
+            if create_only:
+                existing = conn.execute(
+                    "SELECT owner_user_id::text AS owner_user_id, owner_username FROM chat_sessions WHERE id=%s FOR UPDATE",
+                    (record.id,),
+                ).fetchone()
+                if existing is not None:
+                    existing_owner_id = str(
+                        (existing["owner_user_id"] if isinstance(existing, dict) else existing[0]) or ""
+                    ).strip()
+                    existing_owner_name = str(
+                        (existing["owner_username"] if isinstance(existing, dict) else existing[1]) or ""
+                    ).strip()
+                    if not self._allow_admin_scope:
+                        current_id = str(getattr(self.current_user, "id", "") or "").strip()
+                        current_name = str(getattr(self.current_user, "username", "") or "").strip()
+                        same_owner = (
+                            (bool(existing_owner_id) and existing_owner_id == current_id)
+                            or (not existing_owner_id and bool(existing_owner_name) and existing_owner_name == current_name)
+                        )
+                        if not same_owner:
+                            raise PermissionDeniedError(
+                                "目标会话标识已被占用，无法创建。",
+                                code="SESSION_ID_CONFLICT",
+                                status_code=409,
+                            )
             if expected_updated_at is not None:
                 row = conn.execute(
                     "SELECT updated_at FROM chat_sessions WHERE id=%s FOR UPDATE",
@@ -1501,7 +1550,7 @@ class ChatSessionService:
                 include_linked_files=include_linked_files,
                 include_linked_artifacts=include_linked_artifacts,
             )
-            self._write_session(record)
+            self._write_session(record, create_only=True)
             return record
         raise SessionNotFoundError(f"会话不存在: {session_id}")
 

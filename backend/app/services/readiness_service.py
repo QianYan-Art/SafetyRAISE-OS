@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
-import httpx
-
+from app.core.outbound_url import create_safe_http_client
 from app.core.settings import (
     ModelEndpointSettings,
     ReportModelSettings,
@@ -23,19 +25,45 @@ from app.providers.retrieval.embedding_client import EmbeddingClient
 from app.providers.retrieval.reranker_client import RerankerClient
 from app.services.report_export_service import DOCX_IMPORT_ERROR, PDF_IMPORT_ERROR
 
+_PASSIVE_READINESS_CACHE_LOCK = Lock()
+_PASSIVE_READINESS_CACHE: dict[tuple[str, bool], tuple[float, dict[str, Any]]] = {}
+
+
+def clear_readiness_cache() -> None:
+    with _PASSIVE_READINESS_CACHE_LOCK:
+        _PASSIVE_READINESS_CACHE.clear()
+
 
 class ReadinessService:
     def __init__(self, settings: Settings):
         self.settings = settings
 
-    def check(self) -> dict[str, Any]:
+    def check(self, *, active_external_probes: bool = False) -> dict[str, Any]:
+        """检查服务就绪状态。
+
+        安全边界：默认 `active_external_probes=False`（供公开 `/api/v1/ready` 使用），
+        仅执行本地低成本校验与短 TTL 缓存，绝不在公开端点触发付费外部嵌入/模型探测或频繁写盘；
+        显式传入 `active_external_probes=True`（仅管理员诊断或 CLI）时执行主动外部探测。
+        """
+        cache_ttl = int(getattr(self.settings.app, "readiness_cache_ttl_seconds", 60) or 0)
+        cache_key = (str(self.settings.project_root), active_external_probes)
+        if not active_external_probes and cache_ttl > 0:
+            now = time.monotonic()
+            with _PASSIVE_READINESS_CACHE_LOCK:
+                cached = _PASSIVE_READINESS_CACHE.get(cache_key)
+                if cached is not None and (now - cached[0]) < cache_ttl:
+                    return cached[1]
+
         knowledge_base_check = self._check_knowledge_base()
-        embedding_check = self._check_retrieval_embedding_endpoint()
-        reranker_check = self._check_retrieval_reranker_endpoint()
+        embedding_check = self._check_retrieval_embedding_endpoint(active_probe=active_external_probes)
+        reranker_check = self._check_retrieval_reranker_endpoint(active_probe=active_external_probes)
         checks = {
             "config_loaded": self._check_config_loaded(),
-            "upload_dir_writable": self._check_upload_dir_writable(),
-            "ffprobe_available": self._check_command_available(self.settings.input_generation.frames.ffprobe_path),
+            "upload_dir_writable": self._check_upload_dir_writable(active_probe=active_external_probes),
+            "ffprobe_available": self._check_command_available(
+                self.settings.input_generation.frames.ffprobe_path,
+                active_probe=active_external_probes,
+            ),
             "yolo_runtime_available": self._check_yolo_runtime(),
             "report_export_available": self._check_report_export_dependencies(),
             "knowledge_base_available": knowledge_base_check,
@@ -46,9 +74,18 @@ class ReadinessService:
                 embedding_check,
                 reranker_check,
             ),
-            "expert_model_available": self._check_expert_model_endpoint(self.settings.models.expert_local),
-            "report_model_available": self._check_model_endpoints(self.settings.models.report_external),
-            "vision_model_available": self._check_model_endpoints(self.settings.models.accident_vision),
+            "expert_model_available": self._check_expert_model_endpoint(
+                self.settings.models.expert_local,
+                active_probe=active_external_probes,
+            ),
+            "report_model_available": self._check_model_endpoints(
+                self.settings.models.report_external,
+                active_probe=active_external_probes,
+            ),
+            "vision_model_available": self._check_model_endpoints(
+                self.settings.models.accident_vision,
+                active_probe=active_external_probes,
+            ),
         }
         critical_checks = (
             "config_loaded",
@@ -63,30 +100,48 @@ class ReadinessService:
             "vision_model_available",
         )
         overall_ready = all(checks[name]["ok"] for name in critical_checks)
-        return {
+        result = {
             "status": "ready" if overall_ready else "degraded",
             "ready": overall_ready,
             "checks": checks,
         }
+        if not active_external_probes and cache_ttl > 0:
+            with _PASSIVE_READINESS_CACHE_LOCK:
+                _PASSIVE_READINESS_CACHE[cache_key] = (time.monotonic(), result)
+        return result
 
     def _check_config_loaded(self) -> dict[str, Any]:
         return {"ok": True, "message": "配置已加载。"}
 
-    def _check_upload_dir_writable(self) -> dict[str, Any]:
+    def _check_upload_dir_writable(self, *, active_probe: bool = False) -> dict[str, Any]:
         upload_root = self.settings.resolve_path("backend/data/runtime/uploads")
-        upload_root.mkdir(parents=True, exist_ok=True)
-        probe_file = upload_root / ".ready-check.tmp"
         try:
+            upload_root.mkdir(parents=True, exist_ok=True)
+            if not active_probe:
+                writable = os.access(upload_root, os.W_OK)
+                return {
+                    "ok": writable,
+                    "message": "上传目录可写。" if writable else "上传目录不可写。",
+                    "path": str(upload_root),
+                }
+            probe_file = upload_root / ".ready-check.tmp"
             probe_file.write_text("ok", encoding="utf-8")
             probe_file.unlink(missing_ok=True)
             return {"ok": True, "message": "上传目录可写。", "path": str(upload_root)}
         except OSError as exc:
             return {"ok": False, "message": "上传目录不可写。", "detail": str(exc), "path": str(upload_root)}
 
-    def _check_command_available(self, command_name: str) -> dict[str, Any]:
+    def _check_command_available(self, command_name: str, *, active_probe: bool = False) -> dict[str, Any]:
         resolved = self._resolve_command(command_name)
         if not resolved:
             return {"ok": False, "message": f"命令不存在：{command_name}"}
+        if not active_probe:
+            found = Path(resolved).exists() if Path(resolved).is_absolute() else bool(shutil.which(resolved))
+            return {
+                "ok": found,
+                "message": f"{command_name} 可用。" if found else f"{command_name} 不可用。",
+                "path": resolved,
+            }
         try:
             result = subprocess.run(
                 [resolved, "-version"],
@@ -199,13 +254,23 @@ class ReadinessService:
         result["message"] = "稠密索引文件可访问。"
         return result
 
-    def _check_retrieval_embedding_endpoint(self) -> dict[str, Any]:
+    def _check_retrieval_embedding_endpoint(self, *, active_probe: bool = False) -> dict[str, Any]:
         if self.settings.retrieval.provider.strip().lower() != "hybrid_local":
             return {"ok": True, "enabled": False, "message": "当前检索未启用 embedding 端点。"}
 
         config = self.settings.models.retrieval_embedding
         try:
-            api_key = get_api_key(config.api_key_env) if config.api_key_env else ""
+            api_key = config.api_key or (get_api_key(config.api_key_env) if config.api_key_env else "")
+            if not str(config.base_url or "").strip():
+                raise ValueError("embedding 端点地址未配置。")
+            if not active_probe:
+                return {
+                    "ok": True,
+                    "enabled": True,
+                    "message": "embedding 服务配置已就绪。",
+                    "model": config.model,
+                    "endpoint": config.base_url,
+                }
             probe = EmbeddingClient(
                 base_url=config.base_url,
                 model=config.model,
@@ -233,7 +298,7 @@ class ReadinessService:
                 "detail": str(exc),
             }
 
-    def _check_retrieval_reranker_endpoint(self) -> dict[str, Any]:
+    def _check_retrieval_reranker_endpoint(self, *, active_probe: bool = False) -> dict[str, Any]:
         if self.settings.retrieval.provider.strip().lower() != "hybrid_local":
             return {"ok": True, "enabled": False, "message": "当前检索未启用 reranker 端点。"}
 
@@ -242,6 +307,14 @@ class ReadinessService:
             return {"ok": True, "enabled": False, "message": "当前检索已显式停用 reranker。"}
         try:
             api_key = get_api_key(config.api_key_env) if config.api_key_env else ""
+            if not active_probe:
+                return {
+                    "ok": bool(str(config.base_url or "").strip()),
+                    "enabled": True,
+                    "message": "reranker 服务配置已就绪。",
+                    "model": config.model,
+                    "endpoint": config.base_url,
+                }
             probe = RerankerClient(
                 base_url=config.base_url,
                 model=config.model,
@@ -308,7 +381,12 @@ class ReadinessService:
             "fallback_reason": "；".join(reasons),
         }
 
-    def _check_expert_model_endpoint(self, model_settings: ModelEndpointSettings) -> dict[str, Any]:
+    def _check_expert_model_endpoint(
+        self,
+        model_settings: ModelEndpointSettings,
+        *,
+        active_probe: bool = False,
+    ) -> dict[str, Any]:
         try:
             api_key = get_api_key(model_settings.api_key_env) if model_settings.api_key_env else ""
         except Exception:
@@ -333,8 +411,8 @@ class ReadinessService:
                 "reason": "endpoint_invalid",
             }
 
-        # Modal 等按需 GPU 端点不能被 readiness 轮询唤醒；真实可用性由业务请求与部署烟测确认。
-        if not compatibility.enabled:
+        # Modal 等按需 GPU 端点及被动 readiness 均不发外部请求；真实可用性由管理员主动探测或业务请求确认。
+        if not compatibility.enabled or not active_probe:
             return {
                 "ok": True,
                 "message": "系统指导服务已配置，将在需要时按需启动。",
@@ -356,13 +434,18 @@ class ReadinessService:
             "reason": "endpoint_unavailable",
         }
 
-    def _check_model_endpoints(self, model_settings: ReportModelSettings) -> dict[str, Any]:
+    def _check_model_endpoints(
+        self,
+        model_settings: ReportModelSettings,
+        *,
+        active_probe: bool = False,
+    ) -> dict[str, Any]:
         endpoint_results: list[dict[str, Any]] = []
         for endpoint in model_settings.iter_endpoints_by_priority():
             model_name = endpoint.model or model_settings.model or ""
             try:
                 if endpoint.connection and endpoint.connection.key:
-                    api_key = endpoint.connection.key
+                    api_key = get_api_key(endpoint.connection.key)
                 else:
                     api_key_env = endpoint.api_key_env or model_settings.api_key_env
                     api_key = get_api_key(api_key_env) if api_key_env else ""
@@ -374,6 +457,17 @@ class ReadinessService:
                         "model": model_name,
                         "endpoint": endpoint.name,
                         "detail": str(exc),
+                    }
+                )
+                continue
+
+            if not active_probe:
+                endpoint_results.append(
+                    {
+                        "ok": bool(str(endpoint.url or "").strip()),
+                        "message": "模型端点配置已就绪。",
+                        "model": model_name,
+                        "endpoint": endpoint.name,
                     }
                 )
                 continue
@@ -428,7 +522,7 @@ class ReadinessService:
         headers = self._build_auth_headers(api_key)
         if lmstudio.enabled:
             try:
-                with httpx.Client(timeout=5) as client:
+                with create_safe_http_client(timeout=5) as client:
                     probe = probe_lmstudio_model(
                         client=client,
                         headers=headers,
@@ -478,8 +572,9 @@ class ReadinessService:
 
         health_url = build_models_url(build_chat_completions_url(endpoint_url))
         try:
-            response = httpx.get(health_url, headers=headers, timeout=5)
-            response.raise_for_status()
+            with create_safe_http_client(timeout=5) as client:
+                response = client.get(health_url, headers=headers)
+                response.raise_for_status()
             return {
                 "ok": True,
                 "message": "模型端点可访问。",

@@ -11,6 +11,7 @@ from app.adapters.input.base import BaseInputAdapter
 from app.adapters.input.dict_input_adapter import DictInputAdapter
 from app.adapters.input.file_input_adapter import FileInputAdapter
 from app.core.exceptions import ConfigurationError, InputValidationError, RequestCancelledError
+from app.core.outbound_url import validate_user_outbound_url
 from app.core.settings import (
     ReasoningSettings,
     ReportEndpointConnectionSettings,
@@ -245,6 +246,7 @@ class ReportService:
             switchable_labels=switchable_labels,
             lmstudio_residency_manager=lmstudio_residency_manager,
             lmstudio_residency_companions=lmstudio_residency_companions,
+            enforce_ssrf=selected_endpoint.name == "user_report",
         )
 
     def _resolve_selected_report_endpoint(
@@ -255,24 +257,33 @@ class ReportService:
         """报告端点 3→1：用户配置了报告能力 → 用其单端点 override；否则用系统默认端点。"""
         selected_endpoint = self._default_report_endpoint()
         if not report_override or not (
-            report_override.get("base_url") or report_override.get("model_name")
+            report_override.get("base_url") or report_override.get("model_name") or report_override.get("params")
         ):
             return selected_endpoint, []
 
         raw_base_url = report_override.get("base_url")
+        use_system_credential = bool(report_override.get("use_system_credential")) and not raw_base_url
         # 用户只需填到 /v1，这里自动补全为 /v1/chat/completions；留空则沿用系统默认端点。
         resolved_url = build_chat_completions_url(raw_base_url) if raw_base_url else selected_endpoint.url
+        if raw_base_url:
+            validate_user_outbound_url(
+                resolved_url,
+                allow_http=False,
+                host_allowlist=self.settings.app.lmstudio_host_allowlist,
+                resolve_dns=True,
+            )
         endpoint_update: dict[str, Any] = {
-            "name": "user_report",
+            "name": selected_endpoint.name if use_system_credential else "user_report",
             "url": resolved_url,
             "model": report_override.get("model_name") or selected_endpoint.model,
-            "api_key_env": None,
-            "connection": ReportEndpointConnectionSettings(
+        }
+        if not use_system_credential:
+            endpoint_update["api_key_env"] = None
+            endpoint_update["connection"] = ReportEndpointConnectionSettings(
                 connection_type="inline",
                 key=report_override.get("api_key") or "",
                 url=resolved_url,
-            ),
-        }
+            )
         endpoint_update.update(resolve_reasoning_override(report_override))
         override_endpoint = selected_endpoint.model_copy(update=endpoint_update)
         # 单端点模式：无可切换档位
@@ -280,10 +291,34 @@ class ReportService:
 
     def _build_vision_provider(self, *, vision_override: Optional[dict[str, Any]] = None) -> OpenAIVisionProvider:
         model_cfg = self.settings.models.accident_vision
-        if vision_override and (vision_override.get("base_url") or vision_override.get("model_name")):
-            model_cfg, endpoint_api_keys = self._synthesize_override_endpoint(
-                model_cfg, vision_override, name="user_vision"
-            )
+        enforce_ssrf = False
+        if vision_override and (
+            vision_override.get("base_url") or vision_override.get("model_name") or vision_override.get("params")
+        ):
+            raw_base_url = vision_override.get("base_url")
+            use_system_credential = bool(vision_override.get("use_system_credential")) and not raw_base_url
+            if use_system_credential:
+                base = model_cfg.endpoints[0]
+                endpoint_update: dict[str, Any] = {
+                    "model": vision_override.get("model_name") or base.model or model_cfg.model,
+                }
+                endpoint_update.update(resolve_reasoning_override(vision_override))
+                updated_endpoint = base.model_copy(update=endpoint_update)
+                model_cfg = model_cfg.model_copy(update={"endpoints": [updated_endpoint], "model": updated_endpoint.model})
+                env_name = updated_endpoint.api_key_env or model_cfg.api_key_env
+                endpoint_api_keys = {updated_endpoint.name: get_api_key(env_name)}
+            else:
+                if raw_base_url:
+                    validate_user_outbound_url(
+                        build_chat_completions_url(raw_base_url),
+                        allow_http=False,
+                        host_allowlist=self.settings.app.lmstudio_host_allowlist,
+                        resolve_dns=True,
+                    )
+                    enforce_ssrf = True
+                model_cfg, endpoint_api_keys = self._synthesize_override_endpoint(
+                    model_cfg, vision_override, name="user_vision"
+                )
         else:
             endpoint_api_keys = {}
             for endpoint in model_cfg.endpoints:
@@ -293,6 +328,7 @@ class ReportService:
             config=model_cfg,
             endpoint_api_keys=endpoint_api_keys,
             lmstudio_host_allowlist=self.settings.app.lmstudio_host_allowlist,
+            enforce_ssrf=enforce_ssrf,
         )
 
     @staticmethod
@@ -339,6 +375,7 @@ class ReportService:
             except Exception:  # noqa: BLE001
                 selected_endpoint = None
         effective_settings = self._apply_embedding_override(self.settings, embedding_override)
+        embedding_url_overridden = self._is_embedding_url_overridden(self.settings, embedding_override)
         return build_retriever(
             effective_settings,
             lmstudio_residency_manager=lmstudio_residency_manager,
@@ -347,23 +384,48 @@ class ReportService:
                 if selected_endpoint is not None
                 else None
             ),
+            embedding_enforce_ssrf=embedding_url_overridden,
         )
+
+    @staticmethod
+    def _is_embedding_url_overridden(settings: Settings, embedding_override: Optional[dict[str, Any]]) -> bool:
+        if not embedding_override:
+            return False
+        raw_url = str(embedding_override.get("base_url") or "").strip().rstrip("/")
+        if not raw_url:
+            return False
+        default_url = str(settings.models.retrieval_embedding.base_url or "").strip().rstrip("/")
+        return raw_url != default_url
 
     @staticmethod
     def _apply_embedding_override(settings: Settings, embedding_override: Optional[dict[str, Any]]) -> Settings:
         """把嵌入 override（端点 + top_k/dense 调参）应用到一份 per-request settings 副本。
 
-        留空回退系统默认。注：用户若改 embedding 模型与 dense 索引模型不一致时，
-        既有 build_retriever 会捕获并降级到 sparse，系统不崩。
+        安全边界：只要覆写了不同于系统默认的 base_url，严禁沿用系统 `api_key`/`api_key_env`，
+        防止系统 OPENROUTER_API_KEY 被发送到用户控制的 URL（SSRF 密钥外泄）。
         """
         if not embedding_override:
             return settings
         emb_update: dict[str, Any] = {}
-        if embedding_override.get("base_url"):
-            emb_update["base_url"] = embedding_override["base_url"]
+        custom_url = str(embedding_override.get("base_url") or "").strip()
+        default_url = str(settings.models.retrieval_embedding.base_url or "").strip().rstrip("/")
+        url_changed = bool(custom_url and custom_url.rstrip("/") != default_url)
+
+        if custom_url:
+            if url_changed:
+                validate_user_outbound_url(
+                    custom_url,
+                    allow_http=False,
+                    host_allowlist=settings.app.lmstudio_host_allowlist,
+                    resolve_dns=True,
+                )
+            emb_update["base_url"] = custom_url
         if embedding_override.get("model_name"):
             emb_update["model"] = embedding_override["model_name"]
-        if embedding_override.get("api_key"):
+        if url_changed:
+            emb_update["api_key"] = str(embedding_override.get("api_key") or "").strip()
+            emb_update["api_key_env"] = ""
+        elif embedding_override.get("api_key"):
             emb_update["api_key"] = embedding_override["api_key"]
 
         params = embedding_override.get("params") or {}
@@ -453,15 +515,28 @@ class ReportService:
         )
 
     def _persist_confirmed_accident_data(self, accident_data: dict[str, Any]) -> None:
+        import os
+        import tempfile
+
         target_path = self.settings.input_generation_output_file
         backup_path = self._backup_existing_input(target_path)
         if backup_path:
             logger.info("已备份旧事故输入文件: %s", backup_path)
         target_path.parent.mkdir(parents=True, exist_ok=True)
-        target_path.write_text(
-            self._serialize_json(accident_data),
-            encoding="utf-8",
-        )
+        serialized = self._serialize_json(accident_data)
+        fd, temp_name = tempfile.mkstemp(prefix=".input_accident_", suffix=".tmp", dir=str(target_path.parent))
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(serialized)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp_name, target_path)
+        except BaseException:
+            try:
+                os.unlink(temp_name)
+            except OSError:
+                pass
+            raise
 
     def _backup_existing_input(self, target_path) -> Optional[str]:  # noqa: ANN001
         if not target_path.exists():
@@ -470,8 +545,12 @@ class ReportService:
         if not content:
             return None
 
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        backup_path = self.settings.input_generation_backup_dir_path / f"input_accident-{timestamp}.json"
+        self.settings.input_generation_backup_dir_path.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        backup_path = (
+            self.settings.input_generation_backup_dir_path
+            / f"input_accident-{timestamp}-{uuid4().hex[:6]}.json"
+        )
         shutil.copy2(target_path, backup_path)
         return str(backup_path.resolve())
 

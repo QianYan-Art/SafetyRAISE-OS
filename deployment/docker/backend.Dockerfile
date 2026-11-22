@@ -38,11 +38,17 @@ COPY frontend/package.json frontend/package-lock.json /app/frontend/
 COPY --from=rust-token-accel-builder /build/query_token_accel/target/release/libquery_token_accel.so /app/backend/native/query_token_accel/libquery_token_accel.so
 COPY deployment/docker/backend-entrypoint.sh /usr/local/bin/backend-entrypoint.sh
 
-RUN chmod +x /usr/local/bin/backend-entrypoint.sh
+RUN groupadd --gid 10001 safetyraise \
+    && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin safetyraise \
+    && chmod +x /usr/local/bin/backend-entrypoint.sh \
+    && mkdir -p /app/backend/data \
+    && chown -R 10001:10001 /app/backend/data
 
 WORKDIR /app/backend
 
 EXPOSE 8000
+
+USER 10001:10001
 
 ENTRYPOINT ["/usr/local/bin/backend-entrypoint.sh"]
 CMD ["python", "-m", "app.main", "serve", "--host", "0.0.0.0", "--port", "8000", "--config", "config/workflow.server.yaml"]

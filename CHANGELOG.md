@@ -4,6 +4,31 @@
 
 ## [未发布]
 
+### 安全
+
+- **SSRF 与系统密钥防外泄**：新增统一出站 URL 安全校验（`backend/app/core/outbound_url.py`），在用户模型配置保存与运行时出站前阻断回环、私网、链路本地、云元数据、非白名单 HTTP 及 `userinfo`/查询参数注入；覆写嵌入端点 URL 时不再沿用系统 `OPENROUTER_API_KEY`；停止将系统密钥明文播种进管理员 `user_capability_configs` 行，用户自定义 API Key 改用 PostgreSQL `pgcrypto` AES-256 加密落库（兼容历史明文读取）。
+- **旧版模型客户端有界流式响应**：报告、视觉、专家、Embedding 与 Reranker 客户端统一启用 `trust_env=False`、`follow_redirects=False` 与 1 MiB 流式响应字节上限，防止超大/chunked 响应耗尽内存。
+- **认证与权限加固**：
+  - 生产 `AUTH_JWT_SECRET` 强制校验至少 32 字节且具备字符多样性（拒绝单字符与纯重复串），JWT 算法限制为 `HS256/HS384/HS512`，强制 `aud`/`iat`/`exp`/`sub` 校验。
+  - 登录与注册新增 IP + 账号双维度滑动窗口限流（返回 `429 + Retry-After`）与有界 PBKDF2 并发槽位；登录对未知用户执行固定虚拟哈希校验以消除时序枚举差异；密码长度限制为 8–128 字符。
+  - 新增 `users.token_version`、`POST /api/v1/auth/logout` 与 `POST /api/v1/auth/change-password`，登出、自助改密及管理员重置密码立即吊销旧访问令牌；媒体令牌改用域分离独立派生密钥并绑定 `session_id`。
+  - 禁止普通注册/创建账号抢占引导管理员用户名；引导管理员初始化改用 `ON CONFLICT DO NOTHING` 消除并发启动竞态；管理员更新用户增加自降权/自停用、引导管理员保护及“至少保留一名活跃管理员”事务不变量，并补充认证/管理审计日志。
+  - 新增 `auth.allow_self_registration` 与可选 `auth.registration_invite_code` 配置开关。
+- **会话隔离与上传防护**：
+  - 修复创建会话时传入他人 `id` 可能覆盖他人会话的 IDOR 风险；`ChatSessionService` 默认 fail-closed，跨用户管理操作须显式声明 `allow_admin_scope=True`。
+  - 上传链路新增白名单扩展名与真实文件头魔数（magic bytes）校验，阻断伪造 MIME 的 `.html`/`.svg` 等主动内容上传；媒体下载路由对非安全图片/视频强制 `application/octet-stream` + `attachment` + `nosniff` + `Content-Security-Policy: default-src 'none'; sandbox`；`upload_manifest` 整数解析异常统一返回 400。
+- **公开接口、请求体与响应头硬化**：
+  - 公开 `GET /api/v1/ready` 默认仅执行本地低成本检查并短 TTL 缓存，不再对匿名请求触发付费嵌入或外部模型探测；主动外部探测仅限管理员显式 `probe=active`。
+  - 新增全局分层 JSON 请求体上限中间件（`/api/v1/auth/*` 64 KiB、报告运行/证据 256 KiB、常规 JSON API 2 MiB）；默认收紧 CORS 白名单并为全站 API 响应与 Nginx 模板补齐安全响应头及 `/api/v1/auth/` 独立 64 KiB 限制。
+  - 非管理员调用旧版报告接口不再覆盖全局共享 `backend/data/input_accident.json`，持久化写入改为原子写 + 微秒级防冲突备份；`.gitignore` 补充 `.env.*`（保留 `!.env.example`）。
+  - 前端登出或令牌失效时同步吊销服务端令牌并清除 `localStorage` 中全部用户会话 PII 缓存；Markdown 渲染显式限定 `https:`/`mailto:` 及同源相对 URL 并附带 `rel="noopener noreferrer"`。
+- **容器、运维脚本与 CI 门禁**：`backend.Dockerfile` 改以专用非 root 用户（UID/GID 10001）运行，`docker-compose.server.yml` 补齐 `read_only`、`cap_drop: ALL` 与 `no-new-privileges`；`setup-https.sh` 增加域名白名单校验并修复 ShellCheck 警告；CI 新增 Rust `cargo clippy -- -D warnings`、`cargo test` 与生产 `npm audit` 检查。
+
+### 修复
+
+- **JSON 解析器与 Rust FFI 一致性**：`json_parser.py` 捕获 `ast.literal_eval()` 的 `TypeError`/`RecursionError` 等异常并统一转为 `InputValidationError`（不再绕过视觉 JSON 修复重试），限制平衡扫描起点数与嵌套深度；Rust `query_token_accel` 去除候选提取阶段的双重修补以对齐 Python 语义、将 C ABI 原始指针函数标记为 `unsafe extern "C"`、清零全部 6 项 Clippy 严格告警并补充单元测试。
+- **导出与输出硬化**：PDF 封面字段增加 XML/HTML 转义防止 ReportLab 标记异常；`sanitize_model_text` 剥离未闭合推理标签/围栏；`np.load` 显式传入 `allow_pickle=False`；SQLite 费用账本初始化在 POSIX 上收紧目录/文件权限为 `0700`/`0600`。
+
 ## [0.3.12] - 2026-10-31
 
 ### 安全

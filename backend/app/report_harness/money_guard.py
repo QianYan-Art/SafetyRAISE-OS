@@ -712,7 +712,17 @@ class MoneyGuardHTTPAttemptClient:
 
     def _initialize_ledger(self) -> None:
         self._ledger_path.parent.mkdir(parents=True, exist_ok=True)
+        if os.name != "nt":
+            try:
+                os.chmod(self._ledger_path.parent, 0o700)
+            except OSError:
+                pass
         connection = self._connect()
+        if os.name != "nt" and self._ledger_path.exists():
+            try:
+                os.chmod(self._ledger_path, 0o600)
+            except OSError:
+                pass
         try:
             connection.execute("PRAGMA journal_mode = WAL")
             connection.execute("BEGIN IMMEDIATE")

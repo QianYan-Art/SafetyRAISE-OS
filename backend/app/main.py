@@ -5,12 +5,12 @@ import os
 from uuid import uuid4
 
 import uvicorn
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api.deps import get_readiness_service
-from app.api.error_handling import register_exception_handlers
+from app.api.deps import get_optional_current_user, get_readiness_service, get_settings
+from app.api.error_handling import build_error_response, register_exception_handlers
 from app.api.routes_admin import router as admin_router
 from app.api.routes_app_config import router as app_config_router
 from app.api.routes_auth import router as auth_router
@@ -25,9 +25,11 @@ from app.api.routes_report_feedback import (
 )
 from app.api.routes_report_run_exports import router as report_run_exports_router
 from app.api.routes_user_model_configs import router as user_model_config_router
+from app.core.exceptions import PermissionDeniedError
 from app.core.logger import setup_logging
 from app.core.request_context import reset_trace_id, set_trace_id
 from app.core.settings import load_settings
+from app.services.auth_service import AuthenticatedUser
 from app.services.readiness_service import ReadinessService
 from app.services.report_service import ReportService
 from app.report_harness.lifecycle import report_harness_lifespan
@@ -35,16 +37,93 @@ from app.report_harness.lifecycle import report_harness_lifespan
 logger = logging.getLogger(__name__)
 # 就绪接口无需登录：对外只给状态与固定提示，异常详情、服务器路径、内部端点与模型名只写日志。
 _READINESS_PUBLIC_KEYS = frozenset({"status", "ready", "checks", "ok", "message"})
+_DEFAULT_DEV_CORS_ORIGINS = ["http://127.0.0.1:5173", "http://localhost:5173"]
+_AUTH_BODY_LIMIT_BYTES = 64 * 1024
+_STANDARD_JSON_BODY_LIMIT_BYTES = 2 * 1024 * 1024
+
+
+class JsonRequestBodyLimit:
+    """对非上传的 API JSON 路由在解析前执行实际字节上限控制，防止超大请求体耗尽内存。"""
+
+    def __init__(self, app):
+        self.app = app
+
+    @staticmethod
+    def _resolve_limit(path: str) -> int | None:
+        if path.startswith("/api/v1/auth/"):
+            return _AUTH_BODY_LIMIT_BYTES
+        if path == "/api/v1/inputs/generate-from-upload":
+            return None
+        if path.startswith("/api/v1/report-runs") or (
+            path.startswith("/api/v1/chat-sessions/") and path.endswith("/report-evidence")
+        ):
+            # 仍交由更严格的 ReportRunBodyLimit（256 KiB）处理。
+            return None
+        if path.startswith("/api/v1/"):
+            return _STANDARD_JSON_BODY_LIMIT_BYTES
+        return None
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        limit = self._resolve_limit(scope.get("path", ""))
+        if limit is None:
+            return await self.app(scope, receive, send)
+        if scope.get("method", "GET") in {"GET", "HEAD", "OPTIONS", "DELETE"}:
+            return await self.app(scope, receive, send)
+
+        body = bytearray()
+        while True:
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                return
+            body.extend(message.get("body", b""))
+            if len(body) > limit:
+                return await build_error_response(
+                    request=Request(scope),
+                    status_code=413,
+                    code="request_too_large",
+                    message="请求体超过允许大小。",
+                    retryable=False,
+                )(scope, receive, send)
+            if not message.get("more_body", False):
+                break
+
+        consumed = False
+
+        async def bounded_receive():
+            nonlocal consumed
+            if not consumed:
+                consumed = True
+                return {"type": "http.request", "body": bytes(body), "more_body": False}
+            return await receive()
+
+        return await self.app(scope, bounded_receive, send)
+
+
+def _resolve_cors_origins() -> list[str]:
+    try:
+        settings = get_settings()
+    except Exception:  # noqa: BLE001
+        return list(_DEFAULT_DEV_CORS_ORIGINS)
+    configured = [origin.strip() for origin in settings.app.cors_allow_origins if str(origin or "").strip()]
+    if configured:
+        return configured
+    if settings.app.env == "prod":
+        return []
+    return list(_DEFAULT_DEV_CORS_ORIGINS)
+
 
 app = FastAPI(title="交通事故分析报告后端", version="0.3.12",
               lifespan=report_harness_lifespan)
+app.add_middleware(JsonRequestBodyLimit)
 app.add_middleware(ReportRunBodyLimit)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_resolve_cors_origins(),
     allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Trace-Id"],
 )
 app.include_router(app_config_router)
 app.include_router(admin_router)
@@ -71,6 +150,12 @@ async def attach_trace_id(request: Request, call_next):
     finally:
         reset_trace_id(token)
     response.headers["X-Trace-Id"] = trace_id
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    if request.url.scheme == "https":
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
     return response
 
 
@@ -81,9 +166,21 @@ def health():
 
 @app.get("/api/v1/ready")
 def ready(
+    probe: str = Query(default="passive"),
     readiness_service: ReadinessService = Depends(get_readiness_service),
+    current_user: AuthenticatedUser | None = Depends(get_optional_current_user),
 ):
-    payload = readiness_service.check()
+    active_probes = isinstance(probe, str) and probe.strip().lower() == "active"
+    if active_probes:
+        if not isinstance(current_user, AuthenticatedUser) or not current_user.is_admin:
+            raise PermissionDeniedError("只有管理员可以触发主动外部依赖探测。")
+        payload = readiness_service.check(active_external_probes=True)
+    else:
+        try:
+            payload = readiness_service.check(active_external_probes=False)
+        except TypeError:
+            # 兼容仅实现无参 check() 的测试替身。
+            payload = readiness_service.check()
     ready_ok = bool(payload.get("ready"))
     if not ready_ok:
         logger.warning("就绪检查未通过：%s", json.dumps(payload, ensure_ascii=False, default=str))

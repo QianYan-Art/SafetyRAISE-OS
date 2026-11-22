@@ -9,7 +9,14 @@ from app.core.model_output import sanitize_model_text
 from app.core.rust_accel import load_rust_token_accel
 
 
+MAX_JSON_INPUT_CHARS = 2 * 1024 * 1024
+MAX_BALANCED_JSON_STARTS = 256
+MAX_JSON_NESTING_DEPTH = 64
+
+
 def extract_json_from_text(text: str) -> dict[str, Any]:
+    if text and len(text) > MAX_JSON_INPUT_CHARS:
+        raise InputValidationError("模型输出超过最大可解析长度限制。")
     content = sanitize_model_text(text)
     if not content:
         raise InputValidationError("模型返回为空，无法解析 JSON。")
@@ -82,24 +89,45 @@ def _load_json(candidate: str) -> dict[str, Any]:
     for variant in _build_json_variants(candidate):
         try:
             loaded = json.loads(variant)
-        except json.JSONDecodeError as exc:
+        except (json.JSONDecodeError, RecursionError, MemoryError) as exc:
             last_error = exc
         else:
-            if not isinstance(loaded, dict):
-                raise InputValidationError("指导意见必须为 JSON 对象。")
-            return loaded
+            return _validate_parsed_json_object(loaded)
 
         try:
             loaded = ast.literal_eval(variant)
-        except (SyntaxError, ValueError) as exc:
+        except (SyntaxError, ValueError, TypeError, RecursionError, MemoryError) as exc:
             last_error = exc
             continue
 
-        if not isinstance(loaded, dict):
-            raise InputValidationError("指导意见必须为 JSON 对象。")
-        return loaded
+        return _validate_parsed_json_object(loaded)
 
     raise InputValidationError(f"JSON 解析失败: {last_error}") from last_error
+
+
+def _validate_parsed_json_object(loaded: Any) -> dict[str, Any]:
+    if not isinstance(loaded, dict):
+        raise InputValidationError("指导意见必须为 JSON 对象。")
+    _check_json_compatible(loaded, depth=0)
+    return loaded
+
+
+def _check_json_compatible(value: Any, *, depth: int) -> None:
+    if depth > MAX_JSON_NESTING_DEPTH:
+        raise InputValidationError("JSON 嵌套层级超过安全上限。")
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return
+    if isinstance(value, list):
+        for item in value:
+            _check_json_compatible(item, depth=depth + 1)
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise InputValidationError("JSON 对象键必须为字符串。")
+            _check_json_compatible(item, depth=depth + 1)
+        return
+    raise InputValidationError("解析结果包含不支持的非 JSON 数据类型。")
 
 
 def _build_json_variants(candidate: str) -> list[str]:
@@ -121,7 +149,7 @@ def _build_json_variants(candidate: str) -> list[str]:
 
 def _extract_balanced_candidates(content: str) -> list[str]:
     candidates: list[str] = []
-    starts = [index for index, char in enumerate(content) if char == "{"] or []
+    starts = [index for index, char in enumerate(content) if char == "{"][:MAX_BALANCED_JSON_STARTS]
     for start in starts:
         end = _find_balanced_json_end(content, start)
         if end is None:

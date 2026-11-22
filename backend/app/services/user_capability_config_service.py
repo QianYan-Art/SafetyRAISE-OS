@@ -5,7 +5,14 @@ from typing import Any, Optional
 from psycopg.types.json import Jsonb
 
 from app.core.exceptions import InputValidationError
-from app.core.settings import get_api_key
+from app.core.outbound_url import validate_user_outbound_url
+from app.core.secret_box import (
+    derive_user_config_encryption_key,
+    pgcrypto_decrypt_sql,
+    pgcrypto_encrypt_params,
+    pgcrypto_encrypt_sql,
+)
+from app.providers.llm.lmstudio_compat import build_chat_completions_url
 from app.schemas.user_config import (
     CapabilityConfigRecord,
     CapabilityConfigStateResponse,
@@ -59,11 +66,20 @@ class UserCapabilityConfigService:
         request: UpdateCapabilityConfigsRequest,
     ) -> CapabilityConfigStateResponse:
         existing = self._load_rows(user.id)
+        encryption_key = self._encryption_key()
+        host_allowlist = list(getattr(getattr(self.settings, "app", None), "lmstudio_host_allowlist", []) or [])
         with self.database_service.connection() as conn:
             with conn.cursor() as cur:
                 for item in request.items:
                     cap = item.capability
                     base_url = (item.base_url or "").strip() or None
+                    if base_url:
+                        base_url = validate_user_outbound_url(
+                            base_url,
+                            allow_http=False,
+                            host_allowlist=host_allowlist,
+                            resolve_dns=True,
+                        )
                     model_name = (item.model_name or "").strip() or None
                     incoming_key = (item.api_key or "").strip()
                     prev = existing.get(cap) or {}
@@ -86,10 +102,10 @@ class UserCapabilityConfigService:
                         continue
 
                     cur.execute(
-                        """
+                        f"""
                         insert into user_capability_configs
                             (user_id, capability, base_url, api_key, model_name, params)
-                        values (%s, %s, %s, %s, %s, %s)
+                        values (%s, %s, %s, {pgcrypto_encrypt_sql()}, %s, %s)
                         on conflict (user_id, capability)
                         do update set
                             base_url = excluded.base_url,
@@ -98,7 +114,14 @@ class UserCapabilityConfigService:
                             params = excluded.params,
                             updated_at = now()
                         """,
-                        (user.id, cap, base_url, api_key, model_name, Jsonb(params or {})),
+                        (
+                            user.id,
+                            cap,
+                            base_url,
+                            *pgcrypto_encrypt_params(api_key, encryption_key),
+                            model_name,
+                            Jsonb(params or {}),
+                        ),
                     )
             conn.commit()
         return self.get_state(user)
@@ -113,11 +136,26 @@ class UserCapabilityConfigService:
 
         for cap in ("vision", "report"):
             row = rows.get(cap)
-            if row and (row.get("base_url") or row.get("model_name") or row.get("api_key")):
+            if row and (row.get("base_url") or row.get("model_name") or row.get("api_key") or row.get("params")):
+                same_default_url = self._matches_system_default_url(cap, row.get("base_url"))
+                if is_admin and not row.get("api_key") and same_default_url:
+                    # 未改 URL 且未覆写密钥：置 base_url=None 让后端沿用系统默认端点与环境变量凭据，同时保留模型/推理参数。
+                    if not row.get("params") and self._matches_system_default_model(cap, row.get("model_name")):
+                        overrides[cap] = None
+                    else:
+                        overrides[cap] = {
+                            "base_url": None,
+                            "api_key": None,
+                            "model_name": row.get("model_name"),
+                            "params": row.get("params") or {},
+                            "use_system_credential": True,
+                        }
+                    continue
                 overrides[cap] = {
                     "base_url": row.get("base_url"),
                     "api_key": row.get("api_key"),
                     "model_name": row.get("model_name"),
+                    "params": row.get("params") or {},
                 }
             else:
                 if not is_admin:
@@ -194,14 +232,10 @@ class UserCapabilityConfigService:
         if endpoint is None:
             return None
         report_external = self.settings.models.report_external
-        credential = (
-            endpoint.connection.key
-            if endpoint.connection and endpoint.connection.key
-            else endpoint.api_key_env or report_external.api_key_env
-        )
+        # 不把系统环境变量中的真实密钥明文/副本播种进用户表；运行时未覆写则直接回退系统凭据。
         return {
             "base_url": endpoint.url,
-            "api_key": get_api_key(credential) if credential else None,
+            "api_key": None,
             "model_name": endpoint.model or report_external.model,
             "params": {},
         }
@@ -211,29 +245,56 @@ class UserCapabilityConfigService:
         endpoint = model_cfg.endpoints[0] if model_cfg.endpoints else None
         if endpoint is None:
             return None
-        credential = (
-            endpoint.connection.key
-            if endpoint.connection and endpoint.connection.key
-            else endpoint.api_key_env or model_cfg.api_key_env
-        )
         return {
             "base_url": endpoint.url,
-            "api_key": get_api_key(credential) if credential else None,
+            "api_key": None,
             "model_name": endpoint.model or model_cfg.model,
             "params": {},
         }
 
     def _build_embedding_seed(self) -> dict[str, Any] | None:
         embedding = self.settings.models.retrieval_embedding
-        api_key = embedding.api_key
-        if not api_key and embedding.api_key_env:
-            api_key = get_api_key(embedding.api_key_env)
         return {
             "base_url": embedding.base_url,
-            "api_key": api_key,
+            "api_key": None,
             "model_name": embedding.model,
             "params": {},
         }
+
+    def _matches_system_default_url(self, capability: str, base_url: str | None) -> bool:
+        normalized = (base_url or "").strip().rstrip("/")
+        if not normalized:
+            return True
+        if capability == "report":
+            endpoint = self._find_default_report_endpoint()
+            if not endpoint or not endpoint.url:
+                return False
+            return build_chat_completions_url(normalized) == build_chat_completions_url(endpoint.url)
+        if capability == "vision":
+            model_cfg = self.settings.models.accident_vision
+            endpoint = model_cfg.endpoints[0] if model_cfg.endpoints else None
+            if not endpoint or not endpoint.url:
+                return False
+            return build_chat_completions_url(normalized) == build_chat_completions_url(endpoint.url)
+        if capability == "embedding":
+            embedding = self.settings.models.retrieval_embedding
+            return normalized == str(embedding.base_url or "").strip().rstrip("/")
+        return False
+
+    def _matches_system_default_model(self, capability: str, model_name: str | None) -> bool:
+        normalized = (model_name or "").strip()
+        if not normalized:
+            return True
+        if capability == "report":
+            endpoint = self._find_default_report_endpoint()
+            default_model = (endpoint.model if endpoint else None) or self.settings.models.report_external.model
+            return normalized == str(default_model or "").strip()
+        if capability == "vision":
+            model_cfg = self.settings.models.accident_vision
+            endpoint = model_cfg.endpoints[0] if model_cfg.endpoints else None
+            default_model = (endpoint.model if endpoint else None) or model_cfg.model
+            return normalized == str(default_model or "").strip()
+        return False
 
     def _find_default_report_endpoint(self):
         """取系统默认报告端点：按 priority 排序后的首个，与 ReportService 口径一致。"""
@@ -244,16 +305,20 @@ class UserCapabilityConfigService:
         return endpoints[0] if endpoints else None
 
     # ---- 内部 ----
+    def _encryption_key(self) -> str:
+        return derive_user_config_encryption_key(self.settings.auth)
+
     def _load_rows(self, user_id: str) -> dict[str, dict[str, Any]]:
+        encryption_key = self._encryption_key()
         with self.database_service.connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    """
-                    select capability, base_url, api_key, model_name, params
+                    f"""
+                    select capability, base_url, {pgcrypto_decrypt_sql("api_key")}, model_name, params
                     from user_capability_configs
                     where user_id = %s
                     """,
-                    (user_id,),
+                    (encryption_key, user_id),
                 )
                 return {str(row["capability"]): dict(row) for row in cur.fetchall()}
 

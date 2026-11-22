@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from psycopg.errors import UniqueViolation
@@ -18,6 +19,8 @@ from app.schemas.chat_session import UpdateChatSessionRequest
 from app.services.auth_service import AuthenticatedUser
 from app.services.chat_session_service import ChatSessionService
 from app.services.database_service import DatabaseService
+
+logger = logging.getLogger(__name__)
 
 
 class AdminService:
@@ -40,6 +43,8 @@ class AdminService:
         return [self._to_user_response(row) for row in rows]
 
     def create_user(self, request: AdminCreateUserRequest) -> AdminUserResponse:
+        if request.username.strip().lower() == self.settings.auth.bootstrap_admin_username.strip().lower():
+            raise InputValidationError("该用户名为系统保留名称，不能重复创建。")
         with self.database_service.connection() as conn:
             try:
                 with conn.cursor() as cur:
@@ -63,9 +68,16 @@ class AdminService:
             except UniqueViolation as exc:
                 conn.rollback()
                 raise InputValidationError("用户名已存在，请更换后重试。") from exc
+        logger.info("管理员创建用户 | user_id=%s | username=%s | role=%s", row["id"], row["username"], row["role"])
         return self._to_user_response(row)
 
-    def update_user(self, user_id: str, request: AdminUpdateUserRequest) -> AdminUserResponse:
+    def update_user(
+        self,
+        user_id: str,
+        request: AdminUpdateUserRequest,
+        *,
+        current_user: AuthenticatedUser | None = None,
+    ) -> AdminUserResponse:
         updates: dict[str, Any] = request.model_dump(exclude_unset=True)
         assignments: list[str] = []
         values: list[Any] = []
@@ -81,11 +93,44 @@ class AdminService:
         if "password" in updates and updates["password"]:
             assignments.append("password_hash = %s")
             values.append(hash_password(str(updates["password"])))
+            assignments.append("token_version = token_version + 1")
         if not assignments:
             raise InputValidationError("没有可更新的用户字段。")
-        values.append(user_id)
+
         with self.database_service.connection() as conn:
             with conn.cursor() as cur:
+                cur.execute(
+                    "select id::text as id, username, role, is_active from users where id = %s for update",
+                    (user_id,),
+                )
+                target = cur.fetchone()
+                if target is None:
+                    raise InputValidationError("目标用户不存在。")
+
+                target_username = str(target["username"])
+                target_role = str(target["role"])
+                target_active = bool(target["is_active"])
+                new_role = str(updates.get("role", target_role))
+                new_active = bool(updates.get("is_active", target_active))
+                is_bootstrap = target_username == self.settings.auth.bootstrap_admin_username
+
+                if is_bootstrap and (new_role != "admin" or not new_active):
+                    raise PermissionDeniedError("不能降权或停用默认管理员账号。")
+                if current_user is not None and user_id == current_user.id and (new_role != "admin" or not new_active):
+                    raise PermissionDeniedError("不能降权或停用当前登录中的管理员账号。")
+
+                # 同事务保证系统至少保留一个活跃管理员，避免永久锁死管理入口。
+                if target_role == "admin" and target_active and (new_role != "admin" or not new_active):
+                    cur.execute(
+                        "select count(*) as cnt from users where role = 'admin' and is_active = true and id <> %s",
+                        (user_id,),
+                    )
+                    count_row = cur.fetchone() or {}
+                    remaining_admins = int(count_row.get("cnt", 0))
+                    if remaining_admins < 1:
+                        raise PermissionDeniedError("系统至少需要保留一名活跃管理员账号。")
+
+                values.append(user_id)
                 cur.execute(
                     f"""
                     update users
@@ -100,6 +145,12 @@ class AdminService:
             conn.commit()
         if row is None:
             raise InputValidationError("目标用户不存在。")
+        logger.info(
+            "管理员更新用户 | actor=%s | target_user_id=%s | fields=%s",
+            getattr(current_user, "id", "-"),
+            user_id,
+            sorted(updates.keys()),
+        )
         return self._to_user_response(row)
 
     def delete_user(self, user_id: str, current_user: AuthenticatedUser) -> None:
@@ -125,7 +176,7 @@ class AdminService:
                     (user_id, username),
                 )
                 owned_session_ids = [str(item["id"]) for item in cur.fetchall()]
-            service = ChatSessionService(settings=self.settings)
+            service = ChatSessionService(settings=self.settings, allow_admin_scope=True)
             for session_id in owned_session_ids:
                 try:
                     service.delete_session(session_id, owner_user_id=user_id, owner_username=username)
@@ -250,7 +301,7 @@ class AdminService:
             else:
                 updates["owner_user_id"] = None
                 updates["owner_username"] = None
-        service = ChatSessionService(settings=self.settings)
+        service = ChatSessionService(settings=self.settings, allow_admin_scope=True)
         record = service.update_session(
             session_id,
             UpdateChatSessionRequest(**updates),
@@ -275,7 +326,7 @@ class AdminService:
         )
 
     def delete_space(self, session_id: str) -> None:
-        service = ChatSessionService(settings=self.settings)
+        service = ChatSessionService(settings=self.settings, allow_admin_scope=True)
         try:
             service.delete_session(session_id)
         except SessionNotFoundError as exc:
@@ -294,7 +345,7 @@ class AdminService:
                     """
                 )
                 session_ids = [str(row["id"]) for row in cur.fetchall()]
-        service = ChatSessionService(settings=self.settings)
+        service = ChatSessionService(settings=self.settings, allow_admin_scope=True)
         deleted_count = 0
         for session_id in session_ids:
             try:

@@ -36,7 +36,7 @@ class DenseIndexStore:
 
         self.manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
         self.records = self._load_jsonl(self.records_path)
-        self.vectors = np.load(self.vectors_path, mmap_mode="r")
+        self.vectors = np.load(self.vectors_path, mmap_mode="r", allow_pickle=False)
 
         if self.vectors.ndim != 2:
             raise ValueError("dense_vectors.f16.npy 不是二维矩阵。")

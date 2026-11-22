@@ -8,6 +8,11 @@ import httpx
 from app.core.json_parser import extract_json_from_text
 from app.core.exceptions import ModelTimeoutError, ProviderError
 from app.core.model_requests import omit_explicit_token_limits
+from app.core.outbound_url import (
+    DEFAULT_MAX_RESPONSE_BYTES,
+    create_safe_http_client,
+    request_json_bounded,
+)
 from app.core.settings import ReportModelSettings
 from app.providers.llm.base import BaseLLMProvider, LLMGenerateResult, LLMToolCall
 from app.providers.llm.lmstudio_compat import (
@@ -31,6 +36,8 @@ class OpenAIReportProvider(BaseLLMProvider):
         switchable_labels: list[str] | None = None,
         lmstudio_residency_manager: LMStudioResidencyManager | None = None,
         lmstudio_residency_companions: list[LMStudioResidencySpec] | None = None,
+        max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
+        enforce_ssrf: bool = False,
     ):
         self.config = config
         self.endpoint_api_keys = endpoint_api_keys
@@ -38,8 +45,10 @@ class OpenAIReportProvider(BaseLLMProvider):
         self.switchable_labels = switchable_labels or []
         self._lmstudio_residency_manager = lmstudio_residency_manager
         self._lmstudio_residency_companions = list(lmstudio_residency_companions or [])
+        self._max_response_bytes = max_response_bytes
+        self._enforce_ssrf = enforce_ssrf
         self._clients = {
-            endpoint.name: httpx.Client(timeout=endpoint.timeout_seconds)
+            endpoint.name: create_safe_http_client(timeout=endpoint.timeout_seconds)
             for endpoint in config.endpoints
         }
         self._lmstudio_host_allowlist = lmstudio_host_allowlist or []
@@ -110,9 +119,16 @@ class OpenAIReportProvider(BaseLLMProvider):
 
             for attempt in range(1, self.config.retry.max_attempts_per_endpoint + 1):
                 try:
-                    resp = client.post(endpoint.url, headers=headers, json=payload)
-                    resp.raise_for_status()
-                    data = resp.json()
+                    data = request_json_bounded(
+                        client,
+                        "POST",
+                        endpoint.url,
+                        headers=headers,
+                        json_body=payload,
+                        max_bytes=self._max_response_bytes,
+                        enforce_ssrf=self._enforce_ssrf,
+                        host_allowlist=self._lmstudio_host_allowlist,
+                    )
                     result = self._parse_response(data)
                     self._raise_for_truncated_response(
                         endpoint_name=endpoint.name,

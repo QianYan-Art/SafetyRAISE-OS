@@ -21,6 +21,7 @@ import {
   clearChatSessionMediaAccess,
   generateReportFromConfirmedInputStream,
   login,
+  logoutAccount,
   listChatSessionLinkedArtifacts,
   register,
   updateUserModelConfigs,
@@ -43,9 +44,10 @@ import type {
   UpdateCapabilityConfigsPayload,
   UserSummary,
 } from "./types";
-import { useChatHistory, ChatSession } from "./useChatHistory";
+import { clearStoredSessions, useChatHistory, ChatSession } from "./useChatHistory";
 import { JsonTableEditor } from "./JsonTableEditor";
 import { normalizeMarkdownForDisplay } from "./markdown";
+import { safeMarkdownComponents, safeMarkdownUrlTransform } from "./markdownSafety";
 import { REPORT_PROGRESS_LABELS, buildProgressStages, createMessage } from "./chatProgress";
 import {
   formatAgenticRoundsMarkdown,
@@ -315,6 +317,7 @@ const PDF_COMPILED_BY = "锐鉴安途道路交通事故分析系统";
 const PDF_GENERIC_TITLES = new Set(["交通事故分析报告", "道路交通事故分析报告"]);
 
 const reportMarkdownComponents: Components = {
+  ...safeMarkdownComponents,
   table: ({ node: _node, ...props }) => (
     <div className="report-table-shell">
       <div className="report-table-scroll">
@@ -592,6 +595,7 @@ export default function App() {
         }
       } catch (error) {
         clearAuthToken();
+        clearStoredSessions();
         if (!cancelled && !(error instanceof ApiError && error.status === 401)) {
           setAuthError(formatApiErrorMessage(error, "恢复登录状态失败。"));
         }
@@ -673,6 +677,7 @@ export default function App() {
       onThemeModeChange={setThemeMode}
       onLogout={() => {
         clearAuthToken();
+        clearStoredSessions();
         setCurrentUser(null);
       }}
     />
@@ -2230,6 +2235,7 @@ function WorkspaceApp({
         setErrorMessage(resolveUiErrorMessage(error, "媒体访问凭据尚未清除，未退出登录，请重试。"));
         return;
       }
+      await logoutAccount();
       onLogout();
     });
     if (transition) {
@@ -2972,7 +2978,7 @@ function WorkspaceApp({
                         </div>
                       ) : message.kind === "markdown" ? (
                         <div className="markdown-report markdown-report-compact">
-                          <ReactMarkdown remarkPlugins={[remarkGfm]} components={reportMarkdownComponents}>
+                          <ReactMarkdown remarkPlugins={[remarkGfm]} urlTransform={safeMarkdownUrlTransform} components={reportMarkdownComponents}>
                             {normalizeMarkdownForDisplay(message.content)}
                           </ReactMarkdown>
                         </div>
@@ -3305,7 +3311,7 @@ function WorkspaceApp({
                       {(() => {
                         const normalized = normalizeMarkdownForDisplay(activeSession.reportResult.report.report_markdown);
                         return normalized ? (
-                          <ReactMarkdown remarkPlugins={[remarkGfm]} components={reportMarkdownComponents}>
+                          <ReactMarkdown remarkPlugins={[remarkGfm]} urlTransform={safeMarkdownUrlTransform} components={reportMarkdownComponents}>
                             {normalized}
                           </ReactMarkdown>
                         ) : (

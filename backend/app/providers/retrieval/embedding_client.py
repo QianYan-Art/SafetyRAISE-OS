@@ -7,6 +7,11 @@ from typing import Any
 
 import httpx
 
+from app.core.outbound_url import (
+    DEFAULT_MAX_RESPONSE_BYTES,
+    create_safe_http_client,
+    request_json_bounded,
+)
 from app.providers.llm.lmstudio_compat import resolve_lmstudio_compatibility
 from app.providers.lmstudio_residency import LMStudioResidencyManager, LMStudioResidencySpec
 
@@ -29,12 +34,17 @@ class EmbeddingClient:
         document_max_length: int = 2048,
         cache_size: int = 512,
         cache_ttl_seconds: int = 21600,
+        max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
+        enforce_ssrf: bool = False,
     ) -> None:
         self.base_url = base_url.strip()
         self.model = model.strip()
         self.api_key = (api_key or "").strip()
         self.provider_name = (provider_name or "").strip()
         self.timeout_seconds = timeout_seconds
+        self.max_response_bytes = max_response_bytes
+        self._enforce_ssrf = enforce_ssrf
+        self._host_allowlist = list(lmstudio_host_allowlist or [])
         self._lmstudio_residency_manager = lmstudio_residency_manager
         self._lmstudio_residency_companions = list(residency_companions or [])
         self._lmstudio = resolve_lmstudio_compatibility(
@@ -82,14 +92,17 @@ class EmbeddingClient:
         }
         if self._lmstudio.enabled and self._lmstudio.ttl_seconds is not None:
             payload["ttl"] = self._lmstudio.ttl_seconds
-        response = httpx.post(
-            self._build_embeddings_url(self.base_url),
-            headers=self._build_headers(),
-            json=payload,
-            timeout=self.timeout_seconds,
-        )
-        response.raise_for_status()
-        payload = response.json()
+        with create_safe_http_client(timeout=self.timeout_seconds) as client:
+            payload = request_json_bounded(
+                client,
+                "POST",
+                self._build_embeddings_url(self.base_url),
+                headers=self._build_headers(),
+                json_body=payload,
+                max_bytes=self.max_response_bytes,
+                enforce_ssrf=self._enforce_ssrf,
+                host_allowlist=self._host_allowlist,
+            )
         items = payload.get("data")
         if not isinstance(items, list) or not items:
             raise ValueError("嵌入服务返回结构缺少 data。")

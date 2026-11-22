@@ -30,6 +30,9 @@ def workflow_error_handler(request: Request, exc: WorkflowError) -> JSONResponse
         status_code=exc.status_code,
         details=exc.details,
     )
+    retry_after = getattr(exc, "retry_after", None)
+    if retry_after is not None:
+        error_response.headers["Retry-After"] = str(retry_after)
     log_level = logging.WARNING if exc.status_code < 500 else logging.ERROR
     logger.log(
         log_level,

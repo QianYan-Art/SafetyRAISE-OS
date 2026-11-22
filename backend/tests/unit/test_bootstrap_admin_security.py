@@ -6,7 +6,7 @@ import pytest
 from app.core.settings import DEFAULT_JWT_SECRET, AuthSettings
 from app.services.auth_service import AuthService
 
-STRONG_SECRET = "a" * 64
+STRONG_SECRET = "sr-test-strong-secret-2026-0123456789abcdef"
 
 
 @pytest.mark.parametrize(
@@ -16,6 +16,8 @@ STRONG_SECRET = "a" * 64
         (STRONG_SECRET, "SafetyRaise@2026", ["BOOTSTRAP_ADMIN_PASSWORD"]),
         (STRONG_SECRET, "short1", ["BOOTSTRAP_ADMIN_PASSWORD"]),
         ("", "a-private-password", ["AUTH_JWT_SECRET"]),
+        ("x", "a-private-password", ["AUTH_JWT_SECRET"]),
+        ("a" * 64, "a-private-password", ["AUTH_JWT_SECRET"]),
         (STRONG_SECRET, "a-private-password", []),
     ],
 )

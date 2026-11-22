@@ -24,6 +24,8 @@ frontend/vite.config.d.ts
 
 # ---- Secrets / environment (NEVER commit) ----
 .env
+.env.*
+!.env.example
 .env.local
 .env.*.local
 .env.server

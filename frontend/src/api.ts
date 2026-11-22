@@ -144,6 +144,19 @@ export function clearAuthToken(): void {
   persistAuthToken(null);
 }
 
+export async function logoutAccount(): Promise<void> {
+  if (!hasAuthToken()) {
+    return;
+  }
+  try {
+    await authFetch(`${API_BASE}/api/v1/auth/logout`, {
+      method: "POST",
+    });
+  } catch {
+    // 网络异常时不阻断本地清理；媒体访问凭据和本地存储仍继续清除。
+  }
+}
+
 export function hasAuthToken(): boolean {
   return Boolean(getAuthToken());
 }

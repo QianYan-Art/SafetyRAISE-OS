@@ -87,7 +87,7 @@ def test_media_cookie_is_scoped_and_preserves_range(media_client):
     assert response.content == b"amp"
     assert response.headers["content-range"] == "bytes 1-3/18"
     assert response.headers["cache-control"] == "private, no-store"
-    assert client.get(url.replace("/owned/", "/another/")).status_code == 404
+    assert client.get(url.replace("/owned/", "/another/")).status_code == 401
     assert client.get("/api/v1/chat-sessions/owned").status_code == 401
     assert client.get(url, headers={"Authorization": "Bearer " + client.cookies.get(MEDIA_COOKIE)}).status_code == 401
     assert client.delete("/api/v1/chat-sessions/media-access").status_code == 200

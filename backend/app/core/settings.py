@@ -331,6 +331,8 @@ class AppSettings(BaseModel):
     chat_sessions_dir: str = "backend/data/chat_sessions"
     lmstudio_host_allowlist: list[str] = Field(default_factory=list)
     lmstudio_resident_limit: int = Field(default=2, ge=1, le=4)
+    cors_allow_origins: list[str] = Field(default_factory=list)
+    readiness_cache_ttl_seconds: int = Field(default=60, ge=0, le=3600)
 
 
 class DatabaseSettings(BaseModel):
@@ -341,14 +343,17 @@ class DatabaseSettings(BaseModel):
 
 
 DEFAULT_JWT_SECRET = "change-me-in-production"
+MIN_JWT_SECRET_BYTES = 32
+MIN_JWT_SECRET_UNIQUE_CHARS = 8
 # 曾随公开仓库发布过的管理员初始口令，无论出现在哪里都视为不安全。
 PUBLIC_BOOTSTRAP_ADMIN_PASSWORDS = frozenset({"SafetyRaise@2026"})
 MIN_BOOTSTRAP_ADMIN_PASSWORD_LENGTH = 8
+AllowedJwtAlgorithm = Literal["HS256", "HS384", "HS512"]
 
 
 class AuthSettings(BaseModel):
     jwt_secret: str = DEFAULT_JWT_SECRET
-    jwt_algorithm: str = "HS256"
+    jwt_algorithm: AllowedJwtAlgorithm = "HS256"
     access_token_ttl_minutes: int = Field(default=720, ge=5, le=43200)
     bootstrap_admin_username: str = "safetyraise"
     # 没有默认值：由部署者通过 BOOTSTRAP_ADMIN_PASSWORD 提供；未提供时不创建引导管理员。
@@ -357,14 +362,32 @@ class AuthSettings(BaseModel):
     # 生产 profile 置 true：启动时 JWT 密钥或管理员初始口令不安全即 fail-fast，
     # 防止部署丢失配置后静默回落到公开值（可被伪造 admin token 或直接登录管理员）。
     require_strong_secret: bool = False
+    allow_self_registration: bool = True
+    registration_invite_code: str = ""
+    login_rate_limit_enabled: bool = True
+    login_max_attempts_per_account: int = Field(default=10, ge=1, le=1000)
+    login_max_attempts_per_ip: int = Field(default=30, ge=1, le=5000)
+    register_max_attempts_per_ip: int = Field(default=10, ge=1, le=1000)
+    login_window_seconds: int = Field(default=900, ge=10, le=86400)
+    password_hash_max_concurrency: int = Field(default=4, ge=1, le=64)
 
     def jwt_secret_is_insecure(self) -> bool:
         secret = str(self.jwt_secret or "").strip()
-        return not secret or secret == DEFAULT_JWT_SECRET
+        if not secret or secret == DEFAULT_JWT_SECRET:
+            return True
+        if len(secret.encode("utf-8")) < MIN_JWT_SECRET_BYTES:
+            return True
+        if len(set(secret)) < MIN_JWT_SECRET_UNIQUE_CHARS:
+            return True
+        return False
 
     def bootstrap_admin_password_is_insecure(self) -> bool:
         password = str(self.bootstrap_admin_password or "")
-        return len(password) < MIN_BOOTSTRAP_ADMIN_PASSWORD_LENGTH or password in PUBLIC_BOOTSTRAP_ADMIN_PASSWORDS
+        return (
+            len(password) < MIN_BOOTSTRAP_ADMIN_PASSWORD_LENGTH
+            or len(password) > 128
+            or password in PUBLIC_BOOTSTRAP_ADMIN_PASSWORDS
+        )
 
     def startup_security_problems(self) -> list[str]:
         """生产 profile 下必须拒绝启动的配置问题；非生产 profile 返回空列表。"""
@@ -373,8 +396,8 @@ class AuthSettings(BaseModel):
         problems = []
         if self.jwt_secret_is_insecure():
             problems.append(
-                "AUTH_JWT_SECRET 为空或仍为公开默认串，任何人可伪造管理员 token；"
-                "请设置高熵随机密钥（如 `openssl rand -hex 32`）"
+                f"AUTH_JWT_SECRET 为空、长度不足 {MIN_JWT_SECRET_BYTES} 字节、熵过低或仍为公开默认串，"
+                "任何人可伪造管理员 token；请设置高熵随机密钥（如 `openssl rand -hex 32`）"
             )
         if self.bootstrap_admin_password_is_insecure():
             problems.append(

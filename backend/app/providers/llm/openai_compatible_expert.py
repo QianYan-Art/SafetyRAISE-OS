@@ -4,6 +4,11 @@ import logging
 import httpx
 
 from app.core.exceptions import ProviderError
+from app.core.outbound_url import (
+    DEFAULT_MAX_RESPONSE_BYTES,
+    create_safe_http_client,
+    request_json_bounded,
+)
 from app.core.settings import ModelEndpointSettings
 from app.providers.llm.base import BaseLLMProvider
 from app.providers.llm.lmstudio_compat import (
@@ -31,7 +36,7 @@ class OpenAICompatibleExpertProvider(BaseLLMProvider):
     ):
         self.config = config
         self.api_key = (api_key or "").strip()
-        self._client = httpx.Client(timeout=config.timeout_seconds)
+        self._client = create_safe_http_client(timeout=config.timeout_seconds)
         self._warmed = False
         self._provider_name = config.provider.strip().lower()
         self._lmstudio_residency_manager = lmstudio_residency_manager
@@ -68,13 +73,14 @@ class OpenAICompatibleExpertProvider(BaseLLMProvider):
             payload["ttl"] = self._lmstudio.ttl_seconds
 
         try:
-            response = self._client.post(
+            data = request_json_bounded(
+                self._client,
+                "POST",
                 self._chat_completions_url,
                 headers=self._build_headers(),
-                json=payload,
+                json_body=payload,
+                max_bytes=DEFAULT_MAX_RESPONSE_BYTES,
             )
-            response.raise_for_status()
-            data = response.json()
             self._warmed = True
             return self._extract_message_content(data)
         except ProviderError:

@@ -105,7 +105,9 @@ def get_current_user(
     user_id = str(payload.get("sub") or "").strip()
     if not user_id:
         raise AuthenticationError("登录状态无效，请重新登录。")
-    return auth_service.get_user_by_id(user_id)
+    user = auth_service.get_user_by_id(user_id)
+    _assert_token_version_matches(payload, user)
+    return user
 
 
 def get_optional_current_user(
@@ -118,7 +120,22 @@ def get_optional_current_user(
     user_id = str(payload.get("sub") or "").strip()
     if not user_id:
         raise AuthenticationError("登录状态无效，请重新登录。")
-    return auth_service.get_user_by_id(user_id)
+    user = auth_service.get_user_by_id(user_id)
+    _assert_token_version_matches(payload, user)
+    return user
+
+
+def _assert_token_version_matches(payload: dict, user: AuthenticatedUser) -> None:
+    token_ver = payload.get("ver")
+    if token_ver is None:
+        return
+    expected_ver = int(getattr(user, "token_version", 1) or 1)
+    try:
+        actual_ver = int(token_ver)
+    except (TypeError, ValueError) as exc:
+        raise AuthenticationError("登录状态已失效，请重新登录。") from exc
+    if actual_ver != expected_ver:
+        raise AuthenticationError("登录状态已失效，请重新登录。")
 
 
 def require_admin_user(

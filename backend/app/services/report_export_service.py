@@ -991,20 +991,20 @@ class ReportExportService:
         meta_columns: list[list] = [
             [
                 Paragraph("编制人", styles["CoverMetaLabel"]),
-                Paragraph(cover_config.compiled_by, styles["CoverMetaValue"]),
+                Paragraph(escape(cover_config.compiled_by), styles["CoverMetaValue"]),
             ],
         ]
         if cover_config.date_text:
             meta_columns.append(
                 [
                     Paragraph("编制日期", styles["CoverMetaLabel"]),
-                    Paragraph(cover_config.date_text, styles["CoverMetaValue"]),
+                    Paragraph(escape(cover_config.date_text), styles["CoverMetaValue"]),
                 ]
             )
         meta_columns.append(
             [
                 Paragraph("报告编号", styles["CoverMetaLabel"]),
-                Paragraph(cover_config.report_number, styles["CoverMetaValue"]),
+                Paragraph(escape(cover_config.report_number), styles["CoverMetaValue"]),
             ]
         )
         column_width = 17 * cm / len(meta_columns)
@@ -1027,8 +1027,8 @@ class ReportExportService:
         return [
             Spacer(1, 3.45 * cm),
             Paragraph("锐鉴安途道路交通事故分析系统", styles["CoverBrand"]),
-            Paragraph(cover_config.title, styles["CoverTitle"]),
-            Paragraph(cover_config.subtitle, styles["CoverSubtitle"]),
+            Paragraph(escape(cover_config.title), styles["CoverTitle"]),
+            Paragraph(escape(cover_config.subtitle), styles["CoverSubtitle"]),
             Paragraph("用于事故事实梳理、责任分析与研判论述的归档版文书输出。", styles["CoverMetaHint"]),
             Spacer(1, 5.6 * cm),
             meta_table,
