@@ -29,8 +29,8 @@ def derive_user_config_encryption_key(auth_settings: AuthSettings) -> str:
 def pgcrypto_encrypt_sql() -> str:
     """返回使用 PostgreSQL pgcrypto AES-256 加密 api_key 的 SQL 片段。"""
     return (
-        "case when %s is null or %s = '' then null "
-        f"else '{PGCRYPTO_PREFIX}' || encode(pgp_sym_encrypt(%s, %s, 'cipher-algo=aes256'), 'base64') end"
+        "case when %s::text is null or %s::text = '' then null "
+        f"else '{PGCRYPTO_PREFIX}' || encode(pgp_sym_encrypt(%s::text, %s::text, 'cipher-algo=aes256'), 'base64') end"
     )
 
 
@@ -45,6 +45,6 @@ def pgcrypto_decrypt_sql(column: str = "api_key") -> str:
     return (
         f"case when {column} is null then null "
         f"when {column} like '{PGCRYPTO_PREFIX}%%' "
-        f"then pgp_sym_decrypt(decode(substring({column} from {prefix_len}), 'base64'), %s) "
+        f"then pgp_sym_decrypt(decode(substring({column} from {prefix_len}), 'base64'), %s::text) "
         f"else {column} end as {column}"
     )
