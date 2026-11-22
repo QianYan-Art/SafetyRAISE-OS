@@ -59,7 +59,7 @@ def test_http_late_input_result_cannot_leave_recreated_session_tree(pg_store, tm
         response = client.post(
             "/api/v1/inputs/generate-from-upload",
             data={"session_id": session_id, "upload_manifest": json.dumps(manifest)},
-            files={"files": ("sample.png", b"isolated-input-test", "image/png")},
+            files={"files": ("sample.png", b"\x89PNG\r\n\x1a\n" + b"isolated-input-test", "image/png")},
         )
     assert response.status_code == 404
     assert not (settings.chat_sessions_dir_path / session_id).exists()
